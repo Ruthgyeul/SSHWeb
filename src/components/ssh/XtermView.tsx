@@ -44,6 +44,10 @@ export const XtermView = forwardRef<
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitRef = useRef<XFitAddon | null>(null);
+  // xterm loads asynchronously (dynamic import). Any output that arrives before
+  // it is ready would otherwise be silently dropped, so queue it and flush on
+  // init — this is what keeps the connect banner and first shell bytes visible.
+  const pendingRef = useRef<Array<(term: XTerminal) => void>>([]);
 
   // Keep the latest callbacks without re-running the setup effect.
   const onDataRef = useRef(onData);
@@ -53,17 +57,24 @@ export const XtermView = forwardRef<
 
   useImperativeHandle(
     ref,
-    () => ({
-      write: (bytes) => termRef.current?.write(bytes),
-      writeln: (text) => termRef.current?.writeln(text),
-      fit: () => {
-        fitRef.current?.fit();
-        const term = termRef.current;
-        return term ? { cols: term.cols, rows: term.rows } : null;
-      },
-      focus: () => termRef.current?.focus(),
-      clear: () => termRef.current?.clear(),
-    }),
+    () => {
+      // Run now if the terminal is ready, otherwise queue until it is.
+      const enqueue = (fn: (term: XTerminal) => void) => {
+        if (termRef.current) fn(termRef.current);
+        else pendingRef.current.push(fn);
+      };
+      return {
+        write: (bytes) => enqueue((t) => t.write(bytes)),
+        writeln: (text) => enqueue((t) => t.writeln(text)),
+        fit: () => {
+          fitRef.current?.fit();
+          const term = termRef.current;
+          return term ? { cols: term.cols, rows: term.rows } : null;
+        },
+        focus: () => termRef.current?.focus(),
+        clear: () => termRef.current?.clear(),
+      };
+    },
     [],
   );
 
@@ -99,6 +110,11 @@ export const XtermView = forwardRef<
 
       termRef.current = term;
       fitRef.current = fit;
+
+      // Flush anything written while xterm was still loading, in order.
+      const queued = pendingRef.current;
+      pendingRef.current = [];
+      for (const fn of queued) fn(term);
 
       // Refit when the container changes size.
       resizeObserver = new ResizeObserver(() => {

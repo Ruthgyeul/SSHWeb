@@ -279,14 +279,17 @@ export function SshClient() {
 
       {/* Body */}
       <div className="relative min-h-0 flex-1">
-        {/* Terminal — always mounted so its handle/size are ready on connect. */}
+        {/* Terminal — always mounted AND sized so xterm opens with real
+            dimensions (the connect overlay simply covers it while idle). Only
+            truly hidden when the Files tab is active. */}
         <div
           className={cn(
             "absolute inset-0 bg-term-bg p-2",
-            connected && tab === "terminal" ? "block" : "hidden",
+            connected && tab === "files" ? "hidden" : "block",
           )}
         >
           <XtermView
+            ref={xtermRef}
             onData={(data) => connected && send({ t: "data", data })}
             onResize={(cols, rows) =>
               connected && send({ t: "resize", cols, rows })
