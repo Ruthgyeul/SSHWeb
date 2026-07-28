@@ -29,8 +29,8 @@ import ssh2 from "ssh2";
 const { Client: SSHClient, utils: sshUtils } = ssh2;
 
 const dev = process.env.NODE_ENV !== "production";
-const hostname = process.env.HOSTNAME || "0.0.0.0";
-const port = parseInt(process.env.PORT || "3000", 10);
+const hostname = process.env.HOSTNAME || "localhost";
+const port = parseInt(process.env.PORT || "5000", 10);
 
 // Path the browser opens its SSH WebSocket on. Must match NEXT_PUBLIC_SSH_WS_PATH.
 const WS_PATH = process.env.NEXT_PUBLIC_SSH_WS_PATH || "/api/ssh";
