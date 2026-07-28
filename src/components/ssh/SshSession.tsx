@@ -6,7 +6,9 @@ import {
   encodeMessage,
   hostKeyId,
   joinPath,
+  modeToOctal,
   parseMessage,
+  parseOctalMode,
   type FileEntry,
   type ServerMessage,
 } from "@/lib/sshProtocol";
@@ -14,8 +16,20 @@ import { SSH_WS_PATH } from "@/config/siteConfig";
 import { cn } from "@/lib/utils";
 import { XtermView, type XtermHandle } from "./XtermView";
 import { ConnectForm, type ConnectDetails } from "./ConnectForm";
-import { FileBrowser } from "./FileBrowser";
+import { FileBrowser, type UploadItem } from "./FileBrowser";
+import { FileEditor } from "./FileEditor";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
+
+/** Upload chunk size; each chunk is one `sftp-write` message (drives progress). */
+const UPLOAD_CHUNK = 256 * 1024;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** An open file in the inline editor. */
+interface EditorState {
+  path: string;
+  name: string;
+  content: string;
+}
 
 /** Lifecycle phase of a single SSH session. */
 export type SessionStatus =
@@ -121,9 +135,16 @@ export function SshSession({
   const [tab, setTab] = useState<Tab>("terminal");
 
   const [cwd, setCwd] = useState("~");
+  // Mirror of cwd for the ws message handler, whose closure would otherwise go
+  // stale (it's bound once when the socket opens).
+  const cwdRef = useRef("~");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [authPrompt, setAuthPrompt] = useState<AuthPromptState | null>(null);
+  const [editor, setEditor] = useState<EditorState | null>(null);
+  const [editorSaving, setEditorSaving] = useState(false);
+  const [uploads, setUploads] = useState<Record<string, UploadItem>>({});
+  const editorSaveTextRef = useRef("");
   // Whether we hold credentials from a prior connect (drives the Reconnect UI);
   // mirrors lastDetailsRef but is render-safe.
   const [hasLast, setHasLast] = useState(false);
@@ -202,17 +223,36 @@ export function SshSession({
           break;
 
         case "sftp-list":
+          cwdRef.current = msg.path;
           setCwd(msg.path);
           setEntries(msg.entries);
           setFilesLoading(false);
           break;
 
         case "sftp-read":
-          triggerDownload(msg.name, base64ToBytes(msg.dataB64));
+          if (msg.edit) {
+            const text = new TextDecoder().decode(base64ToBytes(msg.dataB64));
+            setEditor({ path: msg.path, name: msg.name, content: text });
+          } else {
+            triggerDownload(msg.name, base64ToBytes(msg.dataB64));
+          }
           break;
 
         case "sftp-ok":
-          listDir(cwd);
+          if (msg.op === "write") {
+            setUploads((u) => {
+              const rest = { ...u };
+              delete rest[msg.path];
+              return rest;
+            });
+            setEditorSaving(false);
+            setEditor((ed) =>
+              ed && ed.path === msg.path
+                ? { ...ed, content: editorSaveTextRef.current }
+                : ed,
+            );
+          }
+          listDir(cwdRef.current);
           break;
 
         case "error":
@@ -226,7 +266,7 @@ export function SshSession({
           break;
       }
     },
-    [cwd, listDir, send],
+    [listDir, send],
   );
 
   // openSocket and scheduleReconnect reference each other; a ref breaks the
@@ -341,6 +381,8 @@ export function SshSession({
     setEntries([]);
     setStatusMessage("");
     setAuthPrompt(null);
+    setEditor(null);
+    setUploads({});
     setHasLast(false);
     xtermRef.current?.clear();
   }, [send]);
@@ -409,21 +451,73 @@ export function SshSession({
       dir: entry.type === "dir",
     });
   };
-  const onUpload = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const bytes = new Uint8Array(reader.result as ArrayBuffer);
+  // Chunked upload with progress: one sftp-write per chunk, throttled by the
+  // socket's buffered amount so a big file doesn't flood the connection.
+  const uploadFile = async (file: File, dir: string) => {
+    const path = joinPath(dir, file.name);
+    const total = file.size;
+    const report = (sent: number) =>
+      setUploads((u) => ({ ...u, [path]: { name: file.name, sent, total } }));
+    report(0);
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const ws = wsRef.current;
+    let offset = 0;
+    do {
+      const end = Math.min(offset + UPLOAD_CHUNK, total);
       send({
         t: "sftp-write",
-        path: joinPath(cwd, file.name),
-        dataB64: bytesToBase64(bytes),
+        path,
+        dataB64: bytesToBase64(buf.subarray(offset, end)),
+        offset,
+        final: end >= total,
       });
-    };
-    reader.readAsArrayBuffer(file);
+      offset = end;
+      report(offset);
+      while (
+        ws &&
+        ws.readyState === WebSocket.OPEN &&
+        ws.bufferedAmount > 4 * 1024 * 1024
+      ) {
+        await sleep(25);
+      }
+    } while (offset < total);
   };
   const onMkdir = () => {
     const name = window.prompt("New directory name:");
     if (name) send({ t: "sftp-mkdir", path: joinPath(cwd, name) });
+  };
+  const onRename = (entry: FileEntry) => {
+    const next = window.prompt(`Rename "${entry.name}" to:`, entry.name);
+    if (next && next !== entry.name) {
+      send({
+        t: "sftp-rename",
+        from: joinPath(cwd, entry.name),
+        to: joinPath(cwd, next),
+      });
+    }
+  };
+  const onChmod = (entry: FileEntry) => {
+    const input = window.prompt(
+      `Permissions for "${entry.name}" (octal, e.g. 644):`,
+      modeToOctal(entry.mode),
+    );
+    if (input === null) return;
+    const mode = parseOctalMode(input);
+    if (mode === null) {
+      setStatusMessage("Invalid mode — use 3–4 octal digits like 644.");
+      return;
+    }
+    send({ t: "sftp-chmod", path: joinPath(cwd, entry.name), mode });
+  };
+  const onSaveEdit = (text: string) => {
+    if (!editor) return;
+    editorSaveTextRef.current = text;
+    setEditorSaving(true);
+    send({
+      t: "sftp-write",
+      path: editor.path,
+      dataB64: bytesToBase64(new TextEncoder().encode(text)),
+    });
   };
 
   return (
@@ -486,13 +580,29 @@ export function SshSession({
               cwd={cwd}
               entries={entries}
               loading={filesLoading}
+              uploads={Object.values(uploads)}
               onNavigate={listDir}
               onRefresh={() => listDir(cwd)}
               onDownload={(path) => send({ t: "sftp-read", path })}
+              onDownloadDir={(path) => send({ t: "sftp-download-dir", path })}
               onDelete={onDelete}
-              onUpload={onUpload}
+              onUpload={(file) => uploadFile(file, cwd)}
               onMkdir={onMkdir}
+              onRename={onRename}
+              onChmod={onChmod}
+              onEdit={(path) => send({ t: "sftp-read", path, edit: true })}
             />
+            {editor && (
+              <FileEditor
+                key={editor.path}
+                name={editor.name}
+                path={editor.path}
+                content={editor.content}
+                saving={editorSaving}
+                onSave={onSaveEdit}
+                onClose={() => setEditor(null)}
+              />
+            )}
           </div>
         )}
 

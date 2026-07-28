@@ -89,6 +89,120 @@ server.on("upgrade", (req, socket, head) => {
   }
 });
 
+// --- Folder download (store-only ZIP) --------------------------------------
+
+/** CRC-32 (IEEE) of a buffer — required in ZIP local/central headers. */
+const CRC_TABLE = (() => {
+  const table = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c;
+  }
+  return table;
+})();
+
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/**
+ * Recursively read every file under `dir` over SFTP, returning
+ * `[{ name: relativePath, data: Buffer }]`. Symlinks are skipped.
+ */
+function collectDirFiles(sftp, dir, done) {
+  const out = [];
+  const base = dir.replace(/\/+$/, "");
+  const walk = (path, rel, cb) => {
+    sftp.readdir(path, (err, list) => {
+      if (err) return cb(err);
+      let i = 0;
+      const nextEntry = () => {
+        if (i >= list.length) return cb(null);
+        const item = list[i++];
+        const childPath = `${path}/${item.filename}`;
+        const childRel = rel ? `${rel}/${item.filename}` : item.filename;
+        if (item.attrs.isDirectory?.()) {
+          walk(childPath, childRel, (e) => (e ? cb(e) : nextEntry()));
+        } else if (item.attrs.isFile?.()) {
+          sftp.readFile(childPath, (e, buf) => {
+            if (e) return cb(e);
+            out.push({ name: childRel, data: buf });
+            nextEntry();
+          });
+        } else {
+          nextEntry(); // skip symlinks / specials
+        }
+      };
+      nextEntry();
+    });
+  };
+  walk(base, "", (err) => (err ? done(err) : done(null, out)));
+}
+
+/** Build a minimal store-only (uncompressed) ZIP archive from a file list. */
+function buildStoreZip(files) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  for (const file of files) {
+    const nameBuf = Buffer.from(file.name, "utf8");
+    const crc = crc32(file.data);
+    const size = file.data.length;
+
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0); // local file header signature
+    local.writeUInt16LE(20, 4); // version needed
+    local.writeUInt16LE(0x0800, 6); // flags: UTF-8 filename
+    local.writeUInt16LE(0, 8); // method: store
+    local.writeUInt16LE(0, 10); // mod time
+    local.writeUInt16LE(0, 12); // mod date
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(size, 18); // compressed size
+    local.writeUInt32LE(size, 22); // uncompressed size
+    local.writeUInt16LE(nameBuf.length, 26);
+    local.writeUInt16LE(0, 28); // extra length
+    chunks.push(local, nameBuf, file.data);
+
+    const cd = Buffer.alloc(46);
+    cd.writeUInt32LE(0x02014b50, 0); // central directory signature
+    cd.writeUInt16LE(20, 4); // version made by
+    cd.writeUInt16LE(20, 6); // version needed
+    cd.writeUInt16LE(0x0800, 8); // flags
+    cd.writeUInt16LE(0, 10); // method
+    cd.writeUInt16LE(0, 12);
+    cd.writeUInt16LE(0, 14);
+    cd.writeUInt32LE(crc, 16);
+    cd.writeUInt32LE(size, 20);
+    cd.writeUInt32LE(size, 24);
+    cd.writeUInt16LE(nameBuf.length, 28);
+    cd.writeUInt16LE(0, 30); // extra
+    cd.writeUInt16LE(0, 32); // comment
+    cd.writeUInt16LE(0, 34); // disk number
+    cd.writeUInt16LE(0, 36); // internal attrs
+    cd.writeUInt32LE(0, 38); // external attrs
+    cd.writeUInt32LE(offset, 42); // local header offset
+    central.push(cd, nameBuf);
+
+    offset += local.length + nameBuf.length + size;
+  }
+
+  const centralBuf = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); // end of central directory signature
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(centralBuf.length, 12);
+  end.writeUInt32LE(offset, 16); // central dir offset
+  end.writeUInt16LE(0, 20); // comment length
+
+  return Buffer.concat([...chunks, centralBuf, end]);
+}
+
 wss.on("connection", (ws) => {
   /** @type {import('ssh2').Client | null} */
   let ssh = null;
@@ -99,6 +213,8 @@ wss.on("connection", (ws) => {
   // Pending handshake callbacks that wait on a round-trip to the browser.
   let pendingHostVerify = null; // (accept: boolean) => void
   let pendingKbdFinish = null; // (responses: string[]) => void
+  // In-flight chunked uploads, keyed by remote path → { stream }.
+  const uploads = new Map();
 
   const send = (obj) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
@@ -141,6 +257,14 @@ wss.on("connection", (ws) => {
       pendingHostVerify = null;
     }
     pendingKbdFinish = null;
+    for (const { stream } of uploads.values()) {
+      try {
+        stream.destroy();
+      } catch {
+        /* stream already gone */
+      }
+    }
+    uploads.clear();
     ssh = null;
     shell = null;
     sftp = null;
@@ -364,6 +488,7 @@ wss.on("connection", (ws) => {
                 path: msg.path,
                 name: msg.path.split("/").pop() || "download",
                 dataB64: buffer.toString("base64"),
+                edit: msg.edit === true,
               });
             });
           }),
@@ -373,9 +498,73 @@ wss.on("connection", (ws) => {
       case "sftp-write":
         withSftp((s) => {
           const buffer = Buffer.from(msg.dataB64 || "", "base64");
-          s.writeFile(msg.path, buffer, (err) => {
+          if (typeof msg.offset === "number") {
+            // Chunked upload: open a stream on the first chunk, append on the
+            // rest, and close on the final one — this is what drives progress.
+            let entry = uploads.get(msg.path);
+            if (msg.offset === 0 || !entry) {
+              const stream = s.createWriteStream(msg.path);
+              stream.on("error", (err) => {
+                uploads.delete(msg.path);
+                sendError(err.message, "sftp");
+              });
+              entry = { stream };
+              uploads.set(msg.path, entry);
+            }
+            entry.stream.write(buffer);
+            if (msg.final) {
+              entry.stream.end(() => {
+                uploads.delete(msg.path);
+                send({ t: "sftp-ok", op: "write", path: msg.path });
+              });
+            }
+          } else {
+            // Whole-file write (inline-edit save).
+            s.writeFile(msg.path, buffer, (err) => {
+              if (err) return sendError(err.message, "sftp");
+              send({ t: "sftp-ok", op: "write", path: msg.path });
+            });
+          }
+        });
+        break;
+
+      case "sftp-rename":
+        withSftp((s) =>
+          s.rename(msg.from, msg.to, (err) => {
             if (err) return sendError(err.message, "sftp");
-            send({ t: "sftp-ok", op: "write", path: msg.path });
+            send({ t: "sftp-ok", op: "rename", path: msg.to });
+          }),
+        );
+        break;
+
+      case "sftp-chmod":
+        withSftp((s) =>
+          s.chmod(msg.path, Number(msg.mode) & 0o777, (err) => {
+            if (err) return sendError(err.message, "sftp");
+            send({ t: "sftp-ok", op: "chmod", path: msg.path });
+          }),
+        );
+        break;
+
+      case "sftp-download-dir":
+        withSftp((s) => {
+          collectDirFiles(s, msg.path, (err, files) => {
+            if (err) return sendError(err.message, "sftp");
+            const total = files.reduce((n, f) => n + f.data.length, 0);
+            if (total > MAX_DOWNLOAD_BYTES) {
+              return sendError(
+                `Folder too large to download (> ${MAX_DOWNLOAD_BYTES} bytes).`,
+                "sftp",
+              );
+            }
+            const zip = buildStoreZip(files);
+            const name = (msg.path.split("/").filter(Boolean).pop() || "download") + ".zip";
+            send({
+              t: "sftp-read",
+              path: msg.path,
+              name,
+              dataB64: zip.toString("base64"),
+            });
           });
         });
         break;

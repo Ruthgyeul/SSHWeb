@@ -6,10 +6,13 @@ import {
   formatSize,
   hostKeyId,
   isHostAllowed,
+  isProbablyTextFile,
   joinPath,
+  modeToOctal,
   parentPath,
   parseAllowlist,
   parseMessage,
+  parseOctalMode,
   sortEntries,
   validateConnectInput,
   type FileEntry,
@@ -117,6 +120,45 @@ describe("hostKeyId / compareHostKey", () => {
     expect(compareHostKey(undefined, "SHA256:aaa")).toBe("new");
     expect(compareHostKey("SHA256:aaa", "SHA256:aaa")).toBe("match");
     expect(compareHostKey("SHA256:aaa", "SHA256:bbb")).toBe("changed");
+  });
+});
+
+describe("parseOctalMode / modeToOctal", () => {
+  it("parses valid 3–4 digit octal strings", () => {
+    expect(parseOctalMode("644")).toBe(0o644);
+    expect(parseOctalMode("0755")).toBe(0o755);
+    expect(parseOctalMode(" 600 ")).toBe(0o600);
+  });
+
+  it("rejects invalid input", () => {
+    expect(parseOctalMode("999")).toBeNull();
+    expect(parseOctalMode("64")).toBeNull();
+    expect(parseOctalMode("rwx")).toBeNull();
+    expect(parseOctalMode("")).toBeNull();
+  });
+
+  it("round-trips through modeToOctal", () => {
+    expect(modeToOctal(0o644)).toBe("644");
+    expect(modeToOctal(0o40755 & 0o777)).toBe("755");
+  });
+});
+
+describe("isProbablyTextFile", () => {
+  it("recognizes text by extension", () => {
+    expect(isProbablyTextFile("notes.md")).toBe(true);
+    expect(isProbablyTextFile("server.mjs")).toBe(true);
+    expect(isProbablyTextFile("Config.YAML")).toBe(true);
+  });
+
+  it("recognizes common extensionless config files", () => {
+    expect(isProbablyTextFile("Dockerfile")).toBe(true);
+    expect(isProbablyTextFile(".gitignore")).toBe(true);
+  });
+
+  it("returns false for binaries", () => {
+    expect(isProbablyTextFile("photo.png")).toBe(false);
+    expect(isProbablyTextFile("archive.tar.gz")).toBe(false);
+    expect(isProbablyTextFile("binary")).toBe(false);
   });
 });
 

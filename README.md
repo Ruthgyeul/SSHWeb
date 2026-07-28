@@ -16,7 +16,9 @@ all from a web page. Built with **Next.js** and a terminal-styled design system.
   manual "Reconnect" button
 - **Password or private-key** authentication (paste a key or load from file,
   with optional passphrase)
-- **SFTP file browser** — navigate, upload, download, delete, create folders
+- **SFTP file browser** — navigate, drag-and-drop upload with progress,
+  download, delete, rename, `chmod`, create folders, inline text editing, and
+  whole-folder download as a zip
 - **WebSocket ↔ SSH bridge** — a custom Node server (`server.mjs`) relays the
   browser to a real [`ssh2`](https://github.com/mscdex/ssh2) connection
 - **Hardened by default** — strict CSP and security headers; credentials are
