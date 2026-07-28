@@ -25,7 +25,8 @@ that actually talks SSH is [`server.mjs`](../server.mjs).
 | `SshSession`  | One connection: owns a WebSocket + terminal + files, auto-reconnects    |
 | `ConnectForm` | Host/port/user + password-or-key login (validated via `sshProtocol`)    |
 | `XtermView`   | xterm.js wrapper; xterm is dynamically imported (never during SSR)      |
-| `FileBrowser` | SFTP listing with navigate / upload / download / delete / mkdir         |
+| `FileBrowser` | SFTP listing: navigate, drag-drop upload+progress, download, delete, rename, chmod, mkdir, folder-zip |
+| `FileEditor`  | Inline text editor modal for a remote file (load → edit → save over SFTP) |
 | `AuthPrompt`  | Modal for host-key (TOFU) confirmation and keyboard-interactive prompts |
 
 ## Conventions

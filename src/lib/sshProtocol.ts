@@ -60,10 +60,25 @@ export type ClientMessage =
   // the same order as the prompts that were presented.
   | { t: "kbd-response"; responses: string[] }
   | { t: "sftp-list"; path: string }
-  | { t: "sftp-read"; path: string }
-  | { t: "sftp-write"; path: string; dataB64: string }
+  // Read a file. `edit: true` opens it in the inline editor instead of
+  // triggering a download (the server echoes the flag back).
+  | { t: "sftp-read"; path: string; edit?: boolean }
+  // Write a file. When `offset` is a number the write is chunked (offset 0
+  // opens the stream, `final: true` closes it) — this drives upload progress;
+  // without `offset` the whole `dataB64` is written at once (inline-edit save).
+  | {
+      t: "sftp-write";
+      path: string;
+      dataB64: string;
+      offset?: number;
+      final?: boolean;
+    }
   | { t: "sftp-mkdir"; path: string }
   | { t: "sftp-rm"; path: string; dir?: boolean }
+  | { t: "sftp-rename"; from: string; to: string }
+  | { t: "sftp-chmod"; path: string; mode: number }
+  // Download a directory as a (store-only) zip archive.
+  | { t: "sftp-download-dir"; path: string }
   | { t: "disconnect" };
 
 /* ------------------------------------------------------------------ */
@@ -102,7 +117,15 @@ export type ServerMessage =
       prompts: KbdPrompt[];
     }
   | { t: "sftp-list"; path: string; entries: FileEntry[] }
-  | { t: "sftp-read"; path: string; name: string; dataB64: string }
+  // File contents. `edit` echoes the request flag: true opens the editor,
+  // false/absent triggers a download.
+  | {
+      t: "sftp-read";
+      path: string;
+      name: string;
+      dataB64: string;
+      edit?: boolean;
+    }
   | { t: "sftp-ok"; op: string; path: string }
   | { t: "error"; message: string; scope?: "sftp" | "shell" | "auth" };
 
@@ -299,4 +322,42 @@ export function joinPath(base: string, segment: string): string {
 /** The parent directory of a POSIX path (`/a/b/c` → `/a/b`, `/` → `/`). */
 export function parentPath(path: string): string {
   return joinPath(path, "..") || "/";
+}
+
+/**
+ * Parse a symbolic-free octal permission string (e.g. "644", "0755") into mode
+ * bits, or `null` if it isn't 3–4 octal digits. Used by the chmod dialog.
+ */
+export function parseOctalMode(input: string): number | null {
+  const s = input.trim();
+  if (!/^[0-7]{3,4}$/.test(s)) return null;
+  return parseInt(s, 8);
+}
+
+/** Render the low 12 mode bits back as a 3-digit octal string (e.g. "644"). */
+export function modeToOctal(mode: number): string {
+  return (mode & 0o777).toString(8).padStart(3, "0");
+}
+
+const TEXT_EXTENSIONS = new Set([
+  "txt", "md", "markdown", "log", "conf", "cfg", "ini", "env", "sh", "bash",
+  "zsh", "fish", "js", "mjs", "cjs", "ts", "tsx", "jsx", "json", "json5",
+  "yaml", "yml", "toml", "xml", "html", "htm", "css", "scss", "less", "csv",
+  "tsv", "sql", "py", "rb", "go", "rs", "c", "h", "cpp", "hpp", "java", "kt",
+  "php", "pl", "lua", "vim", "dockerfile", "gitignore", "properties",
+]);
+
+/**
+ * Heuristic: is this filename likely a text file we can open in the inline
+ * editor? Matches by extension, plus a few well-known extensionless dotfiles.
+ */
+export function isProbablyTextFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  const dot = lower.lastIndexOf(".");
+  if (dot <= 0) {
+    // No extension (or leading-dot dotfile): treat common config names as text.
+    const base = dot === 0 ? lower.slice(1) : lower;
+    return TEXT_EXTENSIONS.has(base) || base === "dockerfile" || base === "makefile";
+  }
+  return TEXT_EXTENSIONS.has(lower.slice(dot + 1));
 }
