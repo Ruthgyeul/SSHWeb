@@ -63,3 +63,13 @@ export const CONTACT_EMAIL = env("NEXT_PUBLIC_CONTACT_EMAIL", "hello@example.com
 
 /** Brand colors surfaced to metadata (`themeColor`, manifest). */
 export const THEME_COLOR = "#0a0d13";
+
+/* --- Web SSH client -------------------------------------------------------
+ * The path the browser opens its SSH WebSocket on. Must match the `WS_PATH`
+ * read by `server.mjs` (they default to the same value). The actual SSH host
+ * allowlist and session limits are SERVER-only settings (`SSH_ALLOWED_HOSTS`,
+ * `SSH_MAX_SESSIONS`) enforced in `server.mjs`; the optional public mirror
+ * below is used only to fail fast with a friendly message in the UI.
+ */
+export const SSH_WS_PATH = env("NEXT_PUBLIC_SSH_WS_PATH", "/api/ssh");
+export const SSH_ALLOWED_HOSTS = env("NEXT_PUBLIC_SSH_ALLOWED_HOSTS", "");

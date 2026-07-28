@@ -23,9 +23,10 @@ should never bake a real name, domain, or secret into the template itself.
 ## Commands
 
 ```bash
-npm run dev        # dev server (http://localhost:3000)
+npm run dev        # dev server + SSH bridge via server.mjs (http://localhost:3000)
+npm run dev:next   # plain `next dev`, no SSH bridge
 npm run build      # production build (fails on type errors)
-npm run start      # serve the production build
+npm run start      # serve the production build + SSH bridge (server.mjs)
 npm run lint       # ESLint (eslint-config-next)
 npm run typecheck  # tsc --noEmit
 npm run test       # Vitest (run once)
@@ -92,6 +93,29 @@ global CSS may be broken.
 `next.config.ts` sets a strict CSP and hardening headers on every response.
 When you add a third-party origin (analytics, external API, font CDN), **widen
 the relevant CSP directive** there rather than removing the policy.
+
+### Web SSH client — the one stateful surface
+
+The `/ssh` route is a browser SSH client (interactive terminal + SFTP), modeled
+on ssheasy.com. A browser can't open a raw SSH socket, so this feature needs a
+**custom Node server**, `server.mjs`, which runs Next.js *and* bridges a
+WebSocket to a real `ssh2` connection. Key facts an agent must know:
+
+- **`npm run dev` / `npm run start` run `server.mjs`**, not `next dev` /
+  `next start`. `npm run build` is still `next build`. `server.mjs` is plain ESM
+  and lives **outside** the TypeScript/Next build (it isn't in `tsconfig`).
+- **The wire protocol has two synchronized homes**, like the palette does:
+  typed messages + pure helpers in `src/lib/sshProtocol.ts` (imported by the
+  client, unit-tested in `sshProtocol.test.ts`), and the matching `t` string
+  constants hand-mirrored in `server.mjs`. Change one, change the other.
+- **UI is all client components** under `src/components/ssh/` (xterm.js is
+  dynamically imported so it never runs during SSR).
+- **Security posture:** credentials are relayed to the target host and never
+  stored or logged; the remote host enforces its own auth/permissions;
+  `SSH_ALLOWED_HOSTS`, `SSH_MAX_SESSIONS` and `SSH_MAX_DOWNLOAD_BYTES` (server
+  env, read in `server.mjs`) gate reachable hosts, concurrency and download
+  size. The CSP's `connect-src 'self'` already authorizes the same-origin
+  WebSocket — don't widen it for this feature.
 
 ## Assets
 

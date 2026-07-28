@@ -18,12 +18,15 @@ src/
 │   ├── manifest.ts      # /manifest.webmanifest (PWA)
 │   ├── opengraph-image.tsx  # /opengraph-image (dynamic)
 │   └── twitter-image.tsx    # /twitter-image (dynamic)
+│   └── ssh/             # /ssh route (web SSH client) — server-rendered shell
 ├── components/          # reusable UI (see docs/claude-components.md)
+│   └── ssh/             # web SSH client UI (client components)
 ├── config/
 │   └── siteConfig.ts    # ★ all env-driven site identity — single source
 ├── lib/
 │   ├── theme.ts         # palette as TS tokens (OG image only)
 │   ├── og.tsx           # shared OG/Twitter image renderer
+│   ├── sshProtocol.ts   # web-SSH wire types + pure helpers (+ .test.ts)
 │   └── utils.ts         # cn() classname helper (+ utils.test.ts)
 └── styles/
     └── globals.css      # Tailwind import + @theme palette + terminal utilities

@@ -27,12 +27,12 @@ export const metadata: Metadata = {
  */
 export default function Home() {
   const features = [
-    "SEO metadata, robots.ts & sitemap.ts",
-    "Dynamic Open Graph / Twitter card images",
-    "Terminal-styled 404, 500 & error boundary",
-    "Env-driven config (src/config/siteConfig.ts)",
-    "PWA manifest, favicon & theme color",
-    "Hardened security headers + CSP",
+    "Interactive xterm.js shell over real SSH",
+    "Password or private-key authentication",
+    "SFTP file browser — list, upload, download, delete",
+    "Server-side WebSocket ↔ SSH bridge (ssh2)",
+    "Optional host allowlist + concurrent-session limit",
+    "Credentials relayed to the host, never stored or logged",
   ];
 
   return (
@@ -66,6 +66,17 @@ export default function Home() {
                 </li>
               ))}
             </ul>
+
+            <Prompt
+              className="mt-2"
+              command={<span className="text-term-text">ssh</span>}
+            />
+            <Link
+              href="/ssh"
+              className="card inline-flex w-fit items-center gap-2 rounded-lg border border-term-accent/40 bg-term-accent/10 px-5 py-2.5 text-sm font-medium text-term-accent hover:bg-term-accent/20"
+            >
+              Launch SSH terminal →
+            </Link>
 
             <Prompt className="mt-2" command={<span className="term-cursor" aria-hidden />} />
           </div>

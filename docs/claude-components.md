@@ -15,6 +15,20 @@ default) server components.
 | `ErrorScreen`      | Shared terminal error layout used by 404 / 500 / global-error | no      |
 | `LoadingScreen`    | Shared terminal loading layout used by `loading.tsx` (`fullScreen` toggles embed mode) | no |
 
+### `ssh/` — web SSH client (all client components)
+
+The `/ssh` route's UI. These are interactive by nature, so they opt into
+`"use client"`. Wire-protocol types + pure helpers live in
+[`src/lib/sshProtocol.ts`](../src/lib/sshProtocol.ts) (unit-tested); the bridge
+that actually talks SSH is [`server.mjs`](../server.mjs).
+
+| Component     | Purpose                                                                 |
+| ------------- | ----------------------------------------------------------------------- |
+| `SshClient`   | Orchestrator — owns the single WebSocket and coordinates the pieces     |
+| `ConnectForm` | Host/port/user + password-or-key login (validated via `sshProtocol`)    |
+| `XtermView`   | xterm.js wrapper; xterm is dynamically imported (never during SSR)      |
+| `FileBrowser` | SFTP listing with navigate / upload / download / delete / mkdir         |
+
 ## Conventions
 
 - **Typed props, no `any`.** Prefer explicit prop interfaces; accept
