@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  compareHostKey,
   encodeMessage,
+  hostKeyId,
   joinPath,
   parseMessage,
   type FileEntry,
@@ -13,9 +15,35 @@ import { cn } from "@/lib/utils";
 import { XtermView, type XtermHandle } from "./XtermView";
 import { ConnectForm, type ConnectDetails } from "./ConnectForm";
 import { FileBrowser } from "./FileBrowser";
+import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 
 type Status = "idle" | "connecting" | "connected" | "error" | "closed";
 type Tab = "terminal" | "files";
+
+/** localStorage key holding the trusted host-key fingerprints (TOFU store). */
+const KNOWN_HOSTS_KEY = "sshweb.knownHosts";
+
+/** Read the `host:port → fingerprint` map of trusted host keys. */
+function loadKnownHosts(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(KNOWN_HOSTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Remember (or update) the trusted fingerprint for a host. */
+function saveKnownHost(id: string, fingerprint: string) {
+  try {
+    const hosts = loadKnownHosts();
+    hosts[id] = fingerprint;
+    localStorage.setItem(KNOWN_HOSTS_KEY, JSON.stringify(hosts));
+  } catch {
+    /* storage unavailable (private mode) — verification just won't persist */
+  }
+}
 
 /** Decode a base64 string to raw bytes for writing into xterm. */
 function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
@@ -70,6 +98,9 @@ export function SshClient() {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
 
+  // A pending handshake prompt (unknown/changed host key, or a 2FA challenge).
+  const [authPrompt, setAuthPrompt] = useState<AuthPromptState | null>(null);
+
   const send = useCallback((msg: Parameters<typeof encodeMessage>[0]) => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(encodeMessage(msg));
@@ -106,6 +137,38 @@ export function SshClient() {
           xtermRef.current?.write(base64ToBytes(msg.data));
           break;
 
+        case "hostkey": {
+          // Trust-on-first-use: auto-accept a key we already trust, otherwise
+          // ask the user (and warn loudly if it changed).
+          const id = hostKeyId(msg.host, msg.port);
+          const verdict = compareHostKey(
+            loadKnownHosts()[id],
+            msg.fingerprint,
+          );
+          if (verdict === "match") {
+            send({ t: "hostkey-response", accept: true });
+          } else {
+            setAuthPrompt({
+              kind: "hostkey",
+              host: msg.host,
+              port: msg.port,
+              fingerprint: msg.fingerprint,
+              keyType: msg.keyType,
+              verdict,
+            });
+          }
+          break;
+        }
+
+        case "kbd-interactive":
+          setAuthPrompt({
+            kind: "kbd",
+            name: msg.name,
+            instructions: msg.instructions,
+            prompts: msg.prompts,
+          });
+          break;
+
         case "sftp-list":
           setCwd(msg.path);
           setEntries(msg.entries);
@@ -132,13 +195,14 @@ export function SshClient() {
           break;
       }
     },
-    [cwd, listDir],
+    [cwd, listDir, send],
   );
 
   const connect = useCallback(
     (details: ConnectDetails) => {
       setStatus("connecting");
       setStatusMessage("");
+      setAuthPrompt(null);
       setTarget({ user: details.username, host: details.host });
 
       const scheme = window.location.protocol === "https:" ? "wss" : "ws";
@@ -183,8 +247,33 @@ export function SshClient() {
     setTarget(null);
     setEntries([]);
     setStatusMessage("");
+    setAuthPrompt(null);
     xtermRef.current?.clear();
   }, [send]);
+
+  // Resolve the host-key modal: remember an accepted key, then tell the server.
+  const decideHostKey = useCallback(
+    (accept: boolean) => {
+      if (accept && authPrompt?.kind === "hostkey") {
+        saveKnownHost(
+          hostKeyId(authPrompt.host, authPrompt.port),
+          authPrompt.fingerprint,
+        );
+      }
+      setAuthPrompt(null);
+      send({ t: "hostkey-response", accept });
+    },
+    [authPrompt, send],
+  );
+
+  // Submit answers to a keyboard-interactive challenge.
+  const submitKbd = useCallback(
+    (responses: string[]) => {
+      setAuthPrompt(null);
+      send({ t: "kbd-response", responses });
+    },
+    [send],
+  );
 
   // Close the socket if the component unmounts mid-session.
   useEffect(() => () => wsRef.current?.close(), []);
@@ -334,6 +423,15 @@ export function SshClient() {
               )}
             </div>
           </div>
+        )}
+
+        {/* Handshake prompts (host key / keyboard-interactive) sit on top. */}
+        {authPrompt && (
+          <AuthPromptModal
+            prompt={authPrompt}
+            onHostKeyDecision={decideHostKey}
+            onKbdSubmit={submitKbd}
+          />
         )}
       </div>
     </div>

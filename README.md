@@ -128,6 +128,11 @@ mirrors the same message names.
 
 - **Credentials are relayed, never stored or logged.** They exist only for the
   life of the connection, to authenticate to the host you named.
+- **Host key verification (trust-on-first-use).** On first connect the server's
+  public-key fingerprint is shown for you to confirm; it's remembered in the
+  browser and you're warned loudly if it ever changes (possible MITM).
+- **Two-factor / keyboard-interactive auth** is supported — servers that require
+  an OTP or interactive prompt will ask for it during login.
 - **The remote host is still the gatekeeper** — you only get the access your own
   credentials grant, with the host enforcing its own auth and file permissions.
 - **`SSH_ALLOWED_HOSTS`** (server-only) optionally restricts which hosts may be

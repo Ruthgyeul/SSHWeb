@@ -21,9 +21,12 @@
 
 import { createServer } from "node:http";
 import { parse } from "node:url";
+import { createHash } from "node:crypto";
 import next from "next";
 import { WebSocketServer } from "ws";
-import { Client as SSHClient } from "ssh2";
+import ssh2 from "ssh2";
+
+const { Client: SSHClient, utils: sshUtils } = ssh2;
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME || "0.0.0.0";
@@ -93,6 +96,9 @@ wss.on("connection", (ws) => {
   let sftp = null; // cached SFTP subsystem
   let counted = false; // whether this connection is included in activeSessions
   let closed = false;
+  // Pending handshake callbacks that wait on a round-trip to the browser.
+  let pendingHostVerify = null; // (accept: boolean) => void
+  let pendingKbdFinish = null; // (responses: string[]) => void
 
   const send = (obj) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
@@ -125,9 +131,37 @@ wss.on("connection", (ws) => {
     } catch {
       /* client already gone */
     }
+    // Release any handshake waiters so a half-open handshake doesn't hang.
+    if (pendingHostVerify) {
+      try {
+        pendingHostVerify(false);
+      } catch {
+        /* callback already consumed */
+      }
+      pendingHostVerify = null;
+    }
+    pendingKbdFinish = null;
     ssh = null;
     shell = null;
     sftp = null;
+  }
+
+  /** SHA256 fingerprint of a host public key, in OpenSSH's `SHA256:…` form. */
+  function fingerprintHostKey(keyBuf) {
+    const digest = createHash("sha256")
+      .update(keyBuf)
+      .digest("base64")
+      .replace(/=+$/, "");
+    let keyType = "ssh";
+    try {
+      const parsed = sshUtils.parseKey(keyBuf);
+      if (parsed && !(parsed instanceof Error) && parsed.type) {
+        keyType = parsed.type;
+      }
+    } catch {
+      /* fall back to the generic label */
+    }
+    return { fingerprint: `SHA256:${digest}`, keyType };
   }
 
   /** Lazily open (and cache) the SFTP subsystem, then run `fn(sftp)`. */
@@ -195,6 +229,23 @@ wss.on("connection", (ws) => {
           },
         );
       })
+      .on(
+        "keyboard-interactive",
+        (name, instructions, _lang, prompts, finish) => {
+          // Relay the challenge (e.g. an OTP / 2FA code) to the browser and
+          // wait for the user's answers before finishing authentication.
+          pendingKbdFinish = finish;
+          send({
+            t: "kbd-interactive",
+            name: name || "",
+            instructions: instructions || "",
+            prompts: prompts.map((p) => ({
+              prompt: p.prompt,
+              echo: p.echo !== false,
+            })),
+          });
+        },
+      )
       .on("error", (err) => {
         // ssh2 surfaces auth failures and network errors here.
         send({ t: "status", state: "error", message: err.message });
@@ -215,8 +266,16 @@ wss.on("connection", (ws) => {
         passphrase: msg.passphrase || undefined,
         readyTimeout: 20_000,
         keepaliveInterval: 15_000,
-        // Offer a broad but modern algorithm set so older servers still connect.
-        tryKeyboard: false,
+        // Enable keyboard-interactive so servers that require an OTP / 2FA code
+        // (or deliver the password prompt this way) can complete auth.
+        tryKeyboard: true,
+        // Trust-on-first-use host key check: present the fingerprint to the
+        // browser and let the user decide before the session opens.
+        hostVerifier: (keyBuf, verify) => {
+          const { fingerprint, keyType } = fingerprintHostKey(keyBuf);
+          pendingHostVerify = verify;
+          send({ t: "hostkey", host, port: targetPort, fingerprint, keyType });
+        },
       });
   }
 
@@ -248,6 +307,22 @@ wss.on("connection", (ws) => {
       case "resize":
         if (shell)
           shell.setWindow(Number(msg.rows) || 24, Number(msg.cols) || 80, 0, 0);
+        break;
+
+      case "hostkey-response":
+        if (pendingHostVerify) {
+          const verify = pendingHostVerify;
+          pendingHostVerify = null;
+          verify(msg.accept === true);
+        }
+        break;
+
+      case "kbd-response":
+        if (pendingKbdFinish) {
+          const finish = pendingKbdFinish;
+          pendingKbdFinish = null;
+          finish(Array.isArray(msg.responses) ? msg.responses.map(String) : []);
+        }
         break;
 
       case "sftp-list":

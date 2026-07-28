@@ -112,7 +112,9 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
 - **UI is all client components** under `src/components/ssh/` (xterm.js is
   dynamically imported so it never runs during SSR).
 - **Security posture:** credentials are relayed to the target host and never
-  stored or logged; the remote host enforces its own auth/permissions;
+  stored or logged; the remote host enforces its own auth/permissions; host keys
+  are checked trust-on-first-use (fingerprint prompt + browser known-hosts) and
+  keyboard-interactive/2FA is supported;
   `SSH_ALLOWED_HOSTS`, `SSH_MAX_SESSIONS` and `SSH_MAX_DOWNLOAD_BYTES` (server
   env, read in `server.mjs`) gate reachable hosts, concurrency and download
   size. The CSP's `connect-src 'self'` already authorizes the same-origin
