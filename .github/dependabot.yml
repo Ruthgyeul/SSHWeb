@@ -1,0 +1,36 @@
+version: 2
+updates:
+  # Keep npm dependencies up to date.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # Batch minor/patch bumps into a single PR to cut review noise.
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # These major bumps are blocked by the eslint-config-next toolchain, not
+      # by us — re-enable each once upstream supports it:
+      #   * TypeScript 7 — typescript-eslint refuses to load ("does not support
+      #     TS 7.0"), which fails `npm run lint`.
+      #   * ESLint 10 — eslint-config-next's react plugin calls the removed
+      #     `context.getFilename()` API and throws at lint time.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      - dependency-name: eslint
+        update-types: ["version-update:semver-major"]
+
+  # Keep GitHub Actions pinned versions fresh.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci

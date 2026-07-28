@@ -1,0 +1,110 @@
+# Project guide
+
+Guidance for Claude Code (and humans) working in this repository. Loaded
+automatically via the root `CLAUDE.md`.
+
+## What this is
+
+**TerminalWebTemplate** — a reusable, terminal-styled **Next.js (App Router)**
+starter. Fork it to spin up a new web project that already has SEO, error
+pages, PWA metadata, a design system, and env-driven configuration wired up.
+
+It is a *template*: every piece of identity is a placeholder (`example.com`,
+"Example Author"). Real projects override those via environment variables — you
+should never bake a real name, domain, or secret into the template itself.
+
+## Tech stack
+
+- **Next.js 16** (App Router, Turbopack) · **React 19** · **TypeScript** (strict)
+- **Tailwind CSS v4** (config-less; theme tokens live in `src/styles/globals.css`)
+- **Vitest** for unit tests
+- **Node 24** (see `.nvmrc`)
+
+## Commands
+
+```bash
+npm run dev        # dev server (http://localhost:3000)
+npm run build      # production build (fails on type errors)
+npm run start      # serve the production build
+npm run lint       # ESLint (eslint-config-next)
+npm run typecheck  # tsc --noEmit
+npm run test       # Vitest (run once)
+npm run test:watch # Vitest (watch)
+```
+
+Before committing, run `npm run lint && npm run typecheck && npm run test`.
+CI (`.github/workflows/ci.yml`) runs all of these plus a full build.
+
+## Architecture & conventions
+
+### Configuration is env-driven — this is the core idea
+
+**All site identity flows through `src/config/siteConfig.ts`.** It reads
+`NEXT_PUBLIC_*` variables and falls back to `example.*` placeholders. Layout
+metadata, `robots.ts`, `sitemap.ts`, `manifest.ts`, and the OG image all import
+from it.
+
+- To rebrand a fork, edit `.env.local` (copy from `.env.example`) — **not** the
+  source files.
+- When you add a new configurable value, add it to **both** `.env.example`
+  (documented, with an `example` default) and `siteConfig.ts`.
+- Never hardcode a URL, name, or email in a component or page — read it from
+  `siteConfig`.
+
+### The palette lives in two synchronized places
+
+- `src/styles/globals.css` — the `@theme` block defines Tailwind color tokens
+  (`term-bg`, `term-accent`, …). Components use these via utilities
+  (`bg-term-card`, `text-term-accent`).
+- `src/lib/theme.ts` — the same hex values as a TS object, for the **one**
+  context that can't read CSS: the OG image generator (`src/lib/og.tsx`), which
+  renders in a Satori runtime with no DOM.
+
+If you retune colors, change **both**. Everything else references the tokens.
+
+### Server components by default
+
+Pages and layout components are server components (they prerender to static
+HTML). Only opt into `"use client"` when you need browser APIs or interactivity
+— currently just the error boundaries (`error.tsx`, `global-error.tsx`) and
+`not-found.tsx` (reads `window.location`).
+
+### SEO & metadata
+
+- Global metadata is built in `src/app/layout.tsx` from `siteConfig`, including
+  JSON-LD structured data.
+- `robots.ts` gates indexing on `NEXT_PUBLIC_ALLOW_INDEXING` — set it to
+  `false` on staging so previews don't get indexed.
+- `sitemap.ts` lists public routes — extend it as you add pages.
+- OG/Twitter images are generated on the fly (no committed binaries) by
+  `opengraph-image.tsx` / `twitter-image.tsx` via `src/lib/og.tsx`.
+
+### Error & loading states
+
+`error.tsx` (500), `not-found.tsx` (404), `global-error.tsx` (root boundary),
+and `loading.tsx` all share the terminal aesthetic via
+`src/components/ErrorScreen.tsx`. `global-error.tsx` is deliberately
+self-contained with inline styles because it renders when the root layout /
+global CSS may be broken.
+
+### Security headers
+
+`next.config.ts` sets a strict CSP and hardening headers on every response.
+When you add a third-party origin (analytics, external API, font CDN), **widen
+the relevant CSP directive** there rather than removing the policy.
+
+## Assets
+
+- `public/favicon.svg` — the scalable source logo (a `>_` terminal prompt).
+- `public/favicon.ico` and `public/icons/*.png` are **generated** from that
+  design. If you change the logo, regenerate them (the generator script used is
+  not committed; a simple SVG rasterizer or design tool is fine) so the raster
+  icons stay in sync.
+
+## When extending this template
+
+- New page → add a route folder under `src/app`, add it to `sitemap.ts`, give
+  it a `metadata` export (title/description).
+- New shared UI → put it in `src/components` (see [`claude-components.md`](claude-components.md)).
+- New config → `.env.example` + `siteConfig.ts`, then consume from `siteConfig`.
+- Keep the placeholder discipline: no real personal data in committed files.

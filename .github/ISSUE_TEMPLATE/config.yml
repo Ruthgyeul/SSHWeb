@@ -1,0 +1,6 @@
+# Require issues to go through one of the structured forms above.
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Questions & discussion
+    url: https://github.com/example/terminal-web-template/discussions
+    about: Ask questions or share ideas here instead of opening an issue.

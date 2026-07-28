@@ -1,0 +1,51 @@
+name: 🐛 Bug report
+description: Report something that isn't working as expected
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! Please search existing issues first to avoid duplicates.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: When I ..., the page ...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce it?
+      placeholder: |
+        1. Go to '...'
+        2. Click '...'
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: I expected ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Environment
+      description: Node version, browser, OS, and template commit/tag.
+      placeholder: "Node 24.x · Chrome 140 · macOS 15 · commit abc1234"
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Paste any relevant console output or screenshots.
+      render: shell
+    validations:
+      required: false

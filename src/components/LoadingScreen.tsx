@@ -1,0 +1,66 @@
+import { PromptLabel } from "@/components/PromptLabel";
+import { cn } from "@/lib/utils";
+
+/**
+ * Shared terminal-styled loading UI. Renders a fake shell session: the command
+ * that is "running", an optional list of resolved steps, and a blinking cursor
+ * on the line still in progress — keeping the terminal illusion instead of a
+ * generic spinner.
+ *
+ * Server-renderable and used by the route-level `loading.tsx`. Callers can pass
+ * their own copy for section-specific loading states.
+ */
+export function LoadingScreen({
+  command = "loading",
+  steps = [],
+  fullScreen = true,
+  className,
+}: {
+  /** The command shown after the prompt, e.g. "npm run build". */
+  command?: string;
+  /** Already-resolved lines shown above the in-progress cursor line. */
+  steps?: string[];
+  /**
+   * Fill the viewport as a route-level `<main>` (default). Set `false` to embed
+   * the loading state inside another layout (e.g. a component preview) — it then
+   * renders a plain `<div>` that fills its container instead.
+   */
+  fullScreen?: boolean;
+  className?: string;
+}) {
+  const Root = fullScreen ? "main" : "div";
+
+  return (
+    <Root
+      className={cn(
+        "terminal-bg flex flex-col items-center justify-center px-6 py-16",
+        fullScreen ? "min-h-screen" : "h-full",
+        className,
+      )}
+      aria-busy="true"
+    >
+      <div className="term-fade-up w-full max-w-lg" role="status">
+        <p className="text-sm text-term-muted">
+          <PromptLabel /> {command}
+        </p>
+
+        {steps.length > 0 && (
+          <ul className="mt-4 space-y-1 text-sm leading-7 text-term-muted">
+            {steps.map((step) => (
+              <li key={step}>
+                <span className="text-term-green">✓</span>{" "}
+                <span className="text-term-dim">{step}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <p className={cn("text-sm text-term-muted", steps.length > 0 && "mt-1")}>
+          <span className="text-term-yellow">…</span> working
+          <span className="term-cursor ml-1 align-middle" aria-hidden />
+          <span className="sr-only">Loading, please wait.</span>
+        </p>
+      </div>
+    </Root>
+  );
+}

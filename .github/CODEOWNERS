@@ -1,0 +1,10 @@
+# Code owners are automatically requested for review on matching paths.
+# Uncomment and replace @example with the real owner/team when you fork.
+#
+# Default owner for everything in the repo:
+# *                     @example
+#
+# Path-specific examples:
+# /src/app/             @example
+# /.github/             @example
+# *.md                  @example
