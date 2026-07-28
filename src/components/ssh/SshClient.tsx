@@ -1,438 +1,129 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  compareHostKey,
-  encodeMessage,
-  hostKeyId,
-  joinPath,
-  parseMessage,
-  type FileEntry,
-  type ServerMessage,
-} from "@/lib/sshProtocol";
-import { SSH_WS_PATH } from "@/config/siteConfig";
+import { useCallback, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { XtermView, type XtermHandle } from "./XtermView";
-import { ConnectForm, type ConnectDetails } from "./ConnectForm";
-import { FileBrowser } from "./FileBrowser";
-import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
-
-type Status = "idle" | "connecting" | "connected" | "error" | "closed";
-type Tab = "terminal" | "files";
-
-/** localStorage key holding the trusted host-key fingerprints (TOFU store). */
-const KNOWN_HOSTS_KEY = "sshweb.knownHosts";
-
-/** Read the `host:port → fingerprint` map of trusted host keys. */
-function loadKnownHosts(): Record<string, string> {
-  try {
-    const raw = localStorage.getItem(KNOWN_HOSTS_KEY);
-    const parsed = raw ? JSON.parse(raw) : null;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-/** Remember (or update) the trusted fingerprint for a host. */
-function saveKnownHost(id: string, fingerprint: string) {
-  try {
-    const hosts = loadKnownHosts();
-    hosts[id] = fingerprint;
-    localStorage.setItem(KNOWN_HOSTS_KEY, JSON.stringify(hosts));
-  } catch {
-    /* storage unavailable (private mode) — verification just won't persist */
-  }
-}
-
-/** Decode a base64 string to raw bytes for writing into xterm. */
-function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
-  const bin = atob(b64);
-  const buffer = new ArrayBuffer(bin.length);
-  const bytes = new Uint8Array(buffer);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-}
-
-/** Encode raw bytes to base64 in chunks (avoids call-stack limits on big files). */
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
-/** Kick off a browser download of some bytes. */
-function triggerDownload(name: string, bytes: Uint8Array<ArrayBuffer>) {
-  const url = URL.createObjectURL(new Blob([bytes]));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
+import {
+  SshSession,
+  StatusDot,
+  type SessionMeta,
+} from "./SshSession";
 
 /**
- * Top-level web SSH client. Owns the single WebSocket to the server-side bridge
- * and coordinates the three pieces of UI: the connection form, the xterm.js
- * terminal, and the SFTP file browser. The connect form is shown as an overlay
- * so the terminal stays mounted underneath and its size is known the moment the
- * socket opens.
+ * Multi-session shell around {@link SshSession}. Each tab is an independent SSH
+ * connection with its own WebSocket, terminal and file browser; sessions stay
+ * mounted when they aren't the active tab so their connections keep running in
+ * the background. Add tabs with "＋", close them with the ✕ on each tab.
  */
 export function SshClient() {
-  const wsRef = useRef<WebSocket | null>(null);
-  const xtermRef = useRef<XtermHandle>(null);
+  const nextIdRef = useRef(1);
+  const [ids, setIds] = useState<number[]>([0]);
+  const [activeId, setActiveId] = useState(0);
+  const [metas, setMetas] = useState<Record<number, SessionMeta>>({});
 
-  const [status, setStatus] = useState<Status>("idle");
-  const [statusMessage, setStatusMessage] = useState("");
-  const [target, setTarget] = useState<{ user: string; host: string } | null>(
-    null,
-  );
-  const [tab, setTab] = useState<Tab>("terminal");
-
-  const [cwd, setCwd] = useState("~");
-  const [entries, setEntries] = useState<FileEntry[]>([]);
-  const [filesLoading, setFilesLoading] = useState(false);
-
-  // A pending handshake prompt (unknown/changed host key, or a 2FA challenge).
-  const [authPrompt, setAuthPrompt] = useState<AuthPromptState | null>(null);
-
-  const send = useCallback((msg: Parameters<typeof encodeMessage>[0]) => {
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(encodeMessage(msg));
+  // Record a session's reported label/status, bailing out when unchanged so a
+  // child re-render doesn't cascade into a parent update loop.
+  const updateMeta = useCallback((id: number, m: SessionMeta) => {
+    setMetas((prev) =>
+      prev[id]?.label === m.label && prev[id]?.status === m.status
+        ? prev
+        : { ...prev, [id]: m },
+    );
   }, []);
 
-  const listDir = useCallback(
-    (path: string) => {
-      setFilesLoading(true);
-      send({ t: "sftp-list", path });
-    },
-    [send],
-  );
+  const addSession = useCallback(() => {
+    const id = nextIdRef.current++;
+    setIds((prev) => [...prev, id]);
+    setActiveId(id);
+  }, []);
 
-  const handleServerMessage = useCallback(
-    (msg: ServerMessage) => {
-      switch (msg.t) {
-        case "status":
-          if (msg.state === "connected") {
-            setStatus("connected");
-            xtermRef.current?.writeln(
-              "\x1b[32m✓ Connected.\x1b[0m Type as you would in any shell.",
-            );
-            listDir(".");
-          } else if (msg.state === "closed") {
-            setStatus("closed");
-            setStatusMessage(msg.message || "Connection closed.");
-          } else if (msg.state === "error") {
-            setStatus("error");
-            setStatusMessage(msg.message || "Connection error.");
-          }
-          break;
-
-        case "data":
-          xtermRef.current?.write(base64ToBytes(msg.data));
-          break;
-
-        case "hostkey": {
-          // Trust-on-first-use: auto-accept a key we already trust, otherwise
-          // ask the user (and warn loudly if it changed).
-          const id = hostKeyId(msg.host, msg.port);
-          const verdict = compareHostKey(
-            loadKnownHosts()[id],
-            msg.fingerprint,
-          );
-          if (verdict === "match") {
-            send({ t: "hostkey-response", accept: true });
-          } else {
-            setAuthPrompt({
-              kind: "hostkey",
-              host: msg.host,
-              port: msg.port,
-              fingerprint: msg.fingerprint,
-              keyType: msg.keyType,
-              verdict,
-            });
-          }
-          break;
-        }
-
-        case "kbd-interactive":
-          setAuthPrompt({
-            kind: "kbd",
-            name: msg.name,
-            instructions: msg.instructions,
-            prompts: msg.prompts,
-          });
-          break;
-
-        case "sftp-list":
-          setCwd(msg.path);
-          setEntries(msg.entries);
-          setFilesLoading(false);
-          break;
-
-        case "sftp-read":
-          triggerDownload(msg.name, base64ToBytes(msg.dataB64));
-          break;
-
-        case "sftp-ok":
-          // A mutating op succeeded — refresh the current directory.
-          listDir(cwd);
-          break;
-
-        case "error":
-          if (msg.scope === "sftp") {
-            setFilesLoading(false);
-            setStatusMessage(`SFTP: ${msg.message}`);
-          } else {
-            xtermRef.current?.writeln(`\x1b[31m✗ ${msg.message}\x1b[0m`);
-            setStatusMessage(msg.message);
-          }
-          break;
-      }
-    },
-    [cwd, listDir, send],
-  );
-
-  const connect = useCallback(
-    (details: ConnectDetails) => {
-      setStatus("connecting");
-      setStatusMessage("");
-      setAuthPrompt(null);
-      setTarget({ user: details.username, host: details.host });
-
-      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(
-        `${scheme}://${window.location.host}${SSH_WS_PATH}`,
-      );
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        const size = xtermRef.current?.fit() ?? { cols: 80, rows: 24 };
-        send({
-          t: "connect",
-          host: details.host,
-          port: details.port,
-          username: details.username,
-          password: details.password,
-          privateKey: details.privateKey,
-          passphrase: details.passphrase,
-          cols: size.cols,
-          rows: size.rows,
-        });
-      };
-      ws.onmessage = (event) => {
-        const msg = parseMessage<ServerMessage>(String(event.data));
-        if (msg) handleServerMessage(msg);
-      };
-      ws.onclose = () => {
-        setStatus((s) => (s === "connecting" ? "error" : "closed"));
-      };
-      ws.onerror = () => {
-        setStatusMessage("WebSocket error — is the SSH bridge running?");
-      };
-    },
-    [handleServerMessage, send],
-  );
-
-  const disconnect = useCallback(() => {
-    send({ t: "disconnect" });
-    wsRef.current?.close();
-    wsRef.current = null;
-    setStatus("idle");
-    setTarget(null);
-    setEntries([]);
-    setStatusMessage("");
-    setAuthPrompt(null);
-    xtermRef.current?.clear();
-  }, [send]);
-
-  // Resolve the host-key modal: remember an accepted key, then tell the server.
-  const decideHostKey = useCallback(
-    (accept: boolean) => {
-      if (accept && authPrompt?.kind === "hostkey") {
-        saveKnownHost(
-          hostKeyId(authPrompt.host, authPrompt.port),
-          authPrompt.fingerprint,
+  const closeSession = useCallback(
+    (id: number) => {
+      setIds((prev) => {
+        if (prev.length <= 1) return prev; // keep at least one tab
+        const idx = prev.indexOf(id);
+        const next = prev.filter((x) => x !== id);
+        setActiveId((cur) =>
+          cur === id ? next[Math.min(idx, next.length - 1)] : cur,
         );
-      }
-      setAuthPrompt(null);
-      send({ t: "hostkey-response", accept });
-    },
-    [authPrompt, send],
-  );
-
-  // Submit answers to a keyboard-interactive challenge.
-  const submitKbd = useCallback(
-    (responses: string[]) => {
-      setAuthPrompt(null);
-      send({ t: "kbd-response", responses });
-    },
-    [send],
-  );
-
-  // Close the socket if the component unmounts mid-session.
-  useEffect(() => () => wsRef.current?.close(), []);
-
-  // Refit the terminal whenever we switch back to its tab (it may have been
-  // display:none, which zeroes xterm's measured size).
-  useEffect(() => {
-    if (tab === "terminal" && status === "connected") {
-      const size = xtermRef.current?.fit();
-      if (size) send({ t: "resize", cols: size.cols, rows: size.rows });
-    }
-  }, [tab, status, send]);
-
-  const connected = status === "connected";
-  const connecting = status === "connecting";
-  const showOverlay = !connected;
-
-  // --- File browser actions (delegated from FileBrowser) ---
-  const onDelete = (entry: FileEntry) => {
-    if (!window.confirm(`Delete "${entry.name}"?`)) return;
-    send({
-      t: "sftp-rm",
-      path: joinPath(cwd, entry.name),
-      dir: entry.type === "dir",
-    });
-  };
-  const onUpload = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const bytes = new Uint8Array(reader.result as ArrayBuffer);
-      send({
-        t: "sftp-write",
-        path: joinPath(cwd, file.name),
-        dataB64: bytesToBase64(bytes),
+        return next;
       });
-    };
-    reader.readAsArrayBuffer(file);
-  };
-  const onMkdir = () => {
-    const name = window.prompt("New directory name:");
-    if (name) send({ t: "sftp-mkdir", path: joinPath(cwd, name) });
-  };
+      setMetas((prev) => {
+        const rest = { ...prev };
+        delete rest[id];
+        return rest;
+      });
+    },
+    [],
+  );
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-term-border bg-term-card">
-      {/* Session header */}
-      <div className="flex items-center gap-3 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
-        <span
-          className={cn(
-            "h-2.5 w-2.5 rounded-full",
-            connected
-              ? "bg-term-green"
-              : status === "error"
-                ? "bg-term-red"
-                : status === "connecting"
-                  ? "bg-term-yellow"
-                  : "bg-term-fainter",
-          )}
-          aria-hidden
-        />
-        <span className="truncate text-xs text-term-dim">
-          {target ? `${target.user}@${target.host}` : "Not connected"}
-        </span>
-
-        {connected && (
-          <div className="ml-auto flex items-center gap-1">
-            {(["terminal", "files"] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setTab(t)}
-                className={cn(
-                  "rounded px-3 py-1 text-xs capitalize transition-colors",
-                  tab === t
-                    ? "bg-term-accent/15 text-term-accent"
-                    : "text-term-muted hover:text-term-text",
-                )}
-              >
-                {t}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={disconnect}
-              className="ml-2 rounded border border-term-red/40 px-3 py-1 text-xs text-term-red hover:bg-term-red/10"
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      {/* Session tab strip */}
+      <div className="flex items-center gap-1.5 overflow-x-auto">
+        {ids.map((id) => {
+          const meta = metas[id];
+          const isActive = id === activeId;
+          return (
+            <div
+              key={id}
+              className={cn(
+                "group flex flex-none items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors",
+                isActive
+                  ? "border-term-accent/40 bg-term-accent/10 text-term-text"
+                  : "border-term-border bg-term-panel text-term-muted hover:text-term-text",
+              )}
             >
-              Disconnect
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Body */}
-      <div className="relative min-h-0 flex-1">
-        {/* Terminal — always mounted AND sized so xterm opens with real
-            dimensions (the connect overlay simply covers it while idle). Only
-            truly hidden when the Files tab is active. */}
-        <div
-          className={cn(
-            "absolute inset-0 bg-term-bg p-2",
-            connected && tab === "files" ? "hidden" : "block",
-          )}
-        >
-          <XtermView
-            ref={xtermRef}
-            onData={(data) => connected && send({ t: "data", data })}
-            onResize={(cols, rows) =>
-              connected && send({ t: "resize", cols, rows })
-            }
-          />
-        </div>
-
-        {/* File browser */}
-        {connected && tab === "files" && (
-          <div className="absolute inset-0">
-            <FileBrowser
-              cwd={cwd}
-              entries={entries}
-              loading={filesLoading}
-              onNavigate={listDir}
-              onRefresh={() => listDir(cwd)}
-              onDownload={(path) => send({ t: "sftp-read", path })}
-              onDelete={onDelete}
-              onUpload={onUpload}
-              onMkdir={onMkdir}
-            />
-          </div>
-        )}
-
-        {/* Connection overlay */}
-        {showOverlay && (
-          <div className="absolute inset-0 overflow-auto bg-term-card p-5 sm:p-8">
-            <div className="mx-auto max-w-md">
-              <h2 className="text-lg font-semibold text-term-text">
-                New SSH connection
-              </h2>
-              <p className="mt-1 mb-5 text-xs leading-relaxed text-term-muted">
-                Credentials are relayed straight to the target host to open the
-                session and are never stored or logged by this site. Only
-                connect to hosts you trust.
-              </p>
-              <ConnectForm onConnect={connect} connecting={connecting} />
-              {statusMessage && (
-                <p className="mt-4 rounded-md border border-term-red/40 bg-term-red/10 px-3 py-2 text-xs text-term-red">
-                  {statusMessage}
-                </p>
+              <button
+                type="button"
+                onClick={() => setActiveId(id)}
+                className="flex items-center gap-2"
+              >
+                <StatusDot status={meta?.status ?? "idle"} />
+                <span className="max-w-[12rem] truncate">
+                  {meta?.label ?? "New session"}
+                </span>
+              </button>
+              {ids.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => closeSession(id)}
+                  className="text-term-faint hover:text-term-red"
+                  title="Close session"
+                  aria-label="Close session"
+                >
+                  ✕
+                </button>
               )}
             </div>
-          </div>
-        )}
+          );
+        })}
+        <button
+          type="button"
+          onClick={addSession}
+          className="flex-none rounded-lg border border-term-border bg-term-panel px-3 py-1.5 text-xs text-term-muted hover:text-term-accent"
+          title="New session"
+          aria-label="New session"
+        >
+          ＋
+        </button>
+      </div>
 
-        {/* Handshake prompts (host key / keyboard-interactive) sit on top. */}
-        {authPrompt && (
-          <AuthPromptModal
-            prompt={authPrompt}
-            onHostKeyDecision={decideHostKey}
-            onKbdSubmit={submitKbd}
-          />
-        )}
+      {/* Session panels — all mounted; only the active one is visible. */}
+      <div className="relative min-h-0 flex-1">
+        {ids.map((id) => (
+          <div
+            key={id}
+            className={cn(
+              "absolute inset-0",
+              id === activeId ? "block" : "hidden",
+            )}
+          >
+            <SshSession
+              active={id === activeId}
+              onMeta={(m) => updateMeta(id, m)}
+            />
+          </div>
+        ))}
       </div>
     </div>
   );

@@ -1,0 +1,588 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  compareHostKey,
+  encodeMessage,
+  hostKeyId,
+  joinPath,
+  parseMessage,
+  type FileEntry,
+  type ServerMessage,
+} from "@/lib/sshProtocol";
+import { SSH_WS_PATH } from "@/config/siteConfig";
+import { cn } from "@/lib/utils";
+import { XtermView, type XtermHandle } from "./XtermView";
+import { ConnectForm, type ConnectDetails } from "./ConnectForm";
+import { FileBrowser } from "./FileBrowser";
+import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
+
+/** Lifecycle phase of a single SSH session. */
+export type SessionStatus =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "dropped"
+  | "error";
+
+/** What a session reports up to the tab manager for its tab chip. */
+export interface SessionMeta {
+  label: string;
+  status: SessionStatus;
+}
+
+type Tab = "terminal" | "files";
+
+/** How many times to auto-reconnect a dropped session before giving up. */
+const MAX_RECONNECT = 3;
+
+/** localStorage key holding the trusted host-key fingerprints (TOFU store). */
+const KNOWN_HOSTS_KEY = "sshweb.knownHosts";
+
+/** Read the `host:port → fingerprint` map of trusted host keys. */
+function loadKnownHosts(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(KNOWN_HOSTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Remember (or update) the trusted fingerprint for a host. */
+function saveKnownHost(id: string, fingerprint: string) {
+  try {
+    const hosts = loadKnownHosts();
+    hosts[id] = fingerprint;
+    localStorage.setItem(KNOWN_HOSTS_KEY, JSON.stringify(hosts));
+  } catch {
+    /* storage unavailable (private mode) — verification just won't persist */
+  }
+}
+
+/** Decode a base64 string to raw bytes for writing into xterm. */
+function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
+  const bin = atob(b64);
+  const buffer = new ArrayBuffer(bin.length);
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+/** Encode raw bytes to base64 in chunks (avoids call-stack limits on big files). */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/** Kick off a browser download of some bytes. */
+function triggerDownload(name: string, bytes: Uint8Array<ArrayBuffer>) {
+  const url = URL.createObjectURL(new Blob([bytes]));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * A single SSH session: owns one WebSocket to the bridge and the three pieces of
+ * UI (connect form, xterm terminal, SFTP browser). Multiple of these run side by
+ * side under the `SshClient` tab manager, so the terminal stays mounted even when
+ * this session isn't the active tab (`active` toggles visibility, not mounting).
+ *
+ * If a live connection drops unexpectedly it auto-reconnects (a few times, with
+ * backoff) using the credentials from the last connect, then offers a manual
+ * "Reconnect" button.
+ */
+export function SshSession({
+  active,
+  onMeta,
+}: {
+  active: boolean;
+  onMeta: (meta: SessionMeta) => void;
+}) {
+  const wsRef = useRef<WebSocket | null>(null);
+  const xtermRef = useRef<XtermHandle>(null);
+
+  const [status, setStatus] = useState<SessionStatus>("idle");
+  const [statusMessage, setStatusMessage] = useState("");
+  const [target, setTarget] = useState<{ user: string; host: string } | null>(
+    null,
+  );
+  const [tab, setTab] = useState<Tab>("terminal");
+
+  const [cwd, setCwd] = useState("~");
+  const [entries, setEntries] = useState<FileEntry[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [authPrompt, setAuthPrompt] = useState<AuthPromptState | null>(null);
+  // Whether we hold credentials from a prior connect (drives the Reconnect UI);
+  // mirrors lastDetailsRef but is render-safe.
+  const [hasLast, setHasLast] = useState(false);
+
+  // Reconnection bookkeeping (refs so the ws close handler sees fresh values).
+  const lastDetailsRef = useRef<ConnectDetails | null>(null);
+  const userClosedRef = useRef(false);
+  const wasConnectedRef = useRef(false);
+  const reconnectingRef = useRef(false);
+  const attemptRef = useRef(0);
+  const reconnectTimerRef = useRef<number | null>(null);
+
+  const send = useCallback((msg: Parameters<typeof encodeMessage>[0]) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(encodeMessage(msg));
+  }, []);
+
+  const listDir = useCallback(
+    (path: string) => {
+      setFilesLoading(true);
+      send({ t: "sftp-list", path });
+    },
+    [send],
+  );
+
+  const handleServerMessage = useCallback(
+    (msg: ServerMessage) => {
+      switch (msg.t) {
+        case "status":
+          if (msg.state === "connected") {
+            wasConnectedRef.current = true;
+            reconnectingRef.current = false;
+            attemptRef.current = 0;
+            setStatus("connected");
+            setStatusMessage("");
+            xtermRef.current?.writeln(
+              "\x1b[32m✓ Connected.\x1b[0m Type as you would in any shell.",
+            );
+            listDir(".");
+          } else if (msg.state === "closed") {
+            setStatusMessage(msg.message || "Connection closed.");
+          } else if (msg.state === "error") {
+            setStatusMessage(msg.message || "Connection error.");
+          }
+          break;
+
+        case "data":
+          xtermRef.current?.write(base64ToBytes(msg.data));
+          break;
+
+        case "hostkey": {
+          const id = hostKeyId(msg.host, msg.port);
+          const verdict = compareHostKey(loadKnownHosts()[id], msg.fingerprint);
+          if (verdict === "match") {
+            send({ t: "hostkey-response", accept: true });
+          } else {
+            setAuthPrompt({
+              kind: "hostkey",
+              host: msg.host,
+              port: msg.port,
+              fingerprint: msg.fingerprint,
+              keyType: msg.keyType,
+              verdict,
+            });
+          }
+          break;
+        }
+
+        case "kbd-interactive":
+          setAuthPrompt({
+            kind: "kbd",
+            name: msg.name,
+            instructions: msg.instructions,
+            prompts: msg.prompts,
+          });
+          break;
+
+        case "sftp-list":
+          setCwd(msg.path);
+          setEntries(msg.entries);
+          setFilesLoading(false);
+          break;
+
+        case "sftp-read":
+          triggerDownload(msg.name, base64ToBytes(msg.dataB64));
+          break;
+
+        case "sftp-ok":
+          listDir(cwd);
+          break;
+
+        case "error":
+          if (msg.scope === "sftp") {
+            setFilesLoading(false);
+            setStatusMessage(`SFTP: ${msg.message}`);
+          } else {
+            xtermRef.current?.writeln(`\x1b[31m✗ ${msg.message}\x1b[0m`);
+            setStatusMessage(msg.message);
+          }
+          break;
+      }
+    },
+    [cwd, listDir, send],
+  );
+
+  // openSocket and scheduleReconnect reference each other; a ref breaks the
+  // cycle (openSocket calls scheduleReconnect directly; scheduleReconnect calls
+  // the latest openSocket via the ref).
+  const openSocketRef = useRef<((details: ConnectDetails) => void) | null>(null);
+
+  const scheduleReconnect = useCallback(() => {
+    const next = attemptRef.current + 1;
+    if (next > MAX_RECONNECT || !lastDetailsRef.current) {
+      reconnectingRef.current = false;
+      setStatus("dropped");
+      setStatusMessage("Connection lost.");
+      return;
+    }
+    attemptRef.current = next;
+    reconnectingRef.current = true;
+    setStatus("reconnecting");
+    setStatusMessage(`Reconnecting… (attempt ${next}/${MAX_RECONNECT})`);
+    const delay = Math.min(1000 * 2 ** (next - 1), 8000);
+    reconnectTimerRef.current = window.setTimeout(() => {
+      if (lastDetailsRef.current) openSocketRef.current?.(lastDetailsRef.current);
+    }, delay);
+  }, []);
+
+  // Open a socket and start the handshake. Used for both the first connect and
+  // each auto-reconnect attempt; `connect` (below) wraps it with fresh state.
+  const openSocket = useCallback(
+    (details: ConnectDetails) => {
+      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(
+        `${scheme}://${window.location.host}${SSH_WS_PATH}`,
+      );
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        const size = xtermRef.current?.fit() ?? { cols: 80, rows: 24 };
+        send({
+          t: "connect",
+          host: details.host,
+          port: details.port,
+          username: details.username,
+          password: details.password,
+          privateKey: details.privateKey,
+          passphrase: details.passphrase,
+          cols: size.cols,
+          rows: size.rows,
+        });
+      };
+      ws.onmessage = (event) => {
+        const msg = parseMessage<ServerMessage>(String(event.data));
+        if (msg) handleServerMessage(msg);
+      };
+      ws.onclose = () => {
+        wsRef.current = null;
+        if (userClosedRef.current) return; // disconnect() owns the state
+        if (wasConnectedRef.current || reconnectingRef.current) {
+          // A live session dropped — try to bring it back.
+          wasConnectedRef.current = false;
+          scheduleReconnect();
+        } else {
+          // Never reached "connected" → auth/host failure; don't loop.
+          setStatus("error");
+        }
+      };
+      ws.onerror = () => {
+        setStatusMessage("WebSocket error — is the SSH bridge running?");
+      };
+    },
+    [handleServerMessage, send, scheduleReconnect],
+  );
+
+  // Keep the ref pointing at the latest openSocket for scheduleReconnect.
+  useEffect(() => {
+    openSocketRef.current = openSocket;
+  }, [openSocket]);
+
+  // Fresh, user-initiated connect: reset all reconnection state.
+  const connect = useCallback(
+    (details: ConnectDetails) => {
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      lastDetailsRef.current = details;
+      setHasLast(true);
+      userClosedRef.current = false;
+      wasConnectedRef.current = false;
+      reconnectingRef.current = false;
+      attemptRef.current = 0;
+      setStatus("connecting");
+      setStatusMessage("");
+      setAuthPrompt(null);
+      setTarget({ user: details.username, host: details.host });
+      openSocket(details);
+    },
+    [openSocket],
+  );
+
+  const reconnectNow = useCallback(() => {
+    if (!lastDetailsRef.current) return;
+    attemptRef.current = 0;
+    connect(lastDetailsRef.current);
+  }, [connect]);
+
+  const disconnect = useCallback(() => {
+    userClosedRef.current = true;
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    reconnectingRef.current = false;
+    send({ t: "disconnect" });
+    wsRef.current?.close();
+    wsRef.current = null;
+    setStatus("idle");
+    setTarget(null);
+    setEntries([]);
+    setStatusMessage("");
+    setAuthPrompt(null);
+    setHasLast(false);
+    xtermRef.current?.clear();
+  }, [send]);
+
+  const decideHostKey = useCallback(
+    (accept: boolean) => {
+      if (accept && authPrompt?.kind === "hostkey") {
+        saveKnownHost(
+          hostKeyId(authPrompt.host, authPrompt.port),
+          authPrompt.fingerprint,
+        );
+      }
+      setAuthPrompt(null);
+      send({ t: "hostkey-response", accept });
+    },
+    [authPrompt, send],
+  );
+
+  const submitKbd = useCallback(
+    (responses: string[]) => {
+      setAuthPrompt(null);
+      send({ t: "kbd-response", responses });
+    },
+    [send],
+  );
+
+  // Tear down on unmount (session closed): stop reconnecting, drop the socket.
+  useEffect(
+    () => () => {
+      userClosedRef.current = true;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      wsRef.current?.close();
+    },
+    [],
+  );
+
+  const connected = status === "connected";
+
+  // Report label + status to the tab manager whenever they change.
+  useEffect(() => {
+    onMeta({
+      label: target ? `${target.user}@${target.host}` : "New session",
+      status,
+    });
+  }, [target, status, onMeta]);
+
+  // Refit the terminal when this session becomes active or its tab shows it
+  // (a hidden xterm measures 0, so it needs a refit + resize on reveal).
+  useEffect(() => {
+    if (active && tab === "terminal" && connected) {
+      const size = xtermRef.current?.fit();
+      if (size) send({ t: "resize", cols: size.cols, rows: size.rows });
+    }
+  }, [active, tab, connected, send]);
+
+  const connecting = status === "connecting" || status === "reconnecting";
+  const showOverlay = !connected;
+  const canReconnect = (status === "dropped" || status === "error") && hasLast;
+
+  // --- File browser actions ---
+  const onDelete = (entry: FileEntry) => {
+    if (!window.confirm(`Delete "${entry.name}"?`)) return;
+    send({
+      t: "sftp-rm",
+      path: joinPath(cwd, entry.name),
+      dir: entry.type === "dir",
+    });
+  };
+  const onUpload = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const bytes = new Uint8Array(reader.result as ArrayBuffer);
+      send({
+        t: "sftp-write",
+        path: joinPath(cwd, file.name),
+        dataB64: bytesToBase64(bytes),
+      });
+    };
+    reader.readAsArrayBuffer(file);
+  };
+  const onMkdir = () => {
+    const name = window.prompt("New directory name:");
+    if (name) send({ t: "sftp-mkdir", path: joinPath(cwd, name) });
+  };
+
+  return (
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-term-border bg-term-card">
+      {/* Session header */}
+      <div className="flex items-center gap-3 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
+        <StatusDot status={status} />
+        <span className="truncate text-xs text-term-dim">
+          {target ? `${target.user}@${target.host}` : "Not connected"}
+        </span>
+
+        {connected && (
+          <div className="ml-auto flex items-center gap-1">
+            {(["terminal", "files"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTab(t)}
+                className={cn(
+                  "rounded px-3 py-1 text-xs capitalize transition-colors",
+                  tab === t
+                    ? "bg-term-accent/15 text-term-accent"
+                    : "text-term-muted hover:text-term-text",
+                )}
+              >
+                {t}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={disconnect}
+              className="ml-2 rounded border border-term-red/40 px-3 py-1 text-xs text-term-red hover:bg-term-red/10"
+            >
+              Disconnect
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Body */}
+      <div className="relative min-h-0 flex-1">
+        <div
+          className={cn(
+            "absolute inset-0 bg-term-bg p-2",
+            connected && tab === "files" ? "hidden" : "block",
+          )}
+        >
+          <XtermView
+            ref={xtermRef}
+            onData={(data) => connected && send({ t: "data", data })}
+            onResize={(cols, rows) =>
+              connected && send({ t: "resize", cols, rows })
+            }
+          />
+        </div>
+
+        {connected && tab === "files" && (
+          <div className="absolute inset-0">
+            <FileBrowser
+              cwd={cwd}
+              entries={entries}
+              loading={filesLoading}
+              onNavigate={listDir}
+              onRefresh={() => listDir(cwd)}
+              onDownload={(path) => send({ t: "sftp-read", path })}
+              onDelete={onDelete}
+              onUpload={onUpload}
+              onMkdir={onMkdir}
+            />
+          </div>
+        )}
+
+        {showOverlay && (
+          <div className="absolute inset-0 overflow-auto bg-term-card p-5 sm:p-8">
+            <div className="mx-auto max-w-md">
+              {canReconnect ? (
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <h2 className="text-lg font-semibold text-term-text">
+                      {status === "dropped"
+                        ? "Connection lost"
+                        : "Connection failed"}
+                    </h2>
+                    <p className="mt-1 text-xs leading-relaxed text-term-muted">
+                      {statusMessage ||
+                        "The session ended. Reconnect to the same host, or start a new connection."}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={reconnectNow}
+                      className="rounded-md border border-term-accent/40 bg-term-accent/15 px-4 py-2 text-sm font-medium text-term-accent hover:bg-term-accent/25"
+                    >
+                      Reconnect →
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        lastDetailsRef.current = null;
+                        setHasLast(false);
+                        setStatus("idle");
+                        setStatusMessage("");
+                      }}
+                      className="rounded-md border border-term-border px-4 py-2 text-sm text-term-muted hover:text-term-text"
+                    >
+                      New connection
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <h2 className="text-lg font-semibold text-term-text">
+                    New SSH connection
+                  </h2>
+                  <p className="mt-1 mb-5 text-xs leading-relaxed text-term-muted">
+                    Credentials are relayed straight to the target host to open
+                    the session and are never stored or logged by this site. Only
+                    connect to hosts you trust.
+                  </p>
+                  <ConnectForm onConnect={connect} connecting={connecting} />
+                  {statusMessage && (
+                    <p className="mt-4 rounded-md border border-term-red/40 bg-term-red/10 px-3 py-2 text-xs text-term-red">
+                      {statusMessage}
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {authPrompt && (
+          <AuthPromptModal
+            prompt={authPrompt}
+            onHostKeyDecision={decideHostKey}
+            onKbdSubmit={submitKbd}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The coloured status dot shared by the header and the manager's tabs. */
+export function StatusDot({ status }: { status: SessionStatus }) {
+  return (
+    <span
+      className={cn(
+        "h-2.5 w-2.5 flex-none rounded-full",
+        status === "connected"
+          ? "bg-term-green"
+          : status === "error" || status === "dropped"
+            ? "bg-term-red"
+            : status === "connecting" || status === "reconnecting"
+              ? "bg-term-yellow"
+              : "bg-term-fainter",
+      )}
+      aria-hidden
+    />
+  );
+}

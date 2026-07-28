@@ -21,10 +21,12 @@ that actually talks SSH is [`server.mjs`](../server.mjs).
 
 | Component     | Purpose                                                                 |
 | ------------- | ----------------------------------------------------------------------- |
-| `SshClient`   | Orchestrator — owns the single WebSocket and coordinates the pieces     |
+| `SshClient`   | Multi-session tab manager — mounts one `SshSession` per tab             |
+| `SshSession`  | One connection: owns a WebSocket + terminal + files, auto-reconnects    |
 | `ConnectForm` | Host/port/user + password-or-key login (validated via `sshProtocol`)    |
 | `XtermView`   | xterm.js wrapper; xterm is dynamically imported (never during SSR)      |
 | `FileBrowser` | SFTP listing with navigate / upload / download / delete / mkdir         |
+| `AuthPrompt`  | Modal for host-key (TOFU) confirmation and keyboard-interactive prompts |
 
 ## Conventions
 

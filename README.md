@@ -11,6 +11,9 @@ all from a web page. Built with **Next.js** and a terminal-styled design system.
 ## Features
 
 - **Interactive terminal** (xterm.js) attached to a real remote shell
+- **Multiple concurrent sessions** as tabs, each an independent connection
+- **Auto-reconnect** — a dropped session retries with backoff, then offers a
+  manual "Reconnect" button
 - **Password or private-key** authentication (paste a key or load from file,
   with optional passphrase)
 - **SFTP file browser** — navigate, upload, download, delete, create folders
