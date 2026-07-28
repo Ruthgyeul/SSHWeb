@@ -53,6 +53,12 @@ export type ClientMessage =
   // Raw keystrokes typed into the terminal, sent as a UTF-8 string.
   | { t: "data"; data: string }
   | { t: "resize"; cols: number; rows: number }
+  // User's decision on a presented host key (TOFU): accept and continue, or
+  // reject and abort the handshake.
+  | { t: "hostkey-response"; accept: boolean }
+  // Answers to a keyboard-interactive challenge (e.g. an OTP / 2FA code), in
+  // the same order as the prompts that were presented.
+  | { t: "kbd-response"; responses: string[] }
   | { t: "sftp-list"; path: string }
   | { t: "sftp-read"; path: string }
   | { t: "sftp-write"; path: string; dataB64: string }
@@ -70,12 +76,31 @@ export type ConnectionState =
   | "closed"
   | "error";
 
+/** A single keyboard-interactive question (e.g. "Verification code:"). */
+export interface KbdPrompt {
+  prompt: string;
+  /** When false the answer should be masked (like a password field). */
+  echo: boolean;
+}
+
 export type ServerMessage =
   | { t: "status"; state: ConnectionState; message?: string }
   // Terminal output. `data` is base64-encoded raw bytes so multi-byte UTF-8
   // sequences that straddle a chunk boundary survive the trip; the client
   // decodes to a Uint8Array and lets xterm's stream decoder handle it.
   | { t: "data"; data: string }
+  // The target host's public-key fingerprint, presented for TOFU verification
+  // before the session opens. The client compares it against its known-hosts
+  // store and either auto-accepts, prompts, or warns on a changed key.
+  | { t: "hostkey"; host: string; port: number; fingerprint: string; keyType: string }
+  // A keyboard-interactive challenge (used for OTP / 2FA and some password
+  // flows). The client collects answers and replies with `kbd-response`.
+  | {
+      t: "kbd-interactive";
+      name: string;
+      instructions: string;
+      prompts: KbdPrompt[];
+    }
   | { t: "sftp-list"; path: string; entries: FileEntry[] }
   | { t: "sftp-read"; path: string; name: string; dataB64: string }
   | { t: "sftp-ok"; op: string; path: string }
@@ -171,6 +196,30 @@ export function isHostAllowed(host: string, allowlist: string[]): boolean {
     }
     return h === pattern;
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Host key (TOFU) helpers                                             */
+/* ------------------------------------------------------------------ */
+
+/** Stable key used to store/look up a host's fingerprint (`host:port`). */
+export function hostKeyId(host: string, port: number | string): string {
+  return `${host.trim().toLowerCase()}:${port}`;
+}
+
+/**
+ * Trust-on-first-use verdict for a presented fingerprint against what (if
+ * anything) we have stored for that host:
+ *   - `new`     — never seen this host; ask the user to confirm.
+ *   - `match`   — matches the stored key; safe to continue.
+ *   - `changed` — differs from the stored key; warn loudly (possible MITM).
+ */
+export function compareHostKey(
+  stored: string | undefined,
+  fingerprint: string,
+): "new" | "match" | "changed" {
+  if (!stored) return "new";
+  return stored === fingerprint ? "match" : "changed";
 }
 
 /** Parse a comma/space separated allowlist string into a clean array. */

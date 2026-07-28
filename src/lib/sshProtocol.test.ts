@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  compareHostKey,
   encodeMessage,
   formatMode,
   formatSize,
+  hostKeyId,
   isHostAllowed,
   joinPath,
   parentPath,
@@ -102,6 +104,19 @@ describe("isHostAllowed / parseAllowlist", () => {
     ]);
     expect(parseAllowlist("")).toEqual([]);
     expect(parseAllowlist(undefined)).toEqual([]);
+  });
+});
+
+describe("hostKeyId / compareHostKey", () => {
+  it("builds a case-insensitive host:port id", () => {
+    expect(hostKeyId("Example.COM", 22)).toBe("example.com:22");
+    expect(hostKeyId(" host ", "2222")).toBe("host:2222");
+  });
+
+  it("classifies a fingerprint as new / match / changed", () => {
+    expect(compareHostKey(undefined, "SHA256:aaa")).toBe("new");
+    expect(compareHostKey("SHA256:aaa", "SHA256:aaa")).toBe("match");
+    expect(compareHostKey("SHA256:aaa", "SHA256:bbb")).toBe("changed");
   });
 });
 
