@@ -7,7 +7,7 @@ Scoped guidance for the application source. See
 src/
 ├── app/                 # Next.js App Router: routes, layout, metadata routes
 │   ├── layout.tsx       # root layout — metadata + JSON-LD (server component)
-│   ├── page.tsx         # demo landing page (replace with your own)
+│   ├── page.tsx         # ★ home = the SSH client (renders <SshClient/>)
 │   ├── globals?          -> styles live in src/styles/globals.css
 │   ├── error.tsx        # route error boundary (500)  ["use client"]
 │   ├── global-error.tsx # root error boundary          ["use client"]
@@ -19,11 +19,13 @@ src/
 │   ├── opengraph-image.tsx  # /opengraph-image (dynamic)
 │   └── twitter-image.tsx    # /twitter-image (dynamic)
 ├── components/          # reusable UI (see docs/claude-components.md)
+│   └── ssh/             # web SSH client UI (client components)
 ├── config/
 │   └── siteConfig.ts    # ★ all env-driven site identity — single source
 ├── lib/
 │   ├── theme.ts         # palette as TS tokens (OG image only)
 │   ├── og.tsx           # shared OG/Twitter image renderer
+│   ├── sshProtocol.ts   # web-SSH wire types + pure helpers (+ .test.ts)
 │   └── utils.ts         # cn() classname helper (+ utils.test.ts)
 └── styles/
     └── globals.css      # Tailwind import + @theme palette + terminal utilities

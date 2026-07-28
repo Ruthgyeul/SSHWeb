@@ -1,6 +1,6 @@
 # docs/
 
-AI and contributor guidance for **TerminalWebTemplate**. **Every AI agent and
+AI and contributor guidance for **SSHWeb**. **Every AI agent and
 contributor must read these in full before starting any work** — they are the
 source of truth for the project's architecture and conventions. The root
 [`CLAUDE.md`](../CLAUDE.md) imports them so Claude Code loads them automatically;

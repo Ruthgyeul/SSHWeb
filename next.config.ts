@@ -28,6 +28,9 @@ const csp = [
   "font-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  // 'self' also authorizes same-origin WebSockets (ws:// wss://), which the web
+  // SSH client at /ssh opens to the bridge in server.mjs. No external origin is
+  // permitted, so a page can only reach this site's own SSH relay.
   "connect-src 'self'",
   "manifest-src 'self'",
   "upgrade-insecure-requests",

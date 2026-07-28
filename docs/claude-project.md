@@ -5,13 +5,14 @@ automatically via the root `CLAUDE.md`.
 
 ## What this is
 
-**TerminalWebTemplate** — a reusable, terminal-styled **Next.js (App Router)**
-starter. Fork it to spin up a new web project that already has SEO, error
-pages, PWA metadata, a design system, and env-driven configuration wired up.
+**SSHWeb** — a browser-based SSH client (inspired by ssheasy.com) built on
+**Next.js (App Router)**. The home page is the tool itself: an interactive
+terminal to any SSH server plus an SFTP file browser, relayed through a
+server-side WebSocket ↔ SSH bridge.
 
-It is a *template*: every piece of identity is a placeholder (`example.com`,
-"Example Author"). Real projects override those via environment variables — you
-should never bake a real name, domain, or secret into the template itself.
+Identity (name, domain, prompt) is env-driven via `src/config/siteConfig.ts`
+with SSHWeb defaults — override it in `.env.local` for your deployment. Never
+bake a real domain, personal name, or secret into committed files.
 
 ## Tech stack
 
@@ -23,9 +24,10 @@ should never bake a real name, domain, or secret into the template itself.
 ## Commands
 
 ```bash
-npm run dev        # dev server (http://localhost:3000)
+npm run dev        # dev server + SSH bridge via server.mjs (http://localhost:3000)
+npm run dev:next   # plain `next dev`, no SSH bridge
 npm run build      # production build (fails on type errors)
-npm run start      # serve the production build
+npm run start      # serve the production build + SSH bridge (server.mjs)
 npm run lint       # ESLint (eslint-config-next)
 npm run typecheck  # tsc --noEmit
 npm run test       # Vitest (run once)
@@ -44,7 +46,7 @@ CI (`.github/workflows/ci.yml`) runs all of these plus a full build.
 metadata, `robots.ts`, `sitemap.ts`, `manifest.ts`, and the OG image all import
 from it.
 
-- To rebrand a fork, edit `.env.local` (copy from `.env.example`) — **not** the
+- To rebrand this deployment, edit `.env.local` (copy from `.env.example`) — **not** the
   source files.
 - When you add a new configurable value, add it to **both** `.env.example`
   (documented, with an `example` default) and `siteConfig.ts`.
@@ -93,6 +95,29 @@ global CSS may be broken.
 When you add a third-party origin (analytics, external API, font CDN), **widen
 the relevant CSP directive** there rather than removing the policy.
 
+### Web SSH client — the one stateful surface
+
+The home route (`/`) is a browser SSH client (interactive terminal + SFTP),
+modeled on ssheasy.com. A browser can't open a raw SSH socket, so this needs a
+**custom Node server**, `server.mjs`, which runs Next.js *and* bridges a
+WebSocket to a real `ssh2` connection. Key facts an agent must know:
+
+- **`npm run dev` / `npm run start` run `server.mjs`**, not `next dev` /
+  `next start`. `npm run build` is still `next build`. `server.mjs` is plain ESM
+  and lives **outside** the TypeScript/Next build (it isn't in `tsconfig`).
+- **The wire protocol has two synchronized homes**, like the palette does:
+  typed messages + pure helpers in `src/lib/sshProtocol.ts` (imported by the
+  client, unit-tested in `sshProtocol.test.ts`), and the matching `t` string
+  constants hand-mirrored in `server.mjs`. Change one, change the other.
+- **UI is all client components** under `src/components/ssh/` (xterm.js is
+  dynamically imported so it never runs during SSR).
+- **Security posture:** credentials are relayed to the target host and never
+  stored or logged; the remote host enforces its own auth/permissions;
+  `SSH_ALLOWED_HOSTS`, `SSH_MAX_SESSIONS` and `SSH_MAX_DOWNLOAD_BYTES` (server
+  env, read in `server.mjs`) gate reachable hosts, concurrency and download
+  size. The CSP's `connect-src 'self'` already authorizes the same-origin
+  WebSocket — don't widen it for this feature.
+
 ## Assets
 
 - `public/favicon.svg` — the scalable source logo (a `>_` terminal prompt).
@@ -101,10 +126,13 @@ the relevant CSP directive** there rather than removing the policy.
   not committed; a simple SVG rasterizer or design tool is fine) so the raster
   icons stay in sync.
 
-## When extending this template
+## When extending SSHWeb
 
 - New page → add a route folder under `src/app`, add it to `sitemap.ts`, give
   it a `metadata` export (title/description).
 - New shared UI → put it in `src/components` (see [`claude-components.md`](claude-components.md)).
 - New config → `.env.example` + `siteConfig.ts`, then consume from `siteConfig`.
-- Keep the placeholder discipline: no real personal data in committed files.
+- New SSH/SFTP capability → extend the protocol in `src/lib/sshProtocol.ts`
+  **and** its handler in `server.mjs` (keep the two in sync), then wire the UI.
+- Keep the discipline: no real domains, personal data, or secrets in committed
+  files.

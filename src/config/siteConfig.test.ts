@@ -15,12 +15,12 @@ afterEach(() => {
 });
 
 describe("env fallbacks", () => {
-  it("falls back to example placeholders when a var is empty", async () => {
+  it("falls back to the SSHWeb defaults when a var is empty", async () => {
     vi.stubEnv("NEXT_PUBLIC_SITE_URL", "");
     vi.stubEnv("NEXT_PUBLIC_SITE_NAME", "");
     const cfg = await loadConfig();
-    expect(cfg.SITE_URL).toBe("https://example.com");
-    expect(cfg.SITE_NAME).toBe("Terminal Web Template");
+    expect(cfg.SITE_URL).toBe("http://localhost:3000");
+    expect(cfg.SITE_NAME).toBe("SSHWeb");
   });
 
   it("uses the env value when one is provided", async () => {

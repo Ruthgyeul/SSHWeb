@@ -38,8 +38,12 @@ are the source of truth; this list is only the map.
   hex.
 - **Server components by default.** Add `"use client"` only for browser APIs or
   interactivity.
-- **Placeholder discipline.** This is a template — never commit real domains,
-  names, emails, tokens, or secrets. Use `example.com` / "Example Author".
+- **No secrets in the repo.** Never commit real domains, personal names, emails,
+  SSH credentials, tokens, or keys. Identity has env-driven SSHWeb defaults;
+  override deployment specifics in `.env.local` (gitignored), not source.
+- **SSH bridge lives in `server.mjs`.** It runs Next.js and relays a WebSocket to
+  a real `ssh2` connection; the wire protocol is mirrored in
+  [`src/lib/sshProtocol.ts`](src/lib/sshProtocol.ts) — keep the two in sync.
 - **Gate before pushing:** `npm run lint && npm run typecheck && npm test && npm run build`.
 - **Branch, don't push to `main`.** Open a PR and land it with a **merge commit**
   (not squash) per [`docs/git-workflow.md`](docs/git-workflow.md).
