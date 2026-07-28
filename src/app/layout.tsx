@@ -44,7 +44,14 @@ export const metadata: Metadata = {
   authors: [{ name: AUTHOR_NAME, url: AUTHOR_URL }],
   creator: AUTHOR_NAME,
   publisher: AUTHOR_NAME,
-  keywords: ["Next.js", "terminal", "template", "TypeScript", "Tailwind CSS"],
+  keywords: [
+    "SSH",
+    "web SSH client",
+    "browser terminal",
+    "SFTP",
+    "xterm.js",
+    "web terminal",
+  ],
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
@@ -86,20 +93,21 @@ export const viewport: Viewport = {
 };
 
 /**
- * Schema.org WebSite markup so search/social/AI crawlers get structured
- * context. Extend or swap for @type "Person" / "Organization" as your site
- * grows — keep it in sync with siteConfig.
+ * Schema.org WebApplication markup so search/social/AI crawlers understand this
+ * is a browser-based SSH tool. Keep it in sync with siteConfig.
  */
 const websiteJsonLd = {
   "@context": "https://schema.org",
-  "@type": "WebSite",
+  "@type": "WebApplication",
   name: SITE_NAME,
   alternateName: SITE_SHORT_NAME,
   url: SITE_URL,
   description: SITE_DESCRIPTION,
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "Any (web browser)",
   inLanguage: SITE_LANG,
   author: {
-    "@type": "Person",
+    "@type": "Organization",
     name: AUTHOR_NAME,
     url: AUTHOR_URL,
   },

@@ -86,8 +86,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/):
 - Delete the branch after merge.
 - Don't merge your own PR without a passing CI run.
 
-## Placeholder discipline
+## No secrets in the repo
 
-This is a template. Never commit real domains, names, emails, tokens or other
-secrets — use neutral placeholders (`example.com`, `Example Author`). Real values
-belong in `.env.local`, which is gitignored.
+Never commit real domains, personal names, emails, SSH credentials, tokens or
+other secrets. Site identity has env-driven SSHWeb defaults; deployment-specific
+values belong in `.env.local`, which is gitignored.

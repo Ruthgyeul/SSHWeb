@@ -1,28 +1,27 @@
-# TerminalWebTemplate
+# SSHWeb
 
-A terminal-styled **Next.js** website template. Fork it to start a new web
-project that already ships with SEO, error pages, PWA metadata, a small design
-system, and environment-driven configuration.
+A **browser-based SSH client**, inspired by [ssheasy.com](https://ssheasy.com):
+open an interactive terminal to any SSH server and browse its files over SFTP —
+all from a web page. Built with **Next.js** and a terminal-styled design system.
 
 <p align="center">
-  <code>guest@example:~$</code> <em>a clean starting point for terminal-aesthetic sites</em>
+  <code>user@sshweb:~$</code> <em>SSH from your browser — terminal + files</em>
 </p>
 
 ## Features
 
-- **Web SSH client** (`/ssh`) — an in-browser terminal (xterm.js) plus an SFTP
-  file browser, backed by a WebSocket ↔ SSH bridge. See
-  [Web SSH client](#web-ssh-client) below.
-- **Next.js 16** (App Router, Turbopack) · **React 19** · **TypeScript** (strict)
-- **Tailwind CSS v4** with a terminal palette defined in one place
-- **Env-driven config** — rebrand by editing `.env.local`, not source files
-- **SEO out of the box** — metadata, JSON-LD, `robots.txt`, `sitemap.xml`
-- **Dynamic social cards** — Open Graph & Twitter images generated at request
-  time (no committed binaries)
-- **Terminal error pages** — styled 404, 500, root error boundary, and loading UI
-- **PWA ready** — web manifest, favicon, and generated app icons
-- **Hardened by default** — strict CSP and security headers in `next.config.ts`
-- **Tested & linted** — Vitest + ESLint + a CI workflow
+- **Interactive terminal** (xterm.js) attached to a real remote shell
+- **Password or private-key** authentication (paste a key or load from file,
+  with optional passphrase)
+- **SFTP file browser** — navigate, upload, download, delete, create folders
+- **WebSocket ↔ SSH bridge** — a custom Node server (`server.mjs`) relays the
+  browser to a real [`ssh2`](https://github.com/mscdex/ssh2) connection
+- **Hardened by default** — strict CSP and security headers; credentials are
+  relayed to the host and never stored or logged; optional host allowlist and
+  session limits
+- **Env-driven config** — brand/host/limits via `.env.local`, not source edits
+- **Next.js 16** (App Router) · **React 19** · **TypeScript** (strict) ·
+  **Tailwind CSS v4**, plus SEO metadata, PWA manifest and Vitest/ESLint/CI
 
 ## Quick start
 
@@ -31,12 +30,13 @@ system, and environment-driven configuration.
 nvm use
 
 npm install
-cp .env.example .env.local   # then edit values for your site
-npm run dev                  # http://localhost:3000
+cp .env.example .env.local   # optional — sensible defaults work out of the box
+npm run dev                  # http://localhost:3000  (runs the SSH bridge too)
 ```
 
-The app runs with placeholder identity (`example.com`) even without a `.env`
-file, so you can see it immediately and configure as you go.
+Open <http://localhost:3000>, enter a host / username / credentials, and connect.
+`npm run dev` and `npm run start` run the custom `server.mjs` (needed for the SSH
+WebSocket); see [How it works](#how-it-works) below.
 
 ## Configuration
 
@@ -55,10 +55,11 @@ and is read from `NEXT_PUBLIC_*` environment variables. Copy `.env.example` to
 | `NEXT_PUBLIC_TERMINAL_USER`    | Shell prompt user (cosmetic)                    |
 | `NEXT_PUBLIC_TERMINAL_HOST`    | Shell prompt host (cosmetic)                    |
 | `NEXT_PUBLIC_ALLOW_INDEXING`   | `false` to block crawlers on staging            |
-| `NEXT_PUBLIC_GITHUB_URL`       | Optional GitHub link                            |
-| `NEXT_PUBLIC_CONTACT_EMAIL`    | Optional contact email                          |
 
-See [`.env.example`](.env.example) for the full, commented list.
+The SSH bridge has its own (server-only) settings — `SSH_ALLOWED_HOSTS`,
+`SSH_MAX_SESSIONS`, `SSH_MAX_DOWNLOAD_BYTES`, `NEXT_PUBLIC_SSH_WS_PATH` — covered
+under [Security](#security). See [`.env.example`](.env.example) for the full,
+commented list.
 
 ## Scripts
 
@@ -77,11 +78,11 @@ See [`.env.example`](.env.example) for the full, commented list.
 ```
 server.mjs       # custom Next server + WebSocket ↔ SSH/SFTP bridge (ssh2)
 src/
-├── app/         # routes (incl. /ssh), layout, metadata routes
-├── components/  # TerminalBar, TerminalWindow, Prompt, ErrorScreen …
+├── app/         # / (the SSH client), layout, metadata routes
+├── components/  # TerminalBar, PromptLabel, ErrorScreen, LoadingScreen
 │   └── ssh/     # SshClient, ConnectForm, XtermView, FileBrowser (web SSH UI)
 ├── config/      # siteConfig.ts — env-driven identity (single source of truth)
-├── lib/         # theme tokens, OG renderer, utils, sshProtocol.ts
+├── lib/         # theme tokens, OG renderer, utils, sshProtocol.ts (+ tests)
 └── styles/      # globals.css — Tailwind import + palette + terminal utilities
 public/          # favicon.svg (source logo) + generated icons
 ```
@@ -91,12 +92,12 @@ public/          # favicon.svg (source logo) + generated icons
 The whole palette is defined once — in the `@theme` block of
 [`src/styles/globals.css`](src/styles/globals.css) (mirrored in
 [`src/lib/theme.ts`](src/lib/theme.ts) for the OG image renderer). Change the
-`--color-term-*` tokens there and the entire site follows.
+`--color-term-*` tokens there and the entire UI follows.
 
 ## Web SSH client
 
-The route [`/ssh`](src/app/ssh/page.tsx) is a full browser-based SSH client,
-inspired by [ssheasy.com](https://ssheasy.com):
+The home route (`/`, [`src/app/page.tsx`](src/app/page.tsx)) is the client
+itself:
 
 - an **interactive terminal** (xterm.js) attached to a real remote shell,
 - **password or private-key** authentication (paste a key or load it from a
@@ -144,7 +145,7 @@ See the [Web SSH client block in `.env.example`](.env.example) for every knob.
 
 `npm run build && npm run start` behind a reverse proxy, or deploy to any Node
 host / platform that supports Next.js 16. Note that `start` runs the custom
-[`server.mjs`](server.mjs) (needed for the `/ssh` WebSocket bridge), not
+[`server.mjs`](server.mjs) (needed for the SSH WebSocket bridge), not
 `next start`; the security headers and CSP in `next.config.ts` are applied the
 same way. This is **not** compatible with a static export or an edge-only host —
 the SSH bridge needs a long-lived Node process. Terminate TLS in front of it so

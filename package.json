@@ -1,8 +1,8 @@
 {
-  "name": "terminal-web-template",
+  "name": "sshweb",
   "version": "0.1.0",
   "private": true,
-  "description": "A terminal-styled Next.js website template — SEO, error pages, PWA metadata and env-driven config out of the box.",
+  "description": "Browser-based SSH client — an interactive web terminal and SFTP file access, over a WebSocket ↔ SSH bridge.",
   "engines": {
     "node": ">=20.9.0"
   },
