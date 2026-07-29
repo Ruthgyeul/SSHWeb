@@ -53,6 +53,9 @@ export type ClientMessage =
   // Raw keystrokes typed into the terminal, sent as a UTF-8 string.
   | { t: "data"; data: string }
   | { t: "resize"; cols: number; rows: number }
+  // Round-trip latency probe: the server echoes the same `ts` straight back in a
+  // `pong`, letting the client measure connection RTT without touching the shell.
+  | { t: "ping"; ts: number }
   // User's decision on a presented host key (TOFU): accept and continue, or
   // reject and abort the handshake.
   | { t: "hostkey-response"; accept: boolean }
@@ -60,9 +63,10 @@ export type ClientMessage =
   // the same order as the prompts that were presented.
   | { t: "kbd-response"; responses: string[] }
   | { t: "sftp-list"; path: string }
-  // Read a file. `edit: true` opens it in the inline editor instead of
-  // triggering a download (the server echoes the flag back).
-  | { t: "sftp-read"; path: string; edit?: boolean }
+  // Read a file. `edit: true` opens it in the inline editor and `preview: true`
+  // opens it in the image preview modal; without either the read triggers a
+  // download. The server echoes whichever flag was set back to the client.
+  | { t: "sftp-read"; path: string; edit?: boolean; preview?: boolean }
   // Write a file. When `offset` is a number the write is chunked (offset 0
   // opens the stream, `final: true` closes it) — this drives upload progress;
   // without `offset` the whole `dataB64` is written at once (inline-edit save).
@@ -108,6 +112,9 @@ export type ServerMessage =
   // before the session opens. The client compares it against its known-hosts
   // store and either auto-accepts, prompts, or warns on a changed key.
   | { t: "hostkey"; host: string; port: number; fingerprint: string; keyType: string }
+  // Reply to a `ping`, carrying the original `ts` so the client can compute the
+  // round-trip time.
+  | { t: "pong"; ts: number }
   // A keyboard-interactive challenge (used for OTP / 2FA and some password
   // flows). The client collects answers and replies with `kbd-response`.
   | {
@@ -117,14 +124,15 @@ export type ServerMessage =
       prompts: KbdPrompt[];
     }
   | { t: "sftp-list"; path: string; entries: FileEntry[] }
-  // File contents. `edit` echoes the request flag: true opens the editor,
-  // false/absent triggers a download.
+  // File contents. `edit`/`preview` echo the request flags: `edit` opens the
+  // editor, `preview` opens the image preview modal, neither triggers a download.
   | {
       t: "sftp-read";
       path: string;
       name: string;
       dataB64: string;
       edit?: boolean;
+      preview?: boolean;
     }
   | { t: "sftp-ok"; op: string; path: string }
   | { t: "error"; message: string; scope?: "sftp" | "shell" | "auth" };
@@ -382,6 +390,38 @@ export function applyKeyModifiers(
   if (mods.ctrl) out = ctrlChar(out);
   if (mods.alt) out = `\x1b${out}`;
   return out;
+}
+
+/** Image extensions the browser can render inline, mapped to their MIME type. */
+const IMAGE_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  avif: "image/avif",
+};
+
+/**
+ * Heuristic: is this filename an image we can preview inline in the browser?
+ * Matches purely by extension (case-insensitive).
+ */
+export function isProbablyImageFile(name: string): boolean {
+  return imageMimeType(name) !== null;
+}
+
+/**
+ * The image MIME type implied by a filename's extension, or `null` when it is
+ * not a previewable image. Used to build the `data:` URL for the preview modal.
+ */
+export function imageMimeType(name: string): string | null {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return null;
+  const ext = name.slice(dot + 1).toLowerCase();
+  return IMAGE_MIME[ext] ?? null;
 }
 
 /**

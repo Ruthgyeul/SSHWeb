@@ -7,7 +7,9 @@ import {
   formatMode,
   formatSize,
   hostKeyId,
+  imageMimeType,
   isHostAllowed,
+  isProbablyImageFile,
   isProbablyTextFile,
   joinPath,
   modeToOctal,
@@ -197,6 +199,28 @@ describe("isProbablyTextFile", () => {
     expect(isProbablyTextFile("photo.png")).toBe(false);
     expect(isProbablyTextFile("archive.tar.gz")).toBe(false);
     expect(isProbablyTextFile("binary")).toBe(false);
+  });
+});
+
+describe("image detection", () => {
+  it("recognizes images by extension (case-insensitive)", () => {
+    expect(isProbablyImageFile("photo.png")).toBe(true);
+    expect(isProbablyImageFile("Banner.JPG")).toBe(true);
+    expect(isProbablyImageFile("logo.svg")).toBe(true);
+  });
+
+  it("returns false for non-images", () => {
+    expect(isProbablyImageFile("notes.md")).toBe(false);
+    expect(isProbablyImageFile("noextension")).toBe(false);
+  });
+
+  it("maps extensions to MIME types", () => {
+    expect(imageMimeType("a.png")).toBe("image/png");
+    expect(imageMimeType("a.jpeg")).toBe("image/jpeg");
+    expect(imageMimeType("a.JPG")).toBe("image/jpeg");
+    expect(imageMimeType("a.svg")).toBe("image/svg+xml");
+    expect(imageMimeType("a.txt")).toBeNull();
+    expect(imageMimeType("noext")).toBeNull();
   });
 });
 
