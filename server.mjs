@@ -33,11 +33,14 @@ const { loadEnvConfig } = nextEnv;
 const dev = process.env.NODE_ENV !== "production";
 // Load `.env`, `.env.local`, `.env.[development|production]`, … into
 // process.env (the same files Next loads) BEFORE reading PORT and friends, so
-// the server port can be set from a .env file — e.g. `PORT=5000` in .env.local.
+// the server port can be set from a .env file — e.g. `PORT=3000` in .env.local.
 loadEnvConfig(process.cwd(), dev);
 
-const hostname = process.env.HOSTNAME || "localhost";
-const port = parseInt(process.env.PORT || "5000", 10);
+// Bind to 127.0.0.1 (IPv4 loopback) by default rather than "localhost", which
+// can resolve to ::1 (IPv6 only) and leave an IPv4 reverse proxy unable to
+// reach us. Set HOSTNAME=0.0.0.0 to expose the server on all interfaces.
+const hostname = process.env.HOSTNAME || "127.0.0.1";
+const port = parseInt(process.env.PORT || "3000", 10);
 
 // Path the browser opens its SSH WebSocket on. Must match NEXT_PUBLIC_SSH_WS_PATH.
 const WS_PATH = process.env.NEXT_PUBLIC_SSH_WS_PATH || "/api/ssh";

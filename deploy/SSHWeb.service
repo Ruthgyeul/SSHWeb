@@ -40,11 +40,11 @@ Group=sshweb
 WorkingDirectory=/opt/sshweb
 
 # --- Runtime configuration.
-# server.mjs reads PORT (default 5000), NODE_ENV, and the SSH_* knobs. It also
+# server.mjs reads PORT (default 3000), NODE_ENV, and the SSH_* knobs. It also
 # loads .env / .env.local from WorkingDirectory via @next/env, so you can keep
 # configuration there instead of here if you prefer.
 Environment=NODE_ENV=production
-Environment=PORT=5000
+Environment=PORT=3000
 # Optional: keep secrets / host settings (SSH_ALLOWED_HOSTS, SSH_MAX_SESSIONS,
 # SSH_MAX_DOWNLOAD_BYTES, NEXT_PUBLIC_* …) in a root-owned env file (0640).
 # The leading '-' makes the file optional so the unit still starts without it.

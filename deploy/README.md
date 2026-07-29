@@ -43,7 +43,7 @@ file referenced by the unit:
 ```bash
 sudo install -d -m 0755 /etc/sshweb
 sudo tee /etc/sshweb/sshweb.env >/dev/null <<'EOF'
-PORT=5000
+PORT=3000
 # Restrict which hosts the bridge may reach (empty = anywhere):
 # SSH_ALLOWED_HOSTS=example.com,*.internal.example.com
 # SSH_MAX_SESSIONS=25
@@ -70,7 +70,7 @@ line:
 
 ```bash
 journalctl -u SSHWeb -f
-# > Ready on http://localhost:5000 (SSH bridge at /api/ssh)
+# > Ready on http://127.0.0.1:3000 (SSH bridge at /api/ssh)
 ```
 
 ## 4. Terminate TLS in front of it
@@ -82,7 +82,7 @@ WebSocket upgrade for the SSH bridge path (`/api/ssh` by default). Minimal nginx
 
 ```nginx
 location / {
-    proxy_pass http://127.0.0.1:5000;
+    proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;   # "upgrade" for WS, "" otherwise

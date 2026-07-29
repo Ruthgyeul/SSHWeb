@@ -24,7 +24,7 @@ bake a real domain, personal name, or secret into committed files.
 ## Commands
 
 ```bash
-npm run dev        # dev server + SSH bridge via server.mjs (http://localhost:5000)
+npm run dev        # dev server + SSH bridge via server.mjs (http://localhost:3000)
 npm run dev:next   # plain `next dev`, no SSH bridge
 npm run build      # production build (fails on type errors)
 npm run start      # serve the production build + SSH bridge (server.mjs)

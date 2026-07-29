@@ -19,7 +19,7 @@ describe("env fallbacks", () => {
     vi.stubEnv("NEXT_PUBLIC_SITE_URL", "");
     vi.stubEnv("NEXT_PUBLIC_SITE_NAME", "");
     const cfg = await loadConfig();
-    expect(cfg.SITE_URL).toBe("http://localhost:5000");
+    expect(cfg.SITE_URL).toBe("http://localhost:3000");
     expect(cfg.SITE_NAME).toBe("SSHWeb");
   });
 
