@@ -10,6 +10,7 @@ import {
   hostKeyId,
   imageMimeType,
   isHostAllowed,
+  isProbablyBinaryFile,
   isProbablyImageFile,
   isProbablyPreviewableFile,
   isProbablyTextFile,
@@ -201,10 +202,45 @@ describe("isProbablyTextFile", () => {
     expect(isProbablyTextFile(".gitignore")).toBe(true);
   });
 
-  it("returns false for binaries", () => {
+  it("opens config files edited over SSH (env, systemd, nginx, …)", () => {
+    expect(isProbablyTextFile(".env")).toBe(true);
+    expect(isProbablyTextFile(".env.local")).toBe(true);
+    expect(isProbablyTextFile(".env.production")).toBe(true);
+    expect(isProbablyTextFile("app.service")).toBe(true);
+    expect(isProbablyTextFile("web.socket")).toBe(true);
+    expect(isProbablyTextFile("nginx.conf")).toBe(true);
+    expect(isProbablyTextFile("mysite.nginx")).toBe(true);
+  });
+
+  it("opens anything vi/nano would: unknown or extensionless files", () => {
+    expect(isProbablyTextFile("README")).toBe(true);
+    expect(isProbablyTextFile("hosts")).toBe(true);
+    expect(isProbablyTextFile("some.weirdext")).toBe(true);
+    expect(isProbablyTextFile("mystery")).toBe(true);
+  });
+
+  it("returns false for previewable media and known binaries", () => {
     expect(isProbablyTextFile("photo.png")).toBe(false);
+    expect(isProbablyTextFile("clip.mp4")).toBe(false);
     expect(isProbablyTextFile("archive.tar.gz")).toBe(false);
-    expect(isProbablyTextFile("binary")).toBe(false);
+    expect(isProbablyTextFile("app.exe")).toBe(false);
+    expect(isProbablyTextFile("lib.so")).toBe(false);
+    expect(isProbablyTextFile("doc.pdf")).toBe(false);
+    expect(isProbablyTextFile("font.woff2")).toBe(false);
+  });
+});
+
+describe("isProbablyBinaryFile", () => {
+  it("flags known binary extensions (case-insensitive)", () => {
+    expect(isProbablyBinaryFile("archive.ZIP")).toBe(true);
+    expect(isProbablyBinaryFile("data.sqlite3")).toBe(true);
+    expect(isProbablyBinaryFile("song.mp3")).toBe(true);
+  });
+
+  it("does not flag text/config or extensionless files", () => {
+    expect(isProbablyBinaryFile("notes.md")).toBe(false);
+    expect(isProbablyBinaryFile("app.service")).toBe(false);
+    expect(isProbablyBinaryFile("README")).toBe(false);
   });
 });
 
