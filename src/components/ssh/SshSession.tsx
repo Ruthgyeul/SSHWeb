@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  applyKeyModifiers,
   compareHostKey,
   encodeMessage,
   hostKeyId,
@@ -18,6 +19,7 @@ import { XtermView, type XtermHandle } from "./XtermView";
 import { ConnectForm, type ConnectDetails } from "./ConnectForm";
 import { FileBrowser, type UploadItem } from "./FileBrowser";
 import { FileEditor } from "./FileEditor";
+import { MobileKeys } from "./MobileKeys";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 
 /** Upload chunk size; each chunk is one `sftp-write` message (drives progress). */
@@ -145,6 +147,13 @@ export function SshSession({
   const [editorSaving, setEditorSaving] = useState(false);
   const [uploads, setUploads] = useState<Record<string, UploadItem>>({});
   const editorSaveTextRef = useRef("");
+
+  // Sticky on-screen modifiers (mobile key bar). State drives the button
+  // highlight; refs let the terminal's own input handler read them synchronously.
+  const [ctrlArmed, setCtrlArmed] = useState(false);
+  const [altArmed, setAltArmed] = useState(false);
+  const ctrlRef = useRef(false);
+  const altRef = useRef(false);
   // Whether we hold credentials from a prior connect (drives the Reconnect UI);
   // mirrors lastDetailsRef but is render-safe.
   const [hasLast, setHasLast] = useState(false);
@@ -384,6 +393,10 @@ export function SshSession({
     setEditor(null);
     setUploads({});
     setHasLast(false);
+    ctrlRef.current = false;
+    altRef.current = false;
+    setCtrlArmed(false);
+    setAltArmed(false);
     xtermRef.current?.clear();
   }, [send]);
 
@@ -441,6 +454,62 @@ export function SshSession({
   const connecting = status === "connecting" || status === "reconnecting";
   const showOverlay = !connected;
   const canReconnect = (status === "dropped" || status === "error") && hasLast;
+
+  // --- On-screen modifier keys (mobile key bar) ---
+  const disarmMods = () => {
+    if (ctrlRef.current) {
+      ctrlRef.current = false;
+      setCtrlArmed(false);
+    }
+    if (altRef.current) {
+      altRef.current = false;
+      setAltArmed(false);
+    }
+  };
+  // Terminal input (phone keyboard or a char key): apply armed modifiers, then
+  // disarm them (one-shot).
+  const sendInput = (data: string) => {
+    if (!connected) return;
+    const out = applyKeyModifiers(data, {
+      ctrl: ctrlRef.current,
+      alt: altRef.current,
+    });
+    disarmMods();
+    send({ t: "data", data: out });
+  };
+  // A fixed escape sequence (arrows / Esc / Fn / undo-redo): send raw, clear mods.
+  const sendSeq = (seq: string) => {
+    if (!connected) return;
+    disarmMods();
+    send({ t: "data", data: seq });
+  };
+  const toggleCtrl = () => {
+    const v = !ctrlRef.current;
+    ctrlRef.current = v;
+    setCtrlArmed(v);
+  };
+  const toggleAlt = () => {
+    const v = !altRef.current;
+    altRef.current = v;
+    setAltArmed(v);
+  };
+  const doCopy = async () => {
+    const sel = xtermRef.current?.getSelection() ?? "";
+    if (!sel) return;
+    try {
+      await navigator.clipboard.writeText(sel);
+    } catch {
+      setStatusMessage("Clipboard unavailable (needs HTTPS or localhost).");
+    }
+  };
+  const doPaste = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) sendInput(text);
+    } catch {
+      setStatusMessage("Clipboard unavailable (needs HTTPS or localhost).");
+    }
+  };
 
   // --- File browser actions ---
   const onDelete = (entry: FileEntry) => {
@@ -561,17 +630,31 @@ export function SshSession({
       <div className="relative min-h-0 flex-1">
         <div
           className={cn(
-            "absolute inset-0 bg-term-bg p-2",
-            connected && tab === "files" ? "hidden" : "block",
+            "absolute inset-0 flex-col bg-term-bg",
+            connected && tab === "files" ? "hidden" : "flex",
           )}
         >
-          <XtermView
-            ref={xtermRef}
-            onData={(data) => connected && send({ t: "data", data })}
-            onResize={(cols, rows) =>
-              connected && send({ t: "resize", cols, rows })
-            }
-          />
+          <div className="min-h-0 flex-1 p-2">
+            <XtermView
+              ref={xtermRef}
+              onData={sendInput}
+              onResize={(cols, rows) =>
+                connected && send({ t: "resize", cols, rows })
+              }
+            />
+          </div>
+          {connected && (
+            <MobileKeys
+              ctrlActive={ctrlArmed}
+              altActive={altArmed}
+              onToggleCtrl={toggleCtrl}
+              onToggleAlt={toggleAlt}
+              onChar={sendInput}
+              onSeq={sendSeq}
+              onCopy={doCopy}
+              onPaste={doPaste}
+            />
+          )}
         </div>
 
         {connected && tab === "files" && (

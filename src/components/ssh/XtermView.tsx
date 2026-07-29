@@ -21,6 +21,8 @@ export interface XtermHandle {
   fit(): { cols: number; rows: number } | null;
   focus(): void;
   clear(): void;
+  /** The user's current terminal selection (empty string if none). */
+  getSelection(): string;
 }
 
 /**
@@ -73,6 +75,7 @@ export const XtermView = forwardRef<
         },
         focus: () => termRef.current?.focus(),
         clear: () => termRef.current?.clear(),
+        getSelection: () => termRef.current?.getSelection() ?? "",
       };
     },
     [],

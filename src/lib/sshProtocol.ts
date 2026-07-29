@@ -347,6 +347,43 @@ const TEXT_EXTENSIONS = new Set([
   "php", "pl", "lua", "vim", "dockerfile", "gitignore", "properties",
 ]);
 
+/* ------------------------------------------------------------------ */
+/* Terminal input helpers (on-screen modifier keys)                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Translate a single character to the control byte it would produce with Ctrl
+ * held (e.g. `c` → 0x03 / ETX). Letters map to 1–26; a handful of symbols map to
+ * 0/27–31/127 as a terminal does. Anything without a Ctrl form is returned
+ * unchanged.
+ */
+export function ctrlChar(ch: string): string {
+  if (ch.length !== 1) return ch;
+  if (ch >= "a" && ch <= "z") return String.fromCharCode(ch.charCodeAt(0) - 96);
+  if (ch >= "A" && ch <= "Z") return String.fromCharCode(ch.charCodeAt(0) - 64);
+  const map: Record<string, number> = {
+    "@": 0, " ": 0, "[": 27, "\\": 28, "]": 29, "^": 30, "_": 31, "?": 127,
+  };
+  return ch in map ? String.fromCharCode(map[ch]) : ch;
+}
+
+/**
+ * Apply on-screen Ctrl/Alt modifiers to terminal input. Ctrl maps a single
+ * character to its control byte; Alt (Meta) prefixes ESC. Modifiers only apply
+ * to single-character input — a multi-character string (e.g. a paste) passes
+ * through untouched.
+ */
+export function applyKeyModifiers(
+  data: string,
+  mods: { ctrl: boolean; alt: boolean },
+): string {
+  if ((!mods.ctrl && !mods.alt) || data.length !== 1) return data;
+  let out = data;
+  if (mods.ctrl) out = ctrlChar(out);
+  if (mods.alt) out = `\x1b${out}`;
+  return out;
+}
+
 /**
  * Heuristic: is this filename likely a text file we can open in the inline
  * editor? Matches by extension, plus a few well-known extensionless dotfiles.
