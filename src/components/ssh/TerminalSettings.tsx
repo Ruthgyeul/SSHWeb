@@ -1,18 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import {
-  MAX_FONT_SIZE,
-  MIN_FONT_SIZE,
-  TERMINAL_THEMES,
-} from "@/lib/terminalTheme";
+import { TERMINAL_THEMES } from "@/lib/terminalTheme";
 import { cn } from "@/lib/utils";
 import type { TerminalPrefs } from "./useTerminalPrefs";
 
 /**
- * Gear button + popover that tunes the terminal's font size and color theme.
- * Fully controlled: the current {@link TerminalPrefs} come in and every change
- * is delegated up via `onChange` (the parent persists them through
+ * Gear button + popover that picks the terminal's color theme. Fully
+ * controlled: the current {@link TerminalPrefs} come in and every change is
+ * delegated up via `onChange` (the parent persists them through
  * `useTerminalPrefs`, so the choice is shared across sessions and reloads).
  */
 export function TerminalSettings({
@@ -42,9 +38,6 @@ export function TerminalSettings({
     };
   }, [open]);
 
-  const stepBtn =
-    "flex h-6 w-6 items-center justify-center rounded border border-term-border text-term-muted hover:text-term-text disabled:opacity-40";
-
   return (
     <div ref={rootRef} className="relative">
       <button
@@ -56,8 +49,8 @@ export function TerminalSettings({
             ? "bg-term-accent/15 text-term-accent"
             : "text-term-muted hover:text-term-text",
         )}
-        title="Terminal appearance"
-        aria-label="Terminal appearance"
+        title="Terminal theme"
+        aria-label="Terminal theme"
         aria-expanded={open}
       >
         ⚙
@@ -65,47 +58,6 @@ export function TerminalSettings({
 
       {open && (
         <div className="absolute right-0 top-full z-30 mt-1.5 w-56 rounded-lg border border-term-border bg-term-panel p-3 shadow-xl">
-          {/* Font size */}
-          <div className="mb-3">
-            <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-xs font-medium text-term-muted">
-                Font size
-              </span>
-              <span className="tabular-nums text-xs text-term-faint">
-                {prefs.fontSize}px
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => onChange({ fontSize: prefs.fontSize - 1 })}
-                disabled={prefs.fontSize <= MIN_FONT_SIZE}
-                className={stepBtn}
-                aria-label="Decrease font size"
-              >
-                −
-              </button>
-              <input
-                type="range"
-                min={MIN_FONT_SIZE}
-                max={MAX_FONT_SIZE}
-                value={prefs.fontSize}
-                onChange={(e) => onChange({ fontSize: Number(e.target.value) })}
-                className="h-1 flex-1 accent-term-accent"
-                aria-label="Font size"
-              />
-              <button
-                type="button"
-                onClick={() => onChange({ fontSize: prefs.fontSize + 1 })}
-                disabled={prefs.fontSize >= MAX_FONT_SIZE}
-                className={stepBtn}
-                aria-label="Increase font size"
-              >
-                +
-              </button>
-            </div>
-          </div>
-
           {/* Theme */}
           <div>
             <span className="mb-1.5 block text-xs font-medium text-term-muted">

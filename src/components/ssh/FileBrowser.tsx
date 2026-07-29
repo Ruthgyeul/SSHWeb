@@ -208,20 +208,28 @@ export function FileBrowser({
               const target = `${cwd.replace(/\/$/, "")}/${entry.name}`;
               const editable = !isDir && isProbablyTextFile(entry.name);
               const previewable = !isDir && isProbablyImageFile(entry.name);
+              // Double-click opens by type: dir → navigate, image → preview,
+              // text → editor, anything else → download.
+              const open = () => {
+                if (isDir) onNavigate(target);
+                else if (previewable) onPreview(target, entry.name);
+                else if (editable) onEdit(target, entry.name);
+                else onDownload(target);
+              };
               return (
                 <tr
                   key={entry.name}
-                  className="border-b border-term-border/50 hover:bg-term-panel/60"
+                  onDoubleClick={open}
+                  className="cursor-pointer border-b border-term-border/50 hover:bg-term-panel/60"
                 >
                   <td className="w-full py-1.5 pl-3 pr-2">
                     <button
                       type="button"
                       onClick={() => isDir && onNavigate(target)}
+                      title={isDir ? undefined : "Double-click to open"}
                       className={cn(
                         "flex items-center gap-2 text-left",
-                        isDir
-                          ? "text-term-accent"
-                          : "cursor-default text-term-dim",
+                        isDir ? "text-term-accent" : "text-term-dim",
                       )}
                     >
                       <span aria-hidden>

@@ -1,16 +1,10 @@
 "use client";
 
 import { useCallback, useSyncExternalStore } from "react";
-import {
-  clampFontSize,
-  DEFAULT_FONT_SIZE,
-  DEFAULT_THEME_ID,
-  getThemePreset,
-} from "@/lib/terminalTheme";
+import { DEFAULT_THEME_ID, getThemePreset } from "@/lib/terminalTheme";
 
 /** Persisted terminal appearance preferences. */
 export interface TerminalPrefs {
-  fontSize: number;
   themeId: string;
 }
 
@@ -20,7 +14,6 @@ const STORAGE_KEY = "sshweb.terminalPrefs";
 const SYNC_EVENT = "sshweb:terminalPrefs";
 
 const DEFAULT_PREFS: TerminalPrefs = {
-  fontSize: DEFAULT_FONT_SIZE,
   themeId: DEFAULT_THEME_ID,
 };
 
@@ -29,10 +22,7 @@ function parsePrefs(raw: string | null): TerminalPrefs {
   try {
     const parsed = raw ? JSON.parse(raw) : null;
     if (!parsed || typeof parsed !== "object") return DEFAULT_PREFS;
-    return {
-      fontSize: clampFontSize(Number(parsed.fontSize)),
-      themeId: getThemePreset(parsed.themeId).id,
-    };
+    return { themeId: getThemePreset(parsed.themeId).id };
   } catch {
     return DEFAULT_PREFS;
   }
@@ -89,10 +79,6 @@ export function useTerminalPrefs(): [
   const update = useCallback((patch: Partial<TerminalPrefs>) => {
     const prev = getSnapshot();
     const next: TerminalPrefs = {
-      fontSize:
-        patch.fontSize !== undefined
-          ? clampFontSize(patch.fontSize)
-          : prev.fontSize,
       themeId:
         patch.themeId !== undefined
           ? getThemePreset(patch.themeId).id
