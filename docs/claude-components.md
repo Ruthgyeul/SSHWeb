@@ -27,9 +27,9 @@ that actually talks SSH is [`server.mjs`](../server.mjs).
 | `XtermView`   | xterm.js wrapper; xterm is dynamically imported (never during SSR)      |
 | `MobileKeys`  | On-screen key bar (Esc/Tab/Ctrl/Alt/arrows/Fn/…) for touch devices; Ctrl/Alt are sticky one-shot modifiers |
 | `SnippetsBar` | Saved command snippets that inject into the shell (persisted via `useSnippets`) |
-| `FileBrowser` | SFTP listing: **clickable breadcrumb path**, navigate, drag-drop upload+progress, streamed download+progress, delete, rename, chmod, mkdir, touch, folder-zip, image preview, **in-CWD name filter** (case-insensitive; select-all acts on the filtered rows), **multi-select** (per-row + select-all checkbox → bulk download-as-zip / delete); **double-click opens** an entry by type (dir → navigate, image → preview, text → editor, else download) |
-| `FileEditor`  | Inline text editor modal: line numbers + lightweight syntax highlighting (`src/lib/syntaxHighlight.ts`), Ctrl/⌘+S to save |
-| `FilePreview` | Read-only image preview modal (data-URL `<img>` + download) for a remote image |
+| `FileBrowser` | SFTP listing: **clickable breadcrumb path**, navigate, drag-drop upload+progress, streamed download+progress, delete, rename, chmod, mkdir, touch, folder-zip, image/video preview, **in-CWD name filter** (case-insensitive; select-all acts on the filtered rows), **multi-select** (per-row + select-all checkbox → bulk download-as-zip / delete); **double-click opens** an entry by type (dir → navigate, image/video → preview, editable → editor, else download) |
+| `FileEditor`  | Inline text editor modal: line numbers + lightweight syntax highlighting (`src/lib/syntaxHighlight.ts`), Ctrl/⌘+S to save. Opens like `vi`/`nano` — any file that isn't previewable media or a known binary (via `isProbablyTextFile`/`isProbablyBinaryFile` in `sshProtocol`), so config files, dotfiles (`.env*`, systemd units, nginx configs), and extensionless files all edit inline |
+| `FilePreview` | Read-only media preview modal for a remote image (data-URL `<img>`) or video (data-URL `<video controls>`, e.g. mp4/mov/webm) + download |
 | `AuthPrompt`  | Modal for host-key (TOFU) confirmation and keyboard-interactive prompts |
 | `PasteConfirm` | Confirmation modal shown before a multi-line paste reaches the shell |
 | `PromptDialog` | Themed in-app prompt/confirm dialog (replaces `window.prompt`/`confirm` for mkdir/touch/rename/chmod/delete) |

@@ -11,7 +11,10 @@ import {
   modeToOctal,
   parseMessage,
   parseOctalMode,
+  previewKind,
+  videoMimeType,
   type FileEntry,
+  type PreviewKind,
   type ServerMessage,
 } from "@/lib/sshProtocol";
 import { getThemePreset } from "@/lib/terminalTheme";
@@ -42,11 +45,13 @@ interface EditorState {
   content: string;
 }
 
-/** An image open in the preview modal. */
+/** An image or video open in the preview modal. */
 interface PreviewState {
   path: string;
   name: string;
-  /** `data:` URL for the <img>. */
+  /** Which media surface to render (`<img>` vs `<video>`). */
+  kind: PreviewKind;
+  /** `data:` URL for the <img>/<video>. */
   src: string;
   /** Raw bytes, kept so "Download" doesn't need a second round-trip. */
   bytes: Uint8Array<ArrayBuffer>;
@@ -301,10 +306,15 @@ export function SshSession({
             setEditor({ path: msg.path, name: msg.name, content: text });
           } else if (msg.preview) {
             const bytes = base64ToBytes(msg.dataB64);
-            const mime = imageMimeType(msg.name) ?? "application/octet-stream";
+            const kind = previewKind(msg.name) ?? "image";
+            const mime =
+              (kind === "video"
+                ? videoMimeType(msg.name)
+                : imageMimeType(msg.name)) ?? "application/octet-stream";
             setPreview({
               path: msg.path,
               name: msg.name,
+              kind,
               src: `data:${mime};base64,${msg.dataB64}`,
               bytes,
             });
@@ -922,6 +932,7 @@ export function SshSession({
                 name={preview.name}
                 path={preview.path}
                 src={preview.src}
+                kind={preview.kind}
                 onDownload={() => triggerDownload(preview.name, preview.bytes)}
                 onClose={() => setPreview(null)}
               />

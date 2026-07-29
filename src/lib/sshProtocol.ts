@@ -394,12 +394,31 @@ export function modeToOctal(mode: number): string {
   return (mode & 0o777).toString(8).padStart(3, "0");
 }
 
-const TEXT_EXTENSIONS = new Set([
-  "txt", "md", "markdown", "log", "conf", "cfg", "ini", "env", "sh", "bash",
-  "zsh", "fish", "js", "mjs", "cjs", "ts", "tsx", "jsx", "json", "json5",
-  "yaml", "yml", "toml", "xml", "html", "htm", "css", "scss", "less", "csv",
-  "tsv", "sql", "py", "rb", "go", "rs", "c", "h", "cpp", "hpp", "java", "kt",
-  "php", "pl", "lua", "vim", "dockerfile", "gitignore", "properties",
+/**
+ * Extensions we treat as binary — files better downloaded than opened as text.
+ * This is a *blocklist*: the inline editor opens essentially everything else,
+ * mirroring how `vi`/`nano` will open any file (so config files, dotfiles, and
+ * extensionless files all edit inline). Images and videos have their own preview
+ * modal, so they're matched separately (see `previewKind`) rather than listed
+ * here.
+ */
+const BINARY_EXTENSIONS = new Set([
+  // Archives / compressed.
+  "zip", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "7z", "rar", "tar", "zst",
+  "lz", "lzma", "jar", "war", "ear", "apk", "deb", "rpm", "iso", "dmg", "cab",
+  "ar", "cpio",
+  // Audio.
+  "mp3", "wav", "flac", "aac", "oga", "m4a", "opus", "wma", "aiff", "mid",
+  "midi",
+  // Documents / office.
+  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
+  // Fonts.
+  "ttf", "otf", "woff", "woff2", "eot",
+  // Compiled / executable / object.
+  "exe", "dll", "so", "dylib", "o", "a", "obj", "bin", "class", "pyc", "pyo",
+  "wasm", "node", "lib", "msi", "elf", "ko",
+  // Databases / packed data.
+  "db", "sqlite", "sqlite3", "mdb", "pack", "idx",
 ]);
 
 /* ------------------------------------------------------------------ */
@@ -471,17 +490,77 @@ export function imageMimeType(name: string): string | null {
   return IMAGE_MIME[ext] ?? null;
 }
 
+/** Video extensions the browser can play inline, mapped to their MIME type. */
+const VIDEO_MIME: Record<string, string> = {
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  mov: "video/quicktime",
+  webm: "video/webm",
+  ogv: "video/ogg",
+  mkv: "video/x-matroska",
+};
+
 /**
- * Heuristic: is this filename likely a text file we can open in the inline
- * editor? Matches by extension, plus a few well-known extensionless dotfiles.
+ * Heuristic: is this filename a video we can play inline in the browser?
+ * Matches purely by extension (case-insensitive). Actual playback still depends
+ * on the browser's codec support (e.g. `.mov`/`.mkv` vary), but the `<video>`
+ * element degrades gracefully when a codec is missing.
+ */
+export function isProbablyVideoFile(name: string): boolean {
+  return videoMimeType(name) !== null;
+}
+
+/**
+ * The video MIME type implied by a filename's extension, or `null` when it is
+ * not a previewable video. Used to build the `data:` URL for the preview modal.
+ */
+export function videoMimeType(name: string): string | null {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return null;
+  const ext = name.slice(dot + 1).toLowerCase();
+  return VIDEO_MIME[ext] ?? null;
+}
+
+/** What kind of media the preview modal should render for a file. */
+export type PreviewKind = "image" | "video";
+
+/**
+ * Classify a filename for the inline preview modal: `image`, `video`, or `null`
+ * when it isn't a previewable media file. Images win over videos on the (never
+ * expected) chance an extension appears in both maps.
+ */
+export function previewKind(name: string): PreviewKind | null {
+  if (imageMimeType(name) !== null) return "image";
+  if (videoMimeType(name) !== null) return "video";
+  return null;
+}
+
+/**
+ * Heuristic: can this filename be shown in the inline preview modal (image or
+ * video)? Used by the file browser to decide the double-click/👁 action.
+ */
+export function isProbablyPreviewableFile(name: string): boolean {
+  return previewKind(name) !== null;
+}
+
+/**
+ * Heuristic: is this filename a binary format we should download rather than try
+ * to open as text? Matches by extension (case-insensitive); an extensionless
+ * name is not considered binary (a plain `README`/`hosts`-style file).
+ */
+export function isProbablyBinaryFile(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return false;
+  return BINARY_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
+}
+
+/**
+ * Heuristic: can this filename be opened in the inline editor? Modeled on how
+ * `vi`/`nano` behave — they open essentially any file — so this is true for
+ * everything that isn't previewable media (image/video, which has its own modal)
+ * or a known binary format (archives, compiled objects, fonts, office docs, …).
+ * Config files, dotfiles, and extensionless files all count as editable text.
  */
 export function isProbablyTextFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  const dot = lower.lastIndexOf(".");
-  if (dot <= 0) {
-    // No extension (or leading-dot dotfile): treat common config names as text.
-    const base = dot === 0 ? lower.slice(1) : lower;
-    return TEXT_EXTENSIONS.has(base) || base === "dockerfile" || base === "makefile";
-  }
-  return TEXT_EXTENSIONS.has(lower.slice(dot + 1));
+  return previewKind(name) === null && !isProbablyBinaryFile(name);
 }

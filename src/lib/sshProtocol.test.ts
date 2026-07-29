@@ -10,9 +10,14 @@ import {
   hostKeyId,
   imageMimeType,
   isHostAllowed,
+  isProbablyBinaryFile,
   isProbablyImageFile,
+  isProbablyPreviewableFile,
   isProbablyTextFile,
+  isProbablyVideoFile,
   joinPath,
+  previewKind,
+  videoMimeType,
   modeToOctal,
   parentPath,
   pathSegments,
@@ -197,10 +202,45 @@ describe("isProbablyTextFile", () => {
     expect(isProbablyTextFile(".gitignore")).toBe(true);
   });
 
-  it("returns false for binaries", () => {
+  it("opens config files edited over SSH (env, systemd, nginx, …)", () => {
+    expect(isProbablyTextFile(".env")).toBe(true);
+    expect(isProbablyTextFile(".env.local")).toBe(true);
+    expect(isProbablyTextFile(".env.production")).toBe(true);
+    expect(isProbablyTextFile("app.service")).toBe(true);
+    expect(isProbablyTextFile("web.socket")).toBe(true);
+    expect(isProbablyTextFile("nginx.conf")).toBe(true);
+    expect(isProbablyTextFile("mysite.nginx")).toBe(true);
+  });
+
+  it("opens anything vi/nano would: unknown or extensionless files", () => {
+    expect(isProbablyTextFile("README")).toBe(true);
+    expect(isProbablyTextFile("hosts")).toBe(true);
+    expect(isProbablyTextFile("some.weirdext")).toBe(true);
+    expect(isProbablyTextFile("mystery")).toBe(true);
+  });
+
+  it("returns false for previewable media and known binaries", () => {
     expect(isProbablyTextFile("photo.png")).toBe(false);
+    expect(isProbablyTextFile("clip.mp4")).toBe(false);
     expect(isProbablyTextFile("archive.tar.gz")).toBe(false);
-    expect(isProbablyTextFile("binary")).toBe(false);
+    expect(isProbablyTextFile("app.exe")).toBe(false);
+    expect(isProbablyTextFile("lib.so")).toBe(false);
+    expect(isProbablyTextFile("doc.pdf")).toBe(false);
+    expect(isProbablyTextFile("font.woff2")).toBe(false);
+  });
+});
+
+describe("isProbablyBinaryFile", () => {
+  it("flags known binary extensions (case-insensitive)", () => {
+    expect(isProbablyBinaryFile("archive.ZIP")).toBe(true);
+    expect(isProbablyBinaryFile("data.sqlite3")).toBe(true);
+    expect(isProbablyBinaryFile("song.mp3")).toBe(true);
+  });
+
+  it("does not flag text/config or extensionless files", () => {
+    expect(isProbablyBinaryFile("notes.md")).toBe(false);
+    expect(isProbablyBinaryFile("app.service")).toBe(false);
+    expect(isProbablyBinaryFile("README")).toBe(false);
   });
 });
 
@@ -223,6 +263,46 @@ describe("image detection", () => {
     expect(imageMimeType("a.svg")).toBe("image/svg+xml");
     expect(imageMimeType("a.txt")).toBeNull();
     expect(imageMimeType("noext")).toBeNull();
+  });
+});
+
+describe("video detection", () => {
+  it("recognizes videos by extension (case-insensitive)", () => {
+    expect(isProbablyVideoFile("clip.mp4")).toBe(true);
+    expect(isProbablyVideoFile("Recording.MOV")).toBe(true);
+    expect(isProbablyVideoFile("screen.webm")).toBe(true);
+  });
+
+  it("returns false for non-videos", () => {
+    expect(isProbablyVideoFile("photo.png")).toBe(false);
+    expect(isProbablyVideoFile("notes.md")).toBe(false);
+    expect(isProbablyVideoFile("noextension")).toBe(false);
+  });
+
+  it("maps extensions to MIME types", () => {
+    expect(videoMimeType("a.mp4")).toBe("video/mp4");
+    expect(videoMimeType("a.m4v")).toBe("video/mp4");
+    expect(videoMimeType("a.MOV")).toBe("video/quicktime");
+    expect(videoMimeType("a.webm")).toBe("video/webm");
+    expect(videoMimeType("a.png")).toBeNull();
+    expect(videoMimeType("noext")).toBeNull();
+  });
+});
+
+describe("previewKind / isProbablyPreviewableFile", () => {
+  it("classifies images and videos, null otherwise", () => {
+    expect(previewKind("photo.png")).toBe("image");
+    expect(previewKind("Banner.JPG")).toBe("image");
+    expect(previewKind("clip.mp4")).toBe("video");
+    expect(previewKind("Recording.MOV")).toBe("video");
+    expect(previewKind("notes.md")).toBeNull();
+    expect(previewKind("noext")).toBeNull();
+  });
+
+  it("is previewable exactly when it is an image or a video", () => {
+    expect(isProbablyPreviewableFile("photo.png")).toBe(true);
+    expect(isProbablyPreviewableFile("clip.mov")).toBe(true);
+    expect(isProbablyPreviewableFile("notes.md")).toBe(false);
   });
 });
 
