@@ -8,8 +8,9 @@
  * and manifest generation.
  *
  * The only deployment-specific default is `SITE_URL`, which falls back to
- * `http://localhost:3000` — set `NEXT_PUBLIC_SITE_URL` to your real origin so
- * canonical URLs, the sitemap and social-card images resolve correctly.
+ * `http://localhost:5000` (the server's default port) — set
+ * `NEXT_PUBLIC_SITE_URL` to your real origin so canonical URLs, the sitemap and
+ * social-card images resolve correctly.
  */
 
 /**
@@ -29,7 +30,7 @@ function env(key: string, fallback: string): string {
 }
 
 export const SITE_URL = normalizeSiteUrl(
-  env("NEXT_PUBLIC_SITE_URL", "http://localhost:3000"),
+  env("NEXT_PUBLIC_SITE_URL", "http://localhost:5000"),
 );
 export const SITE_NAME = env("NEXT_PUBLIC_SITE_NAME", "SSHWeb");
 export const SITE_SHORT_NAME = env("NEXT_PUBLIC_SITE_SHORT_NAME", "SSHWeb");
