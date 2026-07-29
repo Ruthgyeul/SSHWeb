@@ -83,6 +83,9 @@ export type ClientMessage =
   | { t: "sftp-chmod"; path: string; mode: number }
   // Download a directory as a (store-only) zip archive.
   | { t: "sftp-download-dir"; path: string }
+  // Download several selected entries (files and/or directories) as a single
+  // (store-only) zip archive. The server replies with a one-shot `sftp-read`.
+  | { t: "sftp-download-many"; paths: string[] }
   | { t: "disconnect" };
 
 /* ------------------------------------------------------------------ */

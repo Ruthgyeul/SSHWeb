@@ -57,6 +57,27 @@ const MAX_DOWNLOAD_BYTES = parseInt(
   process.env.SSH_MAX_DOWNLOAD_BYTES || `${25 * 1024 * 1024}`,
   10,
 );
+// Cap a single SFTP upload so an unbounded stream can't fill the target disk
+// (symmetric with the download cap). 0 disables the limit.
+const MAX_UPLOAD_BYTES = parseInt(
+  process.env.SSH_MAX_UPLOAD_BYTES || `${25 * 1024 * 1024}`,
+  10,
+);
+// Per-IP throttle on SSH connection *attempts* (anti-brute-force relay).
+const RATE_MAX = parseInt(process.env.SSH_RATE_LIMIT_MAX || "10", 10);
+const RATE_WINDOW_MS = parseInt(
+  process.env.SSH_RATE_LIMIT_WINDOW_MS || "60000",
+  10,
+);
+// Trust X-Forwarded-For for the client IP (default deploy sits behind a reverse
+// proxy on loopback). Set false when the server is directly exposed.
+const TRUST_PROXY =
+  (process.env.SSH_TRUST_PROXY || "true").toLowerCase() !== "false";
+// Optional explicit WebSocket origin allowlist. Empty = require same-origin.
+const ALLOWED_ORIGINS = (process.env.SSH_ALLOWED_ORIGINS || "")
+  .split(/[\s,]+/)
+  .map((s) => s.trim())
+  .filter(Boolean);
 // Drop a socket that connects but never sends a `connect` message.
 const CONNECT_GRACE_MS = 30_000;
 
@@ -71,6 +92,73 @@ function isHostAllowed(host) {
     return h === p;
   });
 }
+
+/* ---------------------------------------------------------------------------
+ * Security helpers mirrored from src/lib/serverSecurity.ts.
+ *
+ * That module is the tested source of truth for these algorithms; this file
+ * runs outside the TypeScript build so it hand-mirrors them (same discipline as
+ * the wire protocol). Change one, change the other.
+ * ------------------------------------------------------------------------- */
+
+/** Normalize an Origin header to `scheme://host[:port]`, or null if malformed. */
+function normalizeOrigin(value) {
+  try {
+    const u = new URL(String(value).trim());
+    return `${u.protocol}//${u.host}`.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/** Guard against cross-site WebSocket hijacking on the upgrade handshake. */
+function isWebSocketOriginAllowed(origin, host) {
+  if (!origin) return true; // non-browser client — CSWSH always sends Origin
+  const normalized = normalizeOrigin(origin);
+  if (!normalized) return false;
+  if (ALLOWED_ORIGINS.length > 0) {
+    return ALLOWED_ORIGINS.some((o) => normalizeOrigin(o) === normalized);
+  }
+  if (!host || String(host).trim() === "") return false;
+  const hostPort = normalized.slice(normalized.indexOf("//") + 2);
+  return hostPort === String(host).trim().toLowerCase();
+}
+
+/** Resolve the client IP for rate-limiting (honors X-Forwarded-For if trusted). */
+function clientIpFromReq(req) {
+  const xff = req.headers["x-forwarded-for"];
+  if (TRUST_PROXY && xff) {
+    const raw = Array.isArray(xff) ? xff[0] : xff;
+    const first = raw?.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return req.socket?.remoteAddress || "unknown";
+}
+
+/** Minimal per-key sliding-window rate limiter (see serverSecurity.ts). */
+const rateHits = new Map();
+function rateLimitAllow(key, now) {
+  if (RATE_MAX <= 0) return true;
+  const recent = (rateHits.get(key) ?? []).filter(
+    (t) => now - t < RATE_WINDOW_MS,
+  );
+  if (recent.length >= RATE_MAX) {
+    rateHits.set(key, recent);
+    return false;
+  }
+  recent.push(now);
+  rateHits.set(key, recent);
+  return true;
+}
+// Periodically drop empty/expired buckets so the map stays bounded.
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, times] of rateHits) {
+    const kept = times.filter((t) => now - t < RATE_WINDOW_MS);
+    if (kept.length === 0) rateHits.delete(key);
+    else rateHits.set(key, kept);
+  }
+}, RATE_WINDOW_MS).unref?.();
 
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
@@ -89,6 +177,12 @@ const wss = new WebSocketServer({ noServer: true });
 server.on("upgrade", (req, socket, head) => {
   const { pathname } = parse(req.url || "");
   if (pathname === WS_PATH) {
+    // Reject cross-site WebSocket handshakes before upgrading (anti-CSWSH).
+    if (!isWebSocketOriginAllowed(req.headers.origin, req.headers.host)) {
+      socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);
     });
@@ -152,6 +246,41 @@ function collectDirFiles(sftp, dir, done) {
   walk(base, "", (err) => (err ? done(err) : done(null, out)));
 }
 
+/**
+ * Collect a set of selected paths (files and/or directories) into a flat
+ * `[{ name, data }]` list suitable for zipping. A directory is walked
+ * recursively and its entries are prefixed with the directory's basename so the
+ * archive preserves structure. Errors abort the whole collection.
+ */
+function collectPaths(sftp, paths, done) {
+  const out = [];
+  let i = 0;
+  const nextPath = () => {
+    if (i >= paths.length) return done(null, out);
+    const p = paths[i++];
+    const base = p.split("/").filter(Boolean).pop() || "file";
+    sftp.stat(p, (err, stats) => {
+      if (err) return done(err);
+      if (stats.isDirectory?.()) {
+        collectDirFiles(sftp, p, (e, files) => {
+          if (e) return done(e);
+          for (const f of files) out.push({ name: `${base}/${f.name}`, data: f.data });
+          nextPath();
+        });
+      } else if (stats.isFile?.()) {
+        sftp.readFile(p, (e, buf) => {
+          if (e) return done(e);
+          out.push({ name: base, data: buf });
+          nextPath();
+        });
+      } else {
+        nextPath(); // skip symlinks / specials
+      }
+    });
+  };
+  nextPath();
+}
+
 /** Build a minimal store-only (uncompressed) ZIP archive from a file list. */
 function buildStoreZip(files) {
   const chunks = [];
@@ -213,7 +342,8 @@ function buildStoreZip(files) {
   return Buffer.concat([...chunks, centralBuf, end]);
 }
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
+  const clientIp = clientIpFromReq(req);
   /** @type {import('ssh2').Client | null} */
   let ssh = null;
   let shell = null; // interactive PTY stream
@@ -331,6 +461,10 @@ wss.on("connection", (ws) => {
     }
     if (!isHostAllowed(host)) {
       sendError(`Host not allowed by this server: ${host}`, "auth");
+      return ws.close();
+    }
+    if (!rateLimitAllow(clientIp, Date.now())) {
+      sendError("Too many connection attempts. Please slow down.", "auth");
       return ws.close();
     }
     if (activeSessions >= MAX_SESSIONS) {
@@ -581,9 +715,27 @@ wss.on("connection", (ws) => {
                 uploads.delete(msg.path);
                 sendError(err.message, "sftp");
               });
-              entry = { stream };
+              entry = { stream, written: 0 };
               uploads.set(msg.path, entry);
             }
+            // Enforce the upload cap: abort the stream if this chunk would push
+            // the running total past MAX_UPLOAD_BYTES.
+            if (
+              MAX_UPLOAD_BYTES > 0 &&
+              entry.written + buffer.length > MAX_UPLOAD_BYTES
+            ) {
+              try {
+                entry.stream.destroy();
+              } catch {
+                /* stream already gone */
+              }
+              uploads.delete(msg.path);
+              return sendError(
+                `File too large to upload (> ${MAX_UPLOAD_BYTES} bytes).`,
+                "sftp",
+              );
+            }
+            entry.written += buffer.length;
             entry.stream.write(buffer);
             if (msg.final) {
               entry.stream.end(() => {
@@ -592,7 +744,13 @@ wss.on("connection", (ws) => {
               });
             }
           } else {
-            // Whole-file write (inline-edit save).
+            // Whole-file write (inline-edit save / empty-file touch).
+            if (MAX_UPLOAD_BYTES > 0 && buffer.length > MAX_UPLOAD_BYTES) {
+              return sendError(
+                `File too large to save (> ${MAX_UPLOAD_BYTES} bytes).`,
+                "sftp",
+              );
+            }
             s.writeFile(msg.path, buffer, (err) => {
               if (err) return sendError(err.message, "sftp");
               send({ t: "sftp-ok", op: "write", path: msg.path });
@@ -636,6 +794,30 @@ wss.on("connection", (ws) => {
               t: "sftp-read",
               path: msg.path,
               name,
+              dataB64: zip.toString("base64"),
+            });
+          });
+        });
+        break;
+
+      case "sftp-download-many":
+        withSftp((s) => {
+          const paths = Array.isArray(msg.paths) ? msg.paths.filter(Boolean) : [];
+          if (paths.length === 0) return sendError("Nothing selected.", "sftp");
+          collectPaths(s, paths, (err, files) => {
+            if (err) return sendError(err.message, "sftp");
+            const total = files.reduce((n, f) => n + f.data.length, 0);
+            if (total > MAX_DOWNLOAD_BYTES) {
+              return sendError(
+                `Selection too large to download (> ${MAX_DOWNLOAD_BYTES} bytes).`,
+                "sftp",
+              );
+            }
+            const zip = buildStoreZip(files);
+            send({
+              t: "sftp-read",
+              path: paths[0],
+              name: "download.zip",
               dataB64: zip.toString("base64"),
             });
           });

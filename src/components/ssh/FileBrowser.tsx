@@ -30,6 +30,9 @@ export interface DownloadItem {
 const actionBtn =
   "rounded px-1.5 py-0.5 text-xs text-term-muted transition-colors";
 
+/** Shared empty set for a listing with no active selection (stable identity). */
+const EMPTY_NAMES: ReadonlySet<string> = new Set();
+
 /**
  * SFTP file browser over the live SSH session. Fully controlled by the parent:
  * `entries`/`cwd`/`uploads` are supplied and every action (navigate, download,
@@ -46,7 +49,9 @@ export function FileBrowser({
   onNavigate,
   onDownload,
   onDownloadDir,
+  onDownloadMany,
   onDelete,
+  onDeleteMany,
   onUpload,
   onMkdir,
   onTouch,
@@ -64,7 +69,9 @@ export function FileBrowser({
   onNavigate: (path: string) => void;
   onDownload: (path: string) => void;
   onDownloadDir: (path: string) => void;
+  onDownloadMany: (paths: string[]) => void;
   onDelete: (entry: FileEntry) => void;
+  onDeleteMany: (entries: FileEntry[]) => void;
   onUpload: (file: File) => void;
   onMkdir: () => void;
   onTouch: () => void;
@@ -76,9 +83,38 @@ export function FileBrowser({
 }) {
   const uploadRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  // Checked entries, tagged with the directory they belong to. Tagging by `cwd`
+  // means the selection derives to empty on navigation (no effect needed), and
+  // stale names left after a refresh are naturally ignored because every read
+  // below intersects with the current listing.
+  const [selection, setSelection] = useState<{ cwd: string; names: Set<string> }>(
+    { cwd, names: new Set() },
+  );
   const sorted = sortEntries(entries);
   const atRoot = cwd === "/";
   const segments = pathSegments(cwd);
+  const pathFor = (name: string) => `${cwd.replace(/\/$/, "")}/${name}`;
+
+  const selNames = selection.cwd === cwd ? selection.names : EMPTY_NAMES;
+  const isSelected = (name: string) => selNames.has(name);
+  const selectedEntries = sorted.filter((e) => selNames.has(e.name));
+  const selectedCount = selectedEntries.length;
+  const allSelected = sorted.length > 0 && selectedCount === sorted.length;
+  const someSelected = selectedCount > 0 && !allSelected;
+
+  const toggleOne = (name: string) =>
+    setSelection((prev) => {
+      const next = new Set(prev.cwd === cwd ? prev.names : []);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return { cwd, names: next };
+    });
+  const toggleAll = () =>
+    setSelection({
+      cwd,
+      names: allSelected ? new Set() : new Set(sorted.map((e) => e.name)),
+    });
+  const clearSelection = () => setSelection({ cwd, names: new Set() });
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -234,6 +270,54 @@ export function FileBrowser({
         </div>
       )}
 
+      {/* Selection bar: select-all + bulk actions on the checked entries */}
+      {sorted.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-term-border bg-term-panel/40 px-3 py-1.5 text-xs">
+          <label className="flex items-center gap-2 text-term-muted">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              ref={(el) => {
+                if (el) el.indeterminate = someSelected;
+              }}
+              onChange={toggleAll}
+              className="accent-term-accent"
+              aria-label="Select all"
+            />
+            <span className="tabular-nums">
+              {selectedCount > 0 ? `${selectedCount} selected` : "Select"}
+            </span>
+          </label>
+          {selectedCount > 0 && (
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() =>
+                  onDownloadMany(selectedEntries.map((e) => pathFor(e.name)))
+                }
+                className="rounded border border-term-accent/40 bg-term-accent/10 px-2 py-0.5 text-term-accent hover:bg-term-accent/20"
+              >
+                ↓ Download zip
+              </button>
+              <button
+                type="button"
+                onClick={() => onDeleteMany(selectedEntries)}
+                className="rounded border border-term-red/40 px-2 py-0.5 text-term-red hover:bg-term-red/10"
+              >
+                ✕ Delete
+              </button>
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="rounded px-2 py-0.5 text-term-muted hover:text-term-text"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Listing (drop target) */}
       <div
         className={cn(
@@ -291,9 +375,25 @@ export function FileBrowser({
                 <tr
                   key={entry.name}
                   onDoubleClick={open}
-                  className="cursor-pointer border-b border-term-border/50 hover:bg-term-panel/60"
+                  className={cn(
+                    "cursor-pointer border-b border-term-border/50 hover:bg-term-panel/60",
+                    isSelected(entry.name) && "bg-term-accent/5",
+                  )}
                 >
-                  <td className="w-full py-1.5 pl-3 pr-2">
+                  <td
+                    className="w-8 py-1.5 pl-3 pr-0 align-middle"
+                    onDoubleClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected(entry.name)}
+                      onChange={() => toggleOne(entry.name)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="accent-term-accent"
+                      aria-label={`Select ${entry.name}`}
+                    />
+                  </td>
+                  <td className="w-full py-1.5 pl-1 pr-2">
                     <button
                       type="button"
                       onClick={() => isDir && onNavigate(target)}

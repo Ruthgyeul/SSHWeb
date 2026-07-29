@@ -115,10 +115,17 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   stored or logged; the remote host enforces its own auth/permissions; host keys
   are checked trust-on-first-use (fingerprint prompt + browser known-hosts) and
   keyboard-interactive/2FA is supported;
-  `SSH_ALLOWED_HOSTS`, `SSH_MAX_SESSIONS` and `SSH_MAX_DOWNLOAD_BYTES` (server
-  env, read in `server.mjs`) gate reachable hosts, concurrency and download
-  size. The CSP's `connect-src 'self'` already authorizes the same-origin
-  WebSocket — don't widen it for this feature.
+  `SSH_ALLOWED_HOSTS`, `SSH_MAX_SESSIONS`, `SSH_MAX_DOWNLOAD_BYTES` and
+  `SSH_MAX_UPLOAD_BYTES` (server env, read in `server.mjs`) gate reachable hosts,
+  concurrency and transfer size, while `SSH_RATE_LIMIT_MAX` /
+  `SSH_RATE_LIMIT_WINDOW_MS` throttle per-IP connection attempts. The WebSocket
+  upgrade is origin-checked (same-origin by default, or `SSH_ALLOWED_ORIGINS`)
+  to block cross-site WebSocket hijacking. The security-critical pure logic
+  (origin check, rate limiter, IP resolution, upload accounting) lives in
+  `src/lib/serverSecurity.ts` (unit-tested) and is hand-mirrored in `server.mjs`
+  — the same "two synchronized places" discipline as the wire protocol. The
+  CSP's `connect-src 'self'` already authorizes the same-origin WebSocket —
+  don't widen it for this feature.
 
 ## Assets
 

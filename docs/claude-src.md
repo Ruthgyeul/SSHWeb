@@ -26,6 +26,7 @@ src/
 │   ├── theme.ts         # palette as TS tokens (OG image only)
 │   ├── og.tsx           # shared OG/Twitter image renderer
 │   ├── sshProtocol.ts   # web-SSH wire types + pure helpers (+ .test.ts)
+│   ├── serverSecurity.ts # origin check / rate limiter / IP + upload cap (mirrored in server.mjs, + .test.ts)
 │   └── utils.ts         # cn() classname helper (+ utils.test.ts)
 └── styles/
     └── globals.css      # Tailwind import + @theme palette + terminal utilities
