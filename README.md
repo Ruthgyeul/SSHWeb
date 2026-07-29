@@ -66,7 +66,8 @@ and is read from `NEXT_PUBLIC_*` environment variables. Copy `.env.example` to
 | `NEXT_PUBLIC_ALLOW_INDEXING`   | `false` to block crawlers on staging            |
 
 The SSH bridge has its own (server-only) settings — `SSH_ALLOWED_HOSTS`,
-`SSH_MAX_SESSIONS`, `SSH_MAX_DOWNLOAD_BYTES`, `NEXT_PUBLIC_SSH_WS_PATH` — covered
+`SSH_MAX_SESSIONS`, `SSH_MAX_DOWNLOAD_BYTES`, `SSH_MAX_UPLOAD_BYTES`,
+`SSH_RATE_LIMIT_MAX`, `SSH_ALLOWED_ORIGINS`, `NEXT_PUBLIC_SSH_WS_PATH` — covered
 under [Security](#security). See [`.env.example`](.env.example) for the full,
 commented list.
 
@@ -145,10 +146,14 @@ mirrors the same message names.
 - **The remote host is still the gatekeeper** — you only get the access your own
   credentials grant, with the host enforcing its own auth and file permissions.
 - **`SSH_ALLOWED_HOSTS`** (server-only) optionally restricts which hosts may be
-  reached (empty = anywhere). **`SSH_MAX_SESSIONS`** caps concurrent sessions and
-  **`SSH_MAX_DOWNLOAD_BYTES`** bounds a single SFTP download.
-- The CSP only allows same-origin WebSockets, so a page can reach *this* site's
-  relay and nothing else.
+  reached (empty = anywhere). **`SSH_MAX_SESSIONS`** caps concurrent sessions,
+  **`SSH_MAX_DOWNLOAD_BYTES`** / **`SSH_MAX_UPLOAD_BYTES`** bound a single SFTP
+  transfer, and **`SSH_RATE_LIMIT_MAX`** / **`SSH_RATE_LIMIT_WINDOW_MS`** throttle
+  per-IP connection attempts so the bridge can't be used as a brute-force relay.
+- **The WebSocket upgrade is origin-checked** (same-origin by default, or an
+  explicit **`SSH_ALLOWED_ORIGINS`** allowlist) to block cross-site WebSocket
+  hijacking. The CSP also only allows same-origin WebSockets, so a page can reach
+  *this* site's relay and nothing else.
 
 > Run it behind HTTPS/TLS in production so credentials and session bytes travel
 > over `wss://`, and keep the allowlist tight if the deployment is public.

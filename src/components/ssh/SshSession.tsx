@@ -668,6 +668,30 @@ export function SshSession({
         }),
     });
   };
+  // Bulk delete: one confirm for the whole selection, then a `sftp-rm` per
+  // entry (same per-item semantics as a single delete — directories must be
+  // empty). Each ok refreshes the listing, which prunes the selection.
+  const onDeleteMany = (items: FileEntry[]) => {
+    if (items.length === 0) return;
+    const hasDir = items.some((e) => e.type === "dir");
+    setDialog({
+      title: `Delete ${items.length} item${items.length > 1 ? "s" : ""}?`,
+      message: hasDir
+        ? "Selected directories must be empty. This cannot be undone."
+        : "This cannot be undone.",
+      confirmLabel: "Delete",
+      danger: true,
+      onConfirm: () => {
+        for (const entry of items) {
+          send({
+            t: "sftp-rm",
+            path: joinPath(cwd, entry.name),
+            dir: entry.type === "dir",
+          });
+        }
+      },
+    });
+  };
   // Chunked upload with progress: one sftp-write per chunk, throttled by the
   // socket's buffered amount so a big file doesn't flood the connection.
   const uploadFile = async (file: File, dir: string) => {
@@ -870,7 +894,9 @@ export function SshSession({
               onRefresh={() => listDir(cwd)}
               onDownload={(path) => send({ t: "sftp-read", path })}
               onDownloadDir={(path) => send({ t: "sftp-download-dir", path })}
+              onDownloadMany={(paths) => send({ t: "sftp-download-many", paths })}
               onDelete={onDelete}
+              onDeleteMany={onDeleteMany}
               onUpload={(file) => uploadFile(file, cwd)}
               onMkdir={onMkdir}
               onTouch={onTouch}
