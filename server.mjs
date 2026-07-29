@@ -225,6 +225,8 @@ wss.on("connection", (ws) => {
   let pendingKbdFinish = null; // (responses: string[]) => void
   // In-flight chunked uploads, keyed by remote path → { stream }.
   const uploads = new Map();
+  // In-flight download read streams, so they can be torn down on cleanup.
+  const downloads = new Set();
 
   const send = (obj) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
@@ -275,6 +277,14 @@ wss.on("connection", (ws) => {
       }
     }
     uploads.clear();
+    for (const stream of downloads) {
+      try {
+        stream.destroy();
+      } catch {
+        /* stream already gone */
+      }
+    }
+    downloads.clear();
     ssh = null;
     shell = null;
     sftp = null;
@@ -497,16 +507,62 @@ wss.on("connection", (ws) => {
                 "sftp",
               );
             }
-            s.readFile(msg.path, (err, buffer) => {
-              if (err) return sendError(err.message, "sftp");
-              send({
-                t: "sftp-read",
-                path: msg.path,
-                name: msg.path.split("/").pop() || "download",
-                dataB64: buffer.toString("base64"),
-                edit: msg.edit === true,
-                preview: msg.preview === true,
+            const name = msg.path.split("/").pop() || "download";
+
+            // Edit/preview need the whole file in one message (they build an
+            // editor buffer or a data: URL); they're already size-capped above.
+            if (msg.edit === true || msg.preview === true) {
+              s.readFile(msg.path, (err, buffer) => {
+                if (err) return sendError(err.message, "sftp");
+                send({
+                  t: "sftp-read",
+                  path: msg.path,
+                  name,
+                  dataB64: buffer.toString("base64"),
+                  edit: msg.edit === true,
+                  preview: msg.preview === true,
+                });
               });
+              return;
+            }
+
+            // Plain download: stream in chunks so the browser can show progress.
+            // Pause on WebSocket backpressure and resume when it drains, so a big
+            // file never balloons the send buffer.
+            const stream = s.createReadStream(msg.path);
+            downloads.add(stream);
+            send({
+              t: "sftp-download-begin",
+              path: msg.path,
+              name,
+              size: stats.size,
+            });
+            stream.on("data", (chunk) => {
+              send({
+                t: "sftp-download-chunk",
+                path: msg.path,
+                dataB64: chunk.toString("base64"),
+              });
+              if (ws.bufferedAmount > 8 * 1024 * 1024) {
+                stream.pause();
+                const resume = setInterval(() => {
+                  if (ws.readyState !== ws.OPEN) {
+                    clearInterval(resume);
+                    stream.destroy();
+                  } else if (ws.bufferedAmount < 1 * 1024 * 1024) {
+                    clearInterval(resume);
+                    stream.resume();
+                  }
+                }, 25);
+              }
+            });
+            stream.on("error", (err) => {
+              downloads.delete(stream);
+              sendError(err.message, "sftp");
+            });
+            stream.on("end", () => {
+              downloads.delete(stream);
+              send({ t: "sftp-download-end", path: msg.path });
             });
           }),
         );

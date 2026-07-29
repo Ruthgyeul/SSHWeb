@@ -19,11 +19,14 @@ import { SITE_NAME, SSH_WS_PATH } from "@/config/siteConfig";
 import { cn } from "@/lib/utils";
 import { XtermView, type XtermHandle } from "./XtermView";
 import { ConnectForm, type ConnectDetails } from "./ConnectForm";
-import { FileBrowser, type UploadItem } from "./FileBrowser";
+import { FileBrowser, type UploadItem, type DownloadItem } from "./FileBrowser";
 import { FileEditor } from "./FileEditor";
 import { FilePreview } from "./FilePreview";
 import { PasteConfirm } from "./PasteConfirm";
+import { PromptDialog, type DialogRequest } from "./PromptDialog";
 import { MobileKeys } from "./MobileKeys";
+import { SnippetsBar } from "./SnippetsBar";
+import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TerminalSettings } from "./TerminalSettings";
 import { useTerminalPrefs } from "./useTerminalPrefs";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
@@ -113,6 +116,18 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/** Concatenate a list of byte chunks into one contiguous buffer. */
+function concatBytes(chunks: Uint8Array[]): Uint8Array<ArrayBuffer> {
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Uint8Array(new ArrayBuffer(total));
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.length;
+  }
+  return out;
+}
+
 /** Kick off a browser download of some bytes. */
 function triggerDownload(name: string, bytes: Uint8Array<ArrayBuffer>) {
   const url = URL.createObjectURL(new Blob([bytes]));
@@ -163,12 +178,24 @@ export function SshSession({
   const [editorSaving, setEditorSaving] = useState(false);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [uploads, setUploads] = useState<Record<string, UploadItem>>({});
+  const [downloads, setDownloads] = useState<Record<string, DownloadItem>>({});
+  // Accumulated download chunks (bytes), keyed by remote path. A ref so pushing
+  // chunks doesn't re-render; the `downloads` state above drives the progress UI.
+  const downloadBuffersRef = useRef<
+    Record<string, { name: string; chunks: Uint8Array[] }>
+  >({});
   const editorSaveTextRef = useRef("");
 
   // Round-trip latency (ms) to the SSH bridge, sampled while connected.
   const [latency, setLatency] = useState<number | null>(null);
+  // Epoch ms when the session first reached "connected" (drives the uptime clock).
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
   // A pending multi-line paste awaiting user confirmation before it runs.
   const [pastePending, setPastePending] = useState<string | null>(null);
+  // The active in-app prompt/confirm dialog (replaces window.prompt/confirm).
+  const [dialog, setDialog] = useState<DialogRequest | null>(null);
+  // Whether the keyboard-shortcuts cheat sheet is open.
+  const [showShortcuts, setShowShortcuts] = useState(false);
 
   // Terminal appearance (font size + color theme), shared across all sessions.
   const [termPrefs, updateTermPrefs] = useTerminalPrefs();
@@ -213,6 +240,7 @@ export function SshSession({
             reconnectingRef.current = false;
             attemptRef.current = 0;
             setStatus("connected");
+            setConnectedAt((at) => at ?? Date.now());
             setStatusMessage("");
             xtermRef.current?.writeln(
               "\x1b[32m✓ Connected.\x1b[0m Type as you would in any shell.",
@@ -284,6 +312,42 @@ export function SshSession({
             triggerDownload(msg.name, base64ToBytes(msg.dataB64));
           }
           break;
+
+        case "sftp-download-begin":
+          downloadBuffersRef.current[msg.path] = { name: msg.name, chunks: [] };
+          setDownloads((d) => ({
+            ...d,
+            [msg.path]: { name: msg.name, received: 0, total: msg.size },
+          }));
+          break;
+
+        case "sftp-download-chunk": {
+          const buf = downloadBuffersRef.current[msg.path];
+          if (!buf) break;
+          const bytes = base64ToBytes(msg.dataB64);
+          buf.chunks.push(bytes);
+          setDownloads((d) => {
+            const cur = d[msg.path];
+            if (!cur) return d;
+            return {
+              ...d,
+              [msg.path]: { ...cur, received: cur.received + bytes.length },
+            };
+          });
+          break;
+        }
+
+        case "sftp-download-end": {
+          const buf = downloadBuffersRef.current[msg.path];
+          delete downloadBuffersRef.current[msg.path];
+          setDownloads((d) => {
+            const rest = { ...d };
+            delete rest[msg.path];
+            return rest;
+          });
+          if (buf) triggerDownload(buf.name, concatBytes(buf.chunks));
+          break;
+        }
 
         case "sftp-ok":
           if (msg.op === "write") {
@@ -405,6 +469,7 @@ export function SshSession({
       setStatusMessage("");
       setAuthPrompt(null);
       setLatency(null);
+      setConnectedAt(null);
       setTarget({ user: details.username, host: details.host });
       openSocket(details);
     },
@@ -432,8 +497,13 @@ export function SshSession({
     setEditor(null);
     setPreview(null);
     setPastePending(null);
+    setDialog(null);
+    setShowShortcuts(false);
     setLatency(null);
+    setConnectedAt(null);
     setUploads({});
+    setDownloads({});
+    downloadBuffersRef.current = {};
     setHasLast(false);
     ctrlRef.current = false;
     altRef.current = false;
@@ -571,13 +641,31 @@ export function SshSession({
     }
   };
 
-  // --- File browser actions ---
+  // Inject a saved snippet's command into the shell (no trailing newline — the
+  // user reviews and presses Enter, matching the paste-confirm posture).
+  const runSnippet = (command: string) => {
+    if (!connected) return;
+    disarmMods();
+    send({ t: "data", data: command });
+    xtermRef.current?.focus();
+  };
+
+  // --- File browser actions (in-app dialogs, not window.prompt/confirm) ---
   const onDelete = (entry: FileEntry) => {
-    if (!window.confirm(`Delete "${entry.name}"?`)) return;
-    send({
-      t: "sftp-rm",
-      path: joinPath(cwd, entry.name),
-      dir: entry.type === "dir",
+    setDialog({
+      title: `Delete “${entry.name}”?`,
+      message:
+        entry.type === "dir"
+          ? "The directory must be empty. This cannot be undone."
+          : "This cannot be undone.",
+      confirmLabel: "Delete",
+      danger: true,
+      onConfirm: () =>
+        send({
+          t: "sftp-rm",
+          path: joinPath(cwd, entry.name),
+          dir: entry.type === "dir",
+        }),
     });
   };
   // Chunked upload with progress: one sftp-write per chunk, throttled by the
@@ -612,36 +700,56 @@ export function SshSession({
     } while (offset < total);
   };
   const onMkdir = () => {
-    const name = window.prompt("New directory name:");
-    if (name) send({ t: "sftp-mkdir", path: joinPath(cwd, name) });
+    setDialog({
+      title: "New directory",
+      input: { label: "Directory name", placeholder: "e.g. logs" },
+      confirmLabel: "Create",
+      validate: (v) => (v.trim() ? null : "Please enter a name."),
+      onConfirm: (v) => send({ t: "sftp-mkdir", path: joinPath(cwd, v.trim()) }),
+    });
   };
   const onTouch = () => {
-    const name = window.prompt("New file name:");
-    const trimmed = name?.trim();
-    if (trimmed) send({ t: "sftp-write", path: joinPath(cwd, trimmed), dataB64: "" });
+    setDialog({
+      title: "New file",
+      input: { label: "File name", placeholder: "e.g. notes.txt" },
+      confirmLabel: "Create",
+      validate: (v) => (v.trim() ? null : "Please enter a name."),
+      onConfirm: (v) =>
+        send({ t: "sftp-write", path: joinPath(cwd, v.trim()), dataB64: "" }),
+    });
   };
   const onRename = (entry: FileEntry) => {
-    const next = window.prompt(`Rename "${entry.name}" to:`, entry.name);
-    if (next && next !== entry.name) {
-      send({
-        t: "sftp-rename",
-        from: joinPath(cwd, entry.name),
-        to: joinPath(cwd, next),
-      });
-    }
+    setDialog({
+      title: `Rename “${entry.name}”`,
+      input: { label: "New name", initialValue: entry.name },
+      confirmLabel: "Rename",
+      validate: (v) => (v.trim() ? null : "Please enter a name."),
+      onConfirm: (v) => {
+        const next = v.trim();
+        if (next && next !== entry.name) {
+          send({
+            t: "sftp-rename",
+            from: joinPath(cwd, entry.name),
+            to: joinPath(cwd, next),
+          });
+        }
+      },
+    });
   };
   const onChmod = (entry: FileEntry) => {
-    const input = window.prompt(
-      `Permissions for "${entry.name}" (octal, e.g. 644):`,
-      modeToOctal(entry.mode),
-    );
-    if (input === null) return;
-    const mode = parseOctalMode(input);
-    if (mode === null) {
-      setStatusMessage("Invalid mode — use 3–4 octal digits like 644.");
-      return;
-    }
-    send({ t: "sftp-chmod", path: joinPath(cwd, entry.name), mode });
+    setDialog({
+      title: `Permissions for “${entry.name}”`,
+      input: { label: "Octal mode (e.g. 644)", initialValue: modeToOctal(entry.mode) },
+      confirmLabel: "Apply",
+      validate: (v) =>
+        parseOctalMode(v) === null ? "Use 3–4 octal digits like 644." : null,
+      onConfirm: (v) => {
+        const mode = parseOctalMode(v);
+        if (mode !== null) {
+          send({ t: "sftp-chmod", path: joinPath(cwd, entry.name), mode });
+        }
+      },
+    });
   };
   const onSaveEdit = (text: string) => {
     if (!editor) return;
@@ -662,10 +770,20 @@ export function SshSession({
         <span className="truncate text-xs text-term-dim">
           {target ? `${target.user}@${target.host}` : "Not connected"}
         </span>
+        {connected && connectedAt !== null && <Uptime since={connectedAt} />}
         {connected && latency !== null && <LatencyChip ms={latency} />}
 
         {connected && (
           <div className="ml-auto flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setShowShortcuts(true)}
+              className="rounded px-2 py-1 text-xs text-term-muted transition-colors hover:text-term-text"
+              title="Keyboard shortcuts"
+              aria-label="Keyboard shortcuts"
+            >
+              ?
+            </button>
             {tab === "terminal" && (
               <button
                 type="button"
@@ -725,6 +843,7 @@ export function SshSession({
               theme={getThemePreset(termPrefs.themeId).theme}
             />
           </div>
+          {connected && <SnippetsBar onRun={runSnippet} />}
           {connected && (
             <MobileKeys
               ctrlActive={ctrlArmed}
@@ -746,6 +865,7 @@ export function SshSession({
               entries={entries}
               loading={filesLoading}
               uploads={Object.values(uploads)}
+              downloads={Object.values(downloads)}
               onNavigate={listDir}
               onRefresh={() => listDir(cwd)}
               onDownload={(path) => send({ t: "sftp-read", path })}
@@ -876,6 +996,14 @@ export function SshSession({
           />
         )}
 
+        {dialog && (
+          <PromptDialog request={dialog} onClose={() => setDialog(null)} />
+        )}
+
+        {showShortcuts && (
+          <ShortcutsHelp onClose={() => setShowShortcuts(false)} />
+        )}
+
         {authPrompt && (
           <AuthPromptModal
             prompt={authPrompt}
@@ -905,6 +1033,31 @@ export function StatusDot({ status }: { status: SessionStatus }) {
       )}
       aria-hidden
     />
+  );
+}
+
+/** Live "connected for" clock, ticking once a second (mm:ss, or h:mm:ss). */
+function Uptime({ since }: { since: number }) {
+  // Seed with `since` (elapsed 0) so render stays pure; the interval advances it
+  // to real time on the first tick (~1s later — an unnoticeable initial delay).
+  const [now, setNow] = useState(since);
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const total = Math.max(0, Math.floor((now - since) / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const label = h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  return (
+    <span
+      className="flex-none tabular-nums text-[11px] text-term-faint"
+      title="Connected for"
+    >
+      ⏱ {label}
+    </span>
   );
 }
 

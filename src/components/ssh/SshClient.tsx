@@ -19,6 +19,27 @@ export function SshClient() {
   const [ids, setIds] = useState<number[]>([0]);
   const [activeId, setActiveId] = useState(0);
   const [metas, setMetas] = useState<Record<number, SessionMeta>>({});
+  // User-assigned tab names (override the auto `user@host` label). Editing state
+  // holds the id being renamed and the in-progress draft.
+  const [names, setNames] = useState<Record<number, string>>({});
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+
+  const startRename = useCallback((id: number, current: string) => {
+    setEditingId(id);
+    setDraft(current);
+  }, []);
+
+  const commitRename = useCallback((id: number) => {
+    setNames((prev) => {
+      const name = draft.trim();
+      const next = { ...prev };
+      if (name) next[id] = name;
+      else delete next[id];
+      return next;
+    });
+    setEditingId(null);
+  }, [draft]);
 
   // Record a session's reported label/status, bailing out when unchanged so a
   // child re-render doesn't cascade into a parent update loop.
@@ -52,6 +73,11 @@ export function SshClient() {
         delete rest[id];
         return rest;
       });
+      setNames((prev) => {
+        const rest = { ...prev };
+        delete rest[id];
+        return rest;
+      });
     },
     [],
   );
@@ -63,6 +89,7 @@ export function SshClient() {
         {ids.map((id) => {
           const meta = metas[id];
           const isActive = id === activeId;
+          const label = names[id] ?? meta?.label ?? "New session";
           return (
             <div
               key={id}
@@ -73,16 +100,36 @@ export function SshClient() {
                   : "border-term-border bg-term-panel text-term-muted hover:text-term-text",
               )}
             >
-              <button
-                type="button"
-                onClick={() => setActiveId(id)}
-                className="flex items-center gap-2"
-              >
-                <StatusDot status={meta?.status ?? "idle"} />
-                <span className="max-w-[12rem] truncate">
-                  {meta?.label ?? "New session"}
-                </span>
-              </button>
+              {editingId === id ? (
+                <input
+                  value={draft}
+                  autoFocus
+                  onChange={(e) => setDraft(e.target.value)}
+                  onBlur={() => commitRename(id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitRename(id);
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      setEditingId(null);
+                    }
+                  }}
+                  placeholder={meta?.label ?? "Tab name"}
+                  className="w-32 rounded border border-term-accent/40 bg-term-panel px-1.5 py-0.5 text-xs text-term-text outline-none"
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setActiveId(id)}
+                  onDoubleClick={() => startRename(id, label)}
+                  title="Double-click to rename"
+                  className="flex items-center gap-2"
+                >
+                  <StatusDot status={meta?.status ?? "idle"} />
+                  <span className="max-w-[12rem] truncate">{label}</span>
+                </button>
+              )}
               {ids.length > 1 && (
                 <button
                   type="button"
