@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import {
+  filterEntries,
   formatMode,
   formatSize,
   isProbablyImageFile,
@@ -90,7 +91,18 @@ export function FileBrowser({
   const [selection, setSelection] = useState<{ cwd: string; names: Set<string> }>(
     { cwd, names: new Set() },
   );
+  // In-CWD name filter, tagged with the directory it applies to. Tagging by
+  // `cwd` makes it derive back to empty on navigation (no effect needed), the
+  // same trick the selection above uses.
+  const [filterState, setFilterState] = useState({ cwd, value: "" });
+  const filter = filterState.cwd === cwd ? filterState.value : "";
+  const setFilter = (value: string) => setFilterState({ cwd, value });
+
   const sorted = sortEntries(entries);
+  // The rows actually shown: `sorted` narrowed by the filter box. Selection is
+  // kept against the full listing (below) so filtering never drops checks.
+  const visible = filterEntries(sorted, filter);
+  const filtering = filter.trim() !== "";
   const atRoot = cwd === "/";
   const segments = pathSegments(cwd);
   const pathFor = (name: string) => `${cwd.replace(/\/$/, "")}/${name}`;
@@ -99,7 +111,11 @@ export function FileBrowser({
   const isSelected = (name: string) => selNames.has(name);
   const selectedEntries = sorted.filter((e) => selNames.has(e.name));
   const selectedCount = selectedEntries.length;
-  const allSelected = sorted.length > 0 && selectedCount === sorted.length;
+  // Select-all acts on the visible rows: "all selected" means every visible
+  // row is checked, and toggling adds/removes only the visible set (any checks
+  // on rows hidden by the filter are preserved).
+  const allSelected =
+    visible.length > 0 && visible.every((e) => selNames.has(e.name));
   const someSelected = selectedCount > 0 && !allSelected;
 
   const toggleOne = (name: string) =>
@@ -110,9 +126,11 @@ export function FileBrowser({
       return { cwd, names: next };
     });
   const toggleAll = () =>
-    setSelection({
-      cwd,
-      names: allSelected ? new Set() : new Set(sorted.map((e) => e.name)),
+    setSelection((prev) => {
+      const next = new Set(prev.cwd === cwd ? prev.names : []);
+      if (allSelected) for (const e of visible) next.delete(e.name);
+      else for (const e of visible) next.add(e.name);
+      return { cwd, names: next };
     });
   const clearSelection = () => setSelection({ cwd, names: new Set() });
 
@@ -222,6 +240,45 @@ export function FileBrowser({
           }}
         />
       </div>
+
+      {/* In-CWD name filter */}
+      {sorted.length > 0 && (
+        <div className="flex items-center gap-2 border-b border-term-border bg-term-panel/30 px-3 py-1.5">
+          <span className="text-xs text-term-faint" aria-hidden>
+            🔍
+          </span>
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setFilter("");
+            }}
+            placeholder="Filter files by name…"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="min-w-0 flex-1 bg-transparent font-mono text-xs text-term-text outline-none placeholder:text-term-faint"
+            aria-label="Filter files by name"
+          />
+          {filtering && (
+            <>
+              <span className="tabular-nums text-xs text-term-faint">
+                {visible.length}/{sorted.length}
+              </span>
+              <button
+                type="button"
+                onClick={() => setFilter("")}
+                className="rounded px-1 text-xs text-term-muted hover:text-term-text"
+                aria-label="Clear filter"
+                title="Clear filter (Esc)"
+              >
+                ✕
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Upload progress */}
       {uploads.length > 0 && (
@@ -356,9 +413,24 @@ export function FileBrowser({
             </p>
           </div>
         )}
+        {!loading && sorted.length > 0 && visible.length === 0 && (
+          <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
+            <span className="text-3xl opacity-60" aria-hidden>
+              🔍
+            </span>
+            <p className="text-sm">No files match “{filter.trim()}”</p>
+            <button
+              type="button"
+              onClick={() => setFilter("")}
+              className="text-xs text-term-accent hover:text-term-accent-soft"
+            >
+              Clear filter
+            </button>
+          </div>
+        )}
         <table className="w-full border-collapse text-sm">
           <tbody>
-            {sorted.map((entry) => {
+            {visible.map((entry) => {
               const isDir = entry.type === "dir";
               const target = `${cwd.replace(/\/$/, "")}/${entry.name}`;
               const editable = !isDir && isProbablyTextFile(entry.name);
