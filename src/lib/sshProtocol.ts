@@ -115,6 +115,13 @@ export type ServerMessage =
   // Reply to a `ping`, carrying the original `ts` so the client can compute the
   // round-trip time.
   | { t: "pong"; ts: number }
+  // Streamed download (plain download only — edit/preview reads still arrive as a
+  // single `sftp-read`). `begin` announces the total size, `chunk`s carry the
+  // base64 bytes in order, and `end` closes the stream so the client assembles
+  // and saves the file. This is what drives the download progress bar.
+  | { t: "sftp-download-begin"; path: string; name: string; size: number }
+  | { t: "sftp-download-chunk"; path: string; dataB64: string }
+  | { t: "sftp-download-end"; path: string }
   // A keyboard-interactive challenge (used for OTP / 2FA and some password
   // flows). The client collects answers and replies with `kbd-response`.
   | {
@@ -330,6 +337,31 @@ export function joinPath(base: string, segment: string): string {
 /** The parent directory of a POSIX path (`/a/b/c` → `/a/b`, `/` → `/`). */
 export function parentPath(path: string): string {
   return joinPath(path, "..") || "/";
+}
+
+/** A clickable breadcrumb segment: its display `name` and the absolute `path`. */
+export interface PathSegment {
+  name: string;
+  path: string;
+}
+
+/**
+ * Split an absolute POSIX path into cumulative breadcrumb segments, e.g.
+ * `/home/user/docs` → `[{home,/home}, {user,/home/user}, {docs,/home/user/docs}]`.
+ * A non-absolute path (e.g. the pre-resolve `~` placeholder) yields no segments;
+ * the caller renders the root crumb separately.
+ */
+export function pathSegments(path: string): PathSegment[] {
+  const trimmed = path.trim();
+  if (!trimmed.startsWith("/")) return [];
+  const out: PathSegment[] = [];
+  let acc = "";
+  for (const part of trimmed.split("/")) {
+    if (part === "") continue;
+    acc += `/${part}`;
+    out.push({ name: part, path: acc });
+  }
+  return out;
 }
 
 /**

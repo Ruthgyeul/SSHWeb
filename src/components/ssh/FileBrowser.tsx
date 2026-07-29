@@ -7,6 +7,7 @@ import {
   isProbablyImageFile,
   isProbablyTextFile,
   parentPath,
+  pathSegments,
   sortEntries,
   type FileEntry,
 } from "@/lib/sshProtocol";
@@ -16,6 +17,13 @@ import { cn } from "@/lib/utils";
 export interface UploadItem {
   name: string;
   sent: number;
+  total: number;
+}
+
+/** One in-flight download's progress, shown in the progress panel. */
+export interface DownloadItem {
+  name: string;
+  received: number;
   total: number;
 }
 
@@ -34,6 +42,7 @@ export function FileBrowser({
   entries,
   loading,
   uploads,
+  downloads,
   onNavigate,
   onDownload,
   onDownloadDir,
@@ -51,6 +60,7 @@ export function FileBrowser({
   entries: FileEntry[];
   loading: boolean;
   uploads: UploadItem[];
+  downloads: DownloadItem[];
   onNavigate: (path: string) => void;
   onDownload: (path: string) => void;
   onDownloadDir: (path: string) => void;
@@ -68,6 +78,7 @@ export function FileBrowser({
   const [dragging, setDragging] = useState(false);
   const sorted = sortEntries(entries);
   const atRoot = cwd === "/";
+  const segments = pathSegments(cwd);
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -91,9 +102,45 @@ export function FileBrowser({
         >
           ↑ up
         </button>
-        <code className="min-w-0 flex-1 truncate rounded bg-term-panel px-2 py-1 text-xs text-term-dim">
-          {cwd || "~"}
-        </code>
+        {/* Breadcrumb: click any segment to jump straight to that directory. */}
+        <nav
+          className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded bg-term-panel px-2 py-1 text-xs"
+          aria-label="Current path"
+        >
+          {segments.length === 0 ? (
+            <span className="truncate text-term-dim">{cwd || "~"}</span>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => onNavigate("/")}
+                disabled={loading}
+                className="flex-none text-term-muted hover:text-term-accent"
+                title="Root"
+              >
+                /
+              </button>
+              {segments.map((seg, i) => (
+                <span key={seg.path} className="flex flex-none items-center gap-0.5">
+                  {i > 0 && <span className="text-term-faint">/</span>}
+                  <button
+                    type="button"
+                    onClick={() => onNavigate(seg.path)}
+                    disabled={loading}
+                    className={cn(
+                      "max-w-[10rem] truncate",
+                      i === segments.length - 1
+                        ? "text-term-dim"
+                        : "text-term-muted hover:text-term-accent",
+                    )}
+                  >
+                    {seg.name}
+                  </button>
+                </span>
+              ))}
+            </>
+          )}
+        </nav>
         <button
           type="button"
           onClick={onRefresh}
@@ -154,6 +201,30 @@ export function FileBrowser({
                 <div className="mt-1 h-1 overflow-hidden rounded bg-term-border">
                   <div
                     className="h-full bg-term-accent transition-all"
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Download progress */}
+      {downloads.length > 0 && (
+        <div className="flex flex-col gap-1.5 border-b border-term-border bg-term-panel/50 px-3 py-2">
+          {downloads.map((d) => {
+            const pct =
+              d.total > 0 ? Math.round((d.received / d.total) * 100) : 100;
+            return (
+              <div key={d.name} className="text-xs">
+                <div className="flex justify-between text-term-muted">
+                  <span className="truncate">↓ {d.name}</span>
+                  <span className="ml-2 tabular-nums text-term-faint">{pct}%</span>
+                </div>
+                <div className="mt-1 h-1 overflow-hidden rounded bg-term-border">
+                  <div
+                    className="h-full bg-term-green transition-all"
                     style={{ width: `${pct}%` }}
                   />
                 </div>

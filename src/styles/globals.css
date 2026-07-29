@@ -122,6 +122,22 @@ input:focus-visible,
     );
 }
 
+/* Syntax-highlight token colors for the inline file editor overlay
+   (see src/lib/syntaxHighlight.ts). Kept in the terminal palette. */
+.sx-com {
+  color: var(--color-term-faint);
+  font-style: italic;
+}
+.sx-str {
+  color: var(--color-term-green);
+}
+.sx-num {
+  color: var(--color-term-yellow);
+}
+.sx-kw {
+  color: var(--color-term-accent);
+}
+
 /* The macOS-style traffic-light dots in the window title bar. */
 .term-dot {
   width: 11px;

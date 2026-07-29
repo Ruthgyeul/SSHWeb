@@ -14,6 +14,7 @@ import {
   joinPath,
   modeToOctal,
   parentPath,
+  pathSegments,
   parseAllowlist,
   parseMessage,
   parseOctalMode,
@@ -284,5 +285,27 @@ describe("joinPath / parentPath", () => {
   it("returns the parent directory", () => {
     expect(parentPath("/a/b/c")).toBe("/a/b");
     expect(parentPath("/")).toBe("/");
+  });
+});
+
+describe("pathSegments", () => {
+  it("builds cumulative breadcrumb segments", () => {
+    expect(pathSegments("/home/user/docs")).toEqual([
+      { name: "home", path: "/home" },
+      { name: "user", path: "/home/user" },
+      { name: "docs", path: "/home/user/docs" },
+    ]);
+  });
+
+  it("returns an empty list for root and for non-absolute paths", () => {
+    expect(pathSegments("/")).toEqual([]);
+    expect(pathSegments("~")).toEqual([]);
+  });
+
+  it("collapses duplicate and trailing slashes", () => {
+    expect(pathSegments("/a//b/")).toEqual([
+      { name: "a", path: "/a" },
+      { name: "b", path: "/a/b" },
+    ]);
   });
 });
