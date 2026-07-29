@@ -11,6 +11,9 @@ all from a web page. Built with **Next.js** and a terminal-styled design system.
 ## Features
 
 - **Interactive terminal** (xterm.js) attached to a real remote shell
+- **On-screen key bar for touch devices** — Esc/Tab/Ctrl/Alt/arrows/Fn keys and
+  more; Ctrl/Alt are sticky and combine with the next key you type on the phone
+  keyboard (e.g. tap Ctrl then type `c` → `Ctrl+C`)
 - **Multiple concurrent sessions** as tabs, each an independent connection
 - **Auto-reconnect** — a dropped session retries with backoff, then offers a
   manual "Reconnect" button

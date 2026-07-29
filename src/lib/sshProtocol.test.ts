@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyKeyModifiers,
   compareHostKey,
+  ctrlChar,
   encodeMessage,
   formatMode,
   formatSize,
@@ -120,6 +122,42 @@ describe("hostKeyId / compareHostKey", () => {
     expect(compareHostKey(undefined, "SHA256:aaa")).toBe("new");
     expect(compareHostKey("SHA256:aaa", "SHA256:aaa")).toBe("match");
     expect(compareHostKey("SHA256:aaa", "SHA256:bbb")).toBe("changed");
+  });
+});
+
+describe("ctrlChar / applyKeyModifiers", () => {
+  it("maps letters to control bytes", () => {
+    expect(ctrlChar("c")).toBe("\x03");
+    expect(ctrlChar("C")).toBe("\x03");
+    expect(ctrlChar("a")).toBe("\x01");
+    expect(ctrlChar("z")).toBe("\x1a");
+  });
+
+  it("maps the symbol control forms", () => {
+    expect(ctrlChar("[")).toBe("\x1b");
+    expect(ctrlChar("_")).toBe("\x1f");
+    expect(ctrlChar(" ")).toBe("\x00");
+  });
+
+  it("leaves characters without a control form unchanged", () => {
+    expect(ctrlChar("1")).toBe("1");
+  });
+
+  it("applies ctrl to a single char", () => {
+    expect(applyKeyModifiers("c", { ctrl: true, alt: false })).toBe("\x03");
+  });
+
+  it("applies alt as an ESC prefix", () => {
+    expect(applyKeyModifiers("f", { ctrl: false, alt: true })).toBe("\x1bf");
+  });
+
+  it("combines ctrl+alt", () => {
+    expect(applyKeyModifiers("a", { ctrl: true, alt: true })).toBe("\x1b\x01");
+  });
+
+  it("passes through when no modifiers or multi-char input", () => {
+    expect(applyKeyModifiers("s", { ctrl: false, alt: false })).toBe("s");
+    expect(applyKeyModifiers("hello", { ctrl: true, alt: false })).toBe("hello");
   });
 });
 
