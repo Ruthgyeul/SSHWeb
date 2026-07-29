@@ -471,6 +471,59 @@ export function imageMimeType(name: string): string | null {
   return IMAGE_MIME[ext] ?? null;
 }
 
+/** Video extensions the browser can play inline, mapped to their MIME type. */
+const VIDEO_MIME: Record<string, string> = {
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  mov: "video/quicktime",
+  webm: "video/webm",
+  ogv: "video/ogg",
+  mkv: "video/x-matroska",
+};
+
+/**
+ * Heuristic: is this filename a video we can play inline in the browser?
+ * Matches purely by extension (case-insensitive). Actual playback still depends
+ * on the browser's codec support (e.g. `.mov`/`.mkv` vary), but the `<video>`
+ * element degrades gracefully when a codec is missing.
+ */
+export function isProbablyVideoFile(name: string): boolean {
+  return videoMimeType(name) !== null;
+}
+
+/**
+ * The video MIME type implied by a filename's extension, or `null` when it is
+ * not a previewable video. Used to build the `data:` URL for the preview modal.
+ */
+export function videoMimeType(name: string): string | null {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return null;
+  const ext = name.slice(dot + 1).toLowerCase();
+  return VIDEO_MIME[ext] ?? null;
+}
+
+/** What kind of media the preview modal should render for a file. */
+export type PreviewKind = "image" | "video";
+
+/**
+ * Classify a filename for the inline preview modal: `image`, `video`, or `null`
+ * when it isn't a previewable media file. Images win over videos on the (never
+ * expected) chance an extension appears in both maps.
+ */
+export function previewKind(name: string): PreviewKind | null {
+  if (imageMimeType(name) !== null) return "image";
+  if (videoMimeType(name) !== null) return "video";
+  return null;
+}
+
+/**
+ * Heuristic: can this filename be shown in the inline preview modal (image or
+ * video)? Used by the file browser to decide the double-click/👁 action.
+ */
+export function isProbablyPreviewableFile(name: string): boolean {
+  return previewKind(name) !== null;
+}
+
 /**
  * Heuristic: is this filename likely a text file we can open in the inline
  * editor? Matches by extension, plus a few well-known extensionless dotfiles.

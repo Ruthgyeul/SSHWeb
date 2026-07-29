@@ -11,8 +11,12 @@ import {
   imageMimeType,
   isHostAllowed,
   isProbablyImageFile,
+  isProbablyPreviewableFile,
   isProbablyTextFile,
+  isProbablyVideoFile,
   joinPath,
+  previewKind,
+  videoMimeType,
   modeToOctal,
   parentPath,
   pathSegments,
@@ -223,6 +227,46 @@ describe("image detection", () => {
     expect(imageMimeType("a.svg")).toBe("image/svg+xml");
     expect(imageMimeType("a.txt")).toBeNull();
     expect(imageMimeType("noext")).toBeNull();
+  });
+});
+
+describe("video detection", () => {
+  it("recognizes videos by extension (case-insensitive)", () => {
+    expect(isProbablyVideoFile("clip.mp4")).toBe(true);
+    expect(isProbablyVideoFile("Recording.MOV")).toBe(true);
+    expect(isProbablyVideoFile("screen.webm")).toBe(true);
+  });
+
+  it("returns false for non-videos", () => {
+    expect(isProbablyVideoFile("photo.png")).toBe(false);
+    expect(isProbablyVideoFile("notes.md")).toBe(false);
+    expect(isProbablyVideoFile("noextension")).toBe(false);
+  });
+
+  it("maps extensions to MIME types", () => {
+    expect(videoMimeType("a.mp4")).toBe("video/mp4");
+    expect(videoMimeType("a.m4v")).toBe("video/mp4");
+    expect(videoMimeType("a.MOV")).toBe("video/quicktime");
+    expect(videoMimeType("a.webm")).toBe("video/webm");
+    expect(videoMimeType("a.png")).toBeNull();
+    expect(videoMimeType("noext")).toBeNull();
+  });
+});
+
+describe("previewKind / isProbablyPreviewableFile", () => {
+  it("classifies images and videos, null otherwise", () => {
+    expect(previewKind("photo.png")).toBe("image");
+    expect(previewKind("Banner.JPG")).toBe("image");
+    expect(previewKind("clip.mp4")).toBe("video");
+    expect(previewKind("Recording.MOV")).toBe("video");
+    expect(previewKind("notes.md")).toBeNull();
+    expect(previewKind("noext")).toBeNull();
+  });
+
+  it("is previewable exactly when it is an image or a video", () => {
+    expect(isProbablyPreviewableFile("photo.png")).toBe(true);
+    expect(isProbablyPreviewableFile("clip.mov")).toBe(true);
+    expect(isProbablyPreviewableFile("notes.md")).toBe(false);
   });
 });
 

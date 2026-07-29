@@ -5,8 +5,9 @@ import {
   filterEntries,
   formatMode,
   formatSize,
-  isProbablyImageFile,
+  isProbablyPreviewableFile,
   isProbablyTextFile,
+  isProbablyVideoFile,
   parentPath,
   pathSegments,
   sortEntries,
@@ -434,9 +435,9 @@ export function FileBrowser({
               const isDir = entry.type === "dir";
               const target = `${cwd.replace(/\/$/, "")}/${entry.name}`;
               const editable = !isDir && isProbablyTextFile(entry.name);
-              const previewable = !isDir && isProbablyImageFile(entry.name);
-              // Double-click opens by type: dir → navigate, image → preview,
-              // text → editor, anything else → download.
+              const previewable = !isDir && isProbablyPreviewableFile(entry.name);
+              // Double-click opens by type: dir → navigate, image/video →
+              // preview, text → editor, anything else → download.
               const open = () => {
                 if (isDir) onNavigate(target);
                 else if (previewable) onPreview(target, entry.name);
@@ -476,7 +477,13 @@ export function FileBrowser({
                       )}
                     >
                       <span aria-hidden>
-                        {isDir ? "📁" : entry.type === "link" ? "🔗" : "📄"}
+                        {isDir
+                          ? "📁"
+                          : entry.type === "link"
+                            ? "🔗"
+                            : isProbablyVideoFile(entry.name)
+                              ? "🎞"
+                              : "📄"}
                       </span>
                       <span className="truncate">{entry.name}</span>
                     </button>

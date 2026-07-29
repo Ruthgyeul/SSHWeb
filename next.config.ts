@@ -25,6 +25,9 @@ const csp = [
   "frame-ancestors 'none'",
   "form-action 'self'",
   "img-src 'self' data: blob:",
+  // The file browser previews remote images/videos inline via `data:` URLs
+  // (and downloads via `blob:`); the SSH relay never fetches external media.
+  "media-src 'self' data: blob:",
   "font-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
