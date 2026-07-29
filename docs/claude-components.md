@@ -27,7 +27,7 @@ that actually talks SSH is [`server.mjs`](../server.mjs).
 | `XtermView`   | xterm.js wrapper; xterm is dynamically imported (never during SSR)      |
 | `MobileKeys`  | On-screen key bar (Esc/Tab/Ctrl/Alt/arrows/Fn/…) for touch devices; Ctrl/Alt are sticky one-shot modifiers |
 | `SnippetsBar` | Saved command snippets that inject into the shell (persisted via `useSnippets`) |
-| `FileBrowser` | SFTP listing: **clickable breadcrumb path**, navigate, drag-drop upload+progress, streamed download+progress, delete, rename, chmod, mkdir, touch, folder-zip, image preview, **multi-select** (per-row + select-all checkbox → bulk download-as-zip / delete); **double-click opens** an entry by type (dir → navigate, image → preview, text → editor, else download) |
+| `FileBrowser` | SFTP listing: **clickable breadcrumb path**, navigate, drag-drop upload+progress, streamed download+progress, delete, rename, chmod, mkdir, touch, folder-zip, image preview, **in-CWD name filter** (case-insensitive; select-all acts on the filtered rows), **multi-select** (per-row + select-all checkbox → bulk download-as-zip / delete); **double-click opens** an entry by type (dir → navigate, image → preview, text → editor, else download) |
 | `FileEditor`  | Inline text editor modal: line numbers + lightweight syntax highlighting (`src/lib/syntaxHighlight.ts`), Ctrl/⌘+S to save |
 | `FilePreview` | Read-only image preview modal (data-URL `<img>` + download) for a remote image |
 | `AuthPrompt`  | Modal for host-key (TOFU) confirmation and keyboard-interactive prompts |

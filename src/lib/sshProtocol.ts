@@ -318,6 +318,18 @@ export function sortEntries(entries: FileEntry[]): FileEntry[] {
 }
 
 /**
+ * Filter directory entries by a case-insensitive substring of their name.
+ * A blank/whitespace-only query returns the list unchanged (same array is fine
+ * — callers treat the result as read-only). Used by the file browser's in-CWD
+ * filter box; ordering is preserved so it composes with `sortEntries`.
+ */
+export function filterEntries(entries: FileEntry[], query: string): FileEntry[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return entries;
+  return entries.filter((e) => e.name.toLowerCase().includes(needle));
+}
+
+/**
  * Join a POSIX directory path with a child segment, collapsing `.`/`..` and
  * duplicate slashes. Used to navigate the remote filesystem safely on the
  * client (the server re-resolves independently).

@@ -4,6 +4,7 @@ import {
   compareHostKey,
   ctrlChar,
   encodeMessage,
+  filterEntries,
   formatMode,
   formatSize,
   hostKeyId,
@@ -267,6 +268,33 @@ describe("sortEntries", () => {
     ]);
     // original untouched
     expect(entries[0].name).toBe("zeta.txt");
+  });
+});
+
+describe("filterEntries", () => {
+  const entries: FileEntry[] = [
+    { name: "README.md", type: "file", size: 1, mtime: 0, mode: 0 },
+    { name: "src", type: "dir", size: 0, mtime: 0, mode: 0 },
+    { name: "server.mjs", type: "file", size: 1, mtime: 0, mode: 0 },
+  ];
+
+  it("matches names case-insensitively as a substring", () => {
+    expect(filterEntries(entries, "SER").map((e) => e.name)).toEqual([
+      "server.mjs",
+    ]);
+    expect(filterEntries(entries, "s").map((e) => e.name)).toEqual([
+      "src",
+      "server.mjs",
+    ]);
+  });
+
+  it("returns the list unchanged for a blank query and preserves order", () => {
+    expect(filterEntries(entries, "")).toBe(entries);
+    expect(filterEntries(entries, "   ")).toBe(entries);
+  });
+
+  it("returns an empty list when nothing matches", () => {
+    expect(filterEntries(entries, "nope")).toEqual([]);
   });
 });
 
