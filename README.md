@@ -39,10 +39,11 @@ nvm use
 
 npm install
 cp .env.example .env.local   # optional — sensible defaults work out of the box
-npm run dev                  # http://localhost:3000  (runs the SSH bridge too)
+npm run dev                  # http://localhost:5000  (runs the SSH bridge too)
 ```
 
-Open <http://localhost:3000>, enter a host / username / credentials, and connect.
+Open <http://localhost:5000>, enter a host / username / credentials, and connect.
+(The port is configurable — set `PORT` in `.env.local`, e.g. `PORT=5000`.)
 `npm run dev` and `npm run start` run the custom `server.mjs` (needed for the SSH
 WebSocket); see [How it works](#how-it-works) below.
 

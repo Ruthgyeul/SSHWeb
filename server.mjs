@@ -23,12 +23,19 @@ import { createServer } from "node:http";
 import { parse } from "node:url";
 import { createHash } from "node:crypto";
 import next from "next";
+import nextEnv from "@next/env";
 import { WebSocketServer } from "ws";
 import ssh2 from "ssh2";
 
 const { Client: SSHClient, utils: sshUtils } = ssh2;
+const { loadEnvConfig } = nextEnv;
 
 const dev = process.env.NODE_ENV !== "production";
+// Load `.env`, `.env.local`, `.env.[development|production]`, … into
+// process.env (the same files Next loads) BEFORE reading PORT and friends, so
+// the server port can be set from a .env file — e.g. `PORT=5000` in .env.local.
+loadEnvConfig(process.cwd(), dev);
+
 const hostname = process.env.HOSTNAME || "localhost";
 const port = parseInt(process.env.PORT || "5000", 10);
 
