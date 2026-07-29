@@ -6,6 +6,7 @@ import {
   compareHostKey,
   encodeMessage,
   hostKeyId,
+  imageMimeType,
   joinPath,
   modeToOctal,
   parseMessage,
@@ -13,13 +14,18 @@ import {
   type FileEntry,
   type ServerMessage,
 } from "@/lib/sshProtocol";
-import { SSH_WS_PATH } from "@/config/siteConfig";
+import { getThemePreset } from "@/lib/terminalTheme";
+import { SITE_NAME, SSH_WS_PATH } from "@/config/siteConfig";
 import { cn } from "@/lib/utils";
 import { XtermView, type XtermHandle } from "./XtermView";
 import { ConnectForm, type ConnectDetails } from "./ConnectForm";
 import { FileBrowser, type UploadItem } from "./FileBrowser";
 import { FileEditor } from "./FileEditor";
+import { FilePreview } from "./FilePreview";
+import { PasteConfirm } from "./PasteConfirm";
 import { MobileKeys } from "./MobileKeys";
+import { TerminalSettings } from "./TerminalSettings";
+import { useTerminalPrefs } from "./useTerminalPrefs";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 
 /** Upload chunk size; each chunk is one `sftp-write` message (drives progress). */
@@ -31,6 +37,16 @@ interface EditorState {
   path: string;
   name: string;
   content: string;
+}
+
+/** An image open in the preview modal. */
+interface PreviewState {
+  path: string;
+  name: string;
+  /** `data:` URL for the <img>. */
+  src: string;
+  /** Raw bytes, kept so "Download" doesn't need a second round-trip. */
+  bytes: Uint8Array<ArrayBuffer>;
 }
 
 /** Lifecycle phase of a single SSH session. */
@@ -145,8 +161,17 @@ export function SshSession({
   const [authPrompt, setAuthPrompt] = useState<AuthPromptState | null>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [editorSaving, setEditorSaving] = useState(false);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
   const [uploads, setUploads] = useState<Record<string, UploadItem>>({});
   const editorSaveTextRef = useRef("");
+
+  // Round-trip latency (ms) to the SSH bridge, sampled while connected.
+  const [latency, setLatency] = useState<number | null>(null);
+  // A pending multi-line paste awaiting user confirmation before it runs.
+  const [pastePending, setPastePending] = useState<string | null>(null);
+
+  // Terminal appearance (font size + color theme), shared across all sessions.
+  const [termPrefs, updateTermPrefs] = useTerminalPrefs();
 
   // Sticky on-screen modifiers (mobile key bar). State drives the button
   // highlight; refs let the terminal's own input handler read them synchronously.
@@ -204,6 +229,10 @@ export function SshSession({
           xtermRef.current?.write(base64ToBytes(msg.data));
           break;
 
+        case "pong":
+          setLatency(Math.max(0, Date.now() - msg.ts));
+          break;
+
         case "hostkey": {
           const id = hostKeyId(msg.host, msg.port);
           const verdict = compareHostKey(loadKnownHosts()[id], msg.fingerprint);
@@ -242,6 +271,15 @@ export function SshSession({
           if (msg.edit) {
             const text = new TextDecoder().decode(base64ToBytes(msg.dataB64));
             setEditor({ path: msg.path, name: msg.name, content: text });
+          } else if (msg.preview) {
+            const bytes = base64ToBytes(msg.dataB64);
+            const mime = imageMimeType(msg.name) ?? "application/octet-stream";
+            setPreview({
+              path: msg.path,
+              name: msg.name,
+              src: `data:${mime};base64,${msg.dataB64}`,
+              bytes,
+            });
           } else {
             triggerDownload(msg.name, base64ToBytes(msg.dataB64));
           }
@@ -366,6 +404,7 @@ export function SshSession({
       setStatus("connecting");
       setStatusMessage("");
       setAuthPrompt(null);
+      setLatency(null);
       setTarget({ user: details.username, host: details.host });
       openSocket(details);
     },
@@ -391,6 +430,9 @@ export function SshSession({
     setStatusMessage("");
     setAuthPrompt(null);
     setEditor(null);
+    setPreview(null);
+    setPastePending(null);
+    setLatency(null);
     setUploads({});
     setHasLast(false);
     ctrlRef.current = false;
@@ -451,6 +493,19 @@ export function SshSession({
     }
   }, [active, tab, connected, send]);
 
+  // Sample round-trip latency while connected (one probe now, then every 5s).
+  // The chip is hidden whenever not connected, and disconnect()/reconnect reset
+  // the value, so there's no stale read-out to clear here.
+  useEffect(() => {
+    if (!connected) return;
+    send({ t: "ping", ts: Date.now() });
+    const id = window.setInterval(
+      () => send({ t: "ping", ts: Date.now() }),
+      5000,
+    );
+    return () => window.clearInterval(id);
+  }, [connected, send]);
+
   const connecting = status === "connecting" || status === "reconnecting";
   const showOverlay = !connected;
   const canReconnect = (status === "dropped" || status === "error") && hasLast;
@@ -467,9 +522,14 @@ export function SshSession({
     }
   };
   // Terminal input (phone keyboard or a char key): apply armed modifiers, then
-  // disarm them (one-shot).
+  // disarm them (one-shot). A multi-line paste is held back for confirmation
+  // first (each newline would run as its own command).
   const sendInput = (data: string) => {
     if (!connected) return;
+    if (data.length > 1 && data.includes("\n")) {
+      setPastePending(data);
+      return;
+    }
     const out = applyKeyModifiers(data, {
       ctrl: ctrlRef.current,
       alt: altRef.current,
@@ -555,6 +615,11 @@ export function SshSession({
     const name = window.prompt("New directory name:");
     if (name) send({ t: "sftp-mkdir", path: joinPath(cwd, name) });
   };
+  const onTouch = () => {
+    const name = window.prompt("New file name:");
+    const trimmed = name?.trim();
+    if (trimmed) send({ t: "sftp-write", path: joinPath(cwd, trimmed), dataB64: "" });
+  };
   const onRename = (entry: FileEntry) => {
     const next = window.prompt(`Rename "${entry.name}" to:`, entry.name);
     if (next && next !== entry.name) {
@@ -597,9 +662,25 @@ export function SshSession({
         <span className="truncate text-xs text-term-dim">
           {target ? `${target.user}@${target.host}` : "Not connected"}
         </span>
+        {connected && latency !== null && <LatencyChip ms={latency} />}
 
         {connected && (
           <div className="ml-auto flex items-center gap-1">
+            {tab === "terminal" && (
+              <button
+                type="button"
+                onClick={() => {
+                  setTab("terminal");
+                  xtermRef.current?.openSearch();
+                }}
+                className="rounded px-2 py-1 text-xs text-term-muted transition-colors hover:text-term-text"
+                title="Search terminal (Ctrl+F)"
+                aria-label="Search terminal"
+              >
+                🔍
+              </button>
+            )}
+            <TerminalSettings prefs={termPrefs} onChange={updateTermPrefs} />
             {(["terminal", "files"] as const).map((t) => (
               <button
                 key={t}
@@ -641,6 +722,8 @@ export function SshSession({
               onResize={(cols, rows) =>
                 connected && send({ t: "resize", cols, rows })
               }
+              fontSize={termPrefs.fontSize}
+              theme={getThemePreset(termPrefs.themeId).theme}
             />
           </div>
           {connected && (
@@ -671,9 +754,11 @@ export function SshSession({
               onDelete={onDelete}
               onUpload={(file) => uploadFile(file, cwd)}
               onMkdir={onMkdir}
+              onTouch={onTouch}
               onRename={onRename}
               onChmod={onChmod}
               onEdit={(path) => send({ t: "sftp-read", path, edit: true })}
+              onPreview={(path) => send({ t: "sftp-read", path, preview: true })}
             />
             {editor && (
               <FileEditor
@@ -684,6 +769,16 @@ export function SshSession({
                 saving={editorSaving}
                 onSave={onSaveEdit}
                 onClose={() => setEditor(null)}
+              />
+            )}
+            {preview && (
+              <FilePreview
+                key={preview.path}
+                name={preview.name}
+                path={preview.path}
+                src={preview.src}
+                onDownload={() => triggerDownload(preview.name, preview.bytes)}
+                onClose={() => setPreview(null)}
               />
             )}
           </div>
@@ -729,6 +824,22 @@ export function SshSession({
                 </div>
               ) : (
                 <>
+                  <div className="term-fade-up mb-5 flex items-center gap-3 rounded-lg border border-term-border bg-term-panel/60 px-4 py-3">
+                    <span
+                      className="select-none font-mono text-2xl text-term-accent"
+                      aria-hidden
+                    >
+                      &gt;<span className="term-cursor ml-0.5 align-middle" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-term-text">
+                        {SITE_NAME}
+                      </p>
+                      <p className="truncate text-xs text-term-muted">
+                        SSH &amp; SFTP, right in your browser
+                      </p>
+                    </div>
+                  </div>
                   <h2 className="text-lg font-semibold text-term-text">
                     New SSH connection
                   </h2>
@@ -749,6 +860,23 @@ export function SshSession({
           </div>
         )}
 
+        {pastePending !== null && (
+          <PasteConfirm
+            text={pastePending}
+            onConfirm={() => {
+              const data = pastePending;
+              setPastePending(null);
+              disarmMods();
+              if (connected) send({ t: "data", data });
+              xtermRef.current?.focus();
+            }}
+            onCancel={() => {
+              setPastePending(null);
+              xtermRef.current?.focus();
+            }}
+          />
+        )}
+
         {authPrompt && (
           <AuthPromptModal
             prompt={authPrompt}
@@ -763,19 +891,34 @@ export function SshSession({
 
 /** The coloured status dot shared by the header and the manager's tabs. */
 export function StatusDot({ status }: { status: SessionStatus }) {
+  const busy = status === "connecting" || status === "reconnecting";
   return (
     <span
       className={cn(
         "h-2.5 w-2.5 flex-none rounded-full",
         status === "connected"
-          ? "bg-term-green"
+          ? "bg-term-green term-pulse-soft"
           : status === "error" || status === "dropped"
             ? "bg-term-red"
-            : status === "connecting" || status === "reconnecting"
-              ? "bg-term-yellow"
+            : busy
+              ? "bg-term-yellow term-pulse"
               : "bg-term-fainter",
       )}
       aria-hidden
     />
+  );
+}
+
+/** A small latency read-out (ms), colour-coded green/yellow/red by round-trip. */
+function LatencyChip({ ms }: { ms: number }) {
+  const color =
+    ms < 100 ? "text-term-green" : ms < 300 ? "text-term-yellow" : "text-term-red";
+  return (
+    <span
+      className={cn("flex-none tabular-nums text-[11px]", color)}
+      title="Round-trip latency to the SSH bridge"
+    >
+      {ms} ms
+    </span>
   );
 }

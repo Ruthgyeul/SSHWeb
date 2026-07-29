@@ -440,6 +440,12 @@ wss.on("connection", (ws) => {
           shell.setWindow(Number(msg.rows) || 24, Number(msg.cols) || 80, 0, 0);
         break;
 
+      case "ping":
+        // Latency probe: echo the timestamp straight back so the client can
+        // measure round-trip time without disturbing the shell.
+        send({ t: "pong", ts: Number(msg.ts) || 0 });
+        break;
+
       case "hostkey-response":
         if (pendingHostVerify) {
           const verify = pendingHostVerify;
@@ -496,6 +502,7 @@ wss.on("connection", (ws) => {
                 name: msg.path.split("/").pop() || "download",
                 dataB64: buffer.toString("base64"),
                 edit: msg.edit === true,
+                preview: msg.preview === true,
               });
             });
           }),

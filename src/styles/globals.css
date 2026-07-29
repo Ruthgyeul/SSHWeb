@@ -165,6 +165,36 @@ input:focus-visible,
   }
 }
 
+/* Status dot pulses: a strong blink while connecting, a gentle "alive" breath
+   once connected. Both collapse to no-op under reduced-motion (see below). */
+@keyframes term-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.term-pulse {
+  animation: term-pulse 1s ease-in-out infinite;
+}
+
+@keyframes term-pulse-soft {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 4px rgba(52, 211, 153, 0);
+  }
+}
+
+.term-pulse-soft {
+  animation: term-pulse-soft 2.4s ease-out infinite;
+}
+
 @keyframes term-fade-up {
   from {
     opacity: 0;

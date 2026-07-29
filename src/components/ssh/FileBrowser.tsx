@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import {
   formatMode,
   formatSize,
+  isProbablyImageFile,
   isProbablyTextFile,
   parentPath,
   sortEntries,
@@ -39,9 +40,11 @@ export function FileBrowser({
   onDelete,
   onUpload,
   onMkdir,
+  onTouch,
   onRename,
   onChmod,
   onEdit,
+  onPreview,
   onRefresh,
 }: {
   cwd: string;
@@ -54,9 +57,11 @@ export function FileBrowser({
   onDelete: (entry: FileEntry) => void;
   onUpload: (file: File) => void;
   onMkdir: () => void;
+  onTouch: () => void;
   onRename: (entry: FileEntry) => void;
   onChmod: (entry: FileEntry) => void;
   onEdit: (path: string, name: string) => void;
+  onPreview: (path: string, name: string) => void;
   onRefresh: () => void;
 }) {
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -105,6 +110,15 @@ export function FileBrowser({
           className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
         >
           + dir
+        </button>
+        <button
+          type="button"
+          onClick={onTouch}
+          disabled={loading}
+          className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
+          title="Create an empty file"
+        >
+          + file
         </button>
         <button
           type="button"
@@ -165,15 +179,27 @@ export function FileBrowser({
         onDrop={handleDrop}
       >
         {dragging && (
-          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-term-bg/70 text-sm text-term-accent">
-            Drop files to upload to {cwd}
+          <div className="pointer-events-none absolute inset-0 z-10 m-2 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-term-accent bg-term-bg/80 text-sm text-term-accent">
+            <span className="text-3xl" aria-hidden>
+              ↥
+            </span>
+            <span>Drop to upload to</span>
+            <code className="rounded bg-term-panel px-2 py-0.5 text-xs">
+              {cwd}
+            </code>
           </div>
         )}
         {loading && <p className="px-3 py-4 text-xs text-term-muted">Loading…</p>}
         {!loading && sorted.length === 0 && (
-          <p className="px-3 py-4 text-xs text-term-muted">
-            Empty directory — drag files here to upload.
-          </p>
+          <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
+            <span className="text-3xl opacity-60" aria-hidden>
+              📂
+            </span>
+            <p className="text-sm">This directory is empty</p>
+            <p className="text-xs text-term-faint">
+              Drag files here, or use “↑ upload” / “+ file” to add one.
+            </p>
+          </div>
         )}
         <table className="w-full border-collapse text-sm">
           <tbody>
@@ -181,6 +207,7 @@ export function FileBrowser({
               const isDir = entry.type === "dir";
               const target = `${cwd.replace(/\/$/, "")}/${entry.name}`;
               const editable = !isDir && isProbablyTextFile(entry.name);
+              const previewable = !isDir && isProbablyImageFile(entry.name);
               return (
                 <tr
                   key={entry.name}
@@ -210,6 +237,16 @@ export function FileBrowser({
                     {formatMode(entry.mode, entry.type)}
                   </td>
                   <td className="whitespace-nowrap py-1.5 pl-2 pr-3 text-right">
+                    {previewable && (
+                      <button
+                        type="button"
+                        onClick={() => onPreview(target, entry.name)}
+                        className={cn(actionBtn, "hover:text-term-accent")}
+                        title="Preview"
+                      >
+                        👁
+                      </button>
+                    )}
                     {editable && (
                       <button
                         type="button"

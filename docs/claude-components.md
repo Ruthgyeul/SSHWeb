@@ -26,9 +26,14 @@ that actually talks SSH is [`server.mjs`](../server.mjs).
 | `ConnectForm` | Host/port/user + password-or-key login (validated via `sshProtocol`)    |
 | `XtermView`   | xterm.js wrapper; xterm is dynamically imported (never during SSR)      |
 | `MobileKeys`  | On-screen key bar (Esc/Tab/Ctrl/Alt/arrows/Fn/…) for touch devices; Ctrl/Alt are sticky one-shot modifiers |
-| `FileBrowser` | SFTP listing: navigate, drag-drop upload+progress, download, delete, rename, chmod, mkdir, folder-zip |
+| `FileBrowser` | SFTP listing: navigate, drag-drop upload+progress, download, delete, rename, chmod, mkdir, touch, folder-zip, image preview |
 | `FileEditor`  | Inline text editor modal for a remote file (load → edit → save over SFTP) |
+| `FilePreview` | Read-only image preview modal (data-URL `<img>` + download) for a remote image |
 | `AuthPrompt`  | Modal for host-key (TOFU) confirmation and keyboard-interactive prompts |
+| `PasteConfirm` | Confirmation modal shown before a multi-line paste reaches the shell |
+| `TerminalSettings` | Gear popover: terminal font size + color-theme presets (persisted via `useTerminalPrefs`) |
+
+The terminal also has a built-in **scrollback search** bar (Ctrl/Cmd+F, `@xterm/addon-search`) that lives inside `XtermView`, and a **latency read-out** in the session header fed by a `ping`/`pong` round-trip. Terminal appearance (font size + theme) is shared across sessions via the `useTerminalPrefs` hook (localStorage-backed); the presets and font-size helpers are pure and unit-tested in `src/lib/terminalTheme.ts`.
 
 ## Conventions
 
