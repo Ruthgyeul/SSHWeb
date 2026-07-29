@@ -722,7 +722,6 @@ export function SshSession({
               onResize={(cols, rows) =>
                 connected && send({ t: "resize", cols, rows })
               }
-              fontSize={termPrefs.fontSize}
               theme={getThemePreset(termPrefs.themeId).theme}
             />
           </div>

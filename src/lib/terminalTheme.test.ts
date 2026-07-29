@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  clampFontSize,
-  DEFAULT_FONT_SIZE,
   DEFAULT_THEME_ID,
   getThemePreset,
-  MAX_FONT_SIZE,
-  MIN_FONT_SIZE,
   TERMINAL_THEMES,
 } from "./terminalTheme";
 
@@ -31,26 +27,5 @@ describe("getThemePreset", () => {
         expect(value.length).toBeGreaterThan(0);
       }
     }
-  });
-});
-
-describe("clampFontSize", () => {
-  it("keeps in-range sizes unchanged", () => {
-    expect(clampFontSize(14)).toBe(14);
-  });
-
-  it("clamps below the minimum and above the maximum", () => {
-    expect(clampFontSize(2)).toBe(MIN_FONT_SIZE);
-    expect(clampFontSize(999)).toBe(MAX_FONT_SIZE);
-  });
-
-  it("rounds fractional sizes", () => {
-    expect(clampFontSize(13.6)).toBe(14);
-  });
-
-  it("snaps non-finite input back to the default", () => {
-    expect(clampFontSize(NaN)).toBe(DEFAULT_FONT_SIZE);
-    expect(clampFontSize(Infinity)).toBe(DEFAULT_FONT_SIZE);
-    expect(clampFontSize(-Infinity)).toBe(DEFAULT_FONT_SIZE);
   });
 });

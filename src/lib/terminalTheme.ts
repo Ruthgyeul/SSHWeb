@@ -190,13 +190,3 @@ export const DEFAULT_THEME_ID = TERMINAL_THEMES[0].id;
 export function getThemePreset(id: string | null | undefined): TerminalThemePreset {
   return TERMINAL_THEMES.find((t) => t.id === id) ?? TERMINAL_THEMES[0];
 }
-
-export const MIN_FONT_SIZE = 9;
-export const MAX_FONT_SIZE = 24;
-export const DEFAULT_FONT_SIZE = 13;
-
-/** Clamp a font size to the supported range, snapping NaN back to the default. */
-export function clampFontSize(size: number): number {
-  if (!Number.isFinite(size)) return DEFAULT_FONT_SIZE;
-  return Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(size)));
-}

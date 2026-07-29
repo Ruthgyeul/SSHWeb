@@ -11,11 +11,10 @@ import {
 import type { Terminal as XTerminal } from "@xterm/xterm";
 import type { FitAddon as XFitAddon } from "@xterm/addon-fit";
 import type { SearchAddon as XSearchAddon } from "@xterm/addon-search";
-import {
-  DEFAULT_FONT_SIZE,
-  getThemePreset,
-  type TerminalTheme,
-} from "@/lib/terminalTheme";
+import { getThemePreset, type TerminalTheme } from "@/lib/terminalTheme";
+
+/** Fixed terminal font size (px); intentionally not user-configurable. */
+const FONT_SIZE = 13;
 
 /** Imperative surface the parent uses to drive the terminal. */
 export interface XtermHandle {
@@ -61,10 +60,9 @@ export const XtermView = forwardRef<
     onData: (data: string) => void;
     onResize: (cols: number, rows: number) => void;
     className?: string;
-    fontSize?: number;
     theme?: TerminalTheme;
   }
->(function XtermView({ onData, onResize, className, fontSize, theme }, ref) {
+>(function XtermView({ onData, onResize, className, theme }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitRef = useRef<XFitAddon | null>(null);
@@ -84,8 +82,6 @@ export const XtermView = forwardRef<
   const onResizeRef = useRef(onResize);
   onDataRef.current = onData;
   onResizeRef.current = onResize;
-  const fontSizeRef = useRef(fontSize ?? DEFAULT_FONT_SIZE);
-  fontSizeRef.current = fontSize ?? DEFAULT_FONT_SIZE;
   const themeRef = useRef<TerminalTheme>(
     theme ?? getThemePreset(undefined).theme,
   );
@@ -157,7 +153,7 @@ export const XtermView = forwardRef<
         cursorBlink: true,
         fontFamily:
           'var(--font-geist-mono), ui-monospace, "SFMono-Regular", Menlo, monospace',
-        fontSize: fontSizeRef.current,
+        fontSize: FONT_SIZE,
         theme: themeRef.current,
         allowProposedApi: true,
       });
@@ -218,18 +214,6 @@ export const XtermView = forwardRef<
       searchRef.current = null;
     };
   }, []);
-
-  // Live-apply font-size changes, then refit (which reports the new grid size).
-  useEffect(() => {
-    const term = termRef.current;
-    if (!term || fontSize === undefined) return;
-    term.options.fontSize = fontSize;
-    try {
-      fitRef.current?.fit();
-    } catch {
-      /* container detached */
-    }
-  }, [fontSize]);
 
   // Live-apply theme changes.
   useEffect(() => {
