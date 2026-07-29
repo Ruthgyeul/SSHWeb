@@ -159,11 +159,18 @@ See the [Web SSH client block in `.env.example`](.env.example) for every knob.
 
 `npm run build && npm run start` behind a reverse proxy, or deploy to any Node
 host / platform that supports Next.js 16. Note that `start` runs the custom
-[`server.mjs`](server.mjs) (needed for the SSH WebSocket bridge), not
-`next start`; the security headers and CSP in `next.config.ts` are applied the
+[`server.mjs`](server.mjs) (needed for the SSH WebSocket bridge), **not**
+`next start` — running `next start` (e.g. from a service unit) gives you a plain
+Next server with no `/api/ssh` bridge, and without a prior `next build` it exits
+immediately. The security headers and CSP in `next.config.ts` are applied the
 same way. This is **not** compatible with a static export or an edge-only host —
 the SSH bridge needs a long-lived Node process. Terminate TLS in front of it so
 the SSH WebSocket runs over `wss://`.
+
+To run it as a long-lived Linux service, use the hardened systemd unit template
+and step-by-step guide under [`deploy/`](deploy/) — see
+[`deploy/README.md`](deploy/README.md) and
+[`deploy/SSHWeb.service`](deploy/SSHWeb.service).
 
 ## Contributing
 
