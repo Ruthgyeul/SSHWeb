@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   filterEntries,
   formatMode,
@@ -31,6 +31,52 @@ export interface DownloadItem {
 
 const actionBtn =
   "rounded px-1.5 py-0.5 text-xs text-term-muted transition-colors";
+
+/** A file gathered from a drop, tagged with its path relative to the drop root. */
+interface DroppedFile {
+  file: File;
+  /** e.g. `photos/2024/a.jpg`, or just `a.jpg` for a top-level file. */
+  relPath: string;
+}
+
+/** Read a `FileSystemFileEntry` as a `File` (promisified callback API). */
+function entryToFile(entry: FileSystemFileEntry): Promise<File> {
+  return new Promise((resolve, reject) => entry.file(resolve, reject));
+}
+
+/** Drain a directory reader — `readEntries` yields at most ~100 items per call. */
+function readAllDirEntries(
+  reader: FileSystemDirectoryReader,
+): Promise<FileSystemEntry[]> {
+  return new Promise((resolve, reject) => {
+    const all: FileSystemEntry[] = [];
+    const read = () =>
+      reader.readEntries((batch) => {
+        if (batch.length === 0) return resolve(all);
+        all.push(...batch);
+        read();
+      }, reject);
+    read();
+  });
+}
+
+/** Recursively collect files under a dropped entry, preserving relative paths. */
+async function walkEntry(
+  entry: FileSystemEntry,
+  prefix: string,
+  out: DroppedFile[],
+): Promise<void> {
+  if (entry.isFile) {
+    const file = await entryToFile(entry as FileSystemFileEntry);
+    out.push({ file, relPath: prefix + entry.name });
+  } else if (entry.isDirectory) {
+    const reader = (entry as FileSystemDirectoryEntry).createReader();
+    const children = await readAllDirEntries(reader);
+    for (const child of children) {
+      await walkEntry(child, `${prefix}${entry.name}/`, out);
+    }
+  }
+}
 
 /** Shared empty set for a listing with no active selection (stable identity). */
 const EMPTY_NAMES: ReadonlySet<string> = new Set();
@@ -74,7 +120,7 @@ export function FileBrowser({
   onDownloadMany: (paths: string[]) => void;
   onDelete: (entry: FileEntry) => void;
   onDeleteMany: (entries: FileEntry[]) => void;
-  onUpload: (file: File) => void;
+  onUpload: (file: File, relPath?: string) => void;
   onMkdir: () => void;
   onTouch: () => void;
   onRename: (entry: FileEntry) => void;
@@ -84,7 +130,14 @@ export function FileBrowser({
   onRefresh: () => void;
 }) {
   const uploadRef = useRef<HTMLInputElement>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+
+  // `webkitdirectory` isn't a typed React attribute; set it on the folder input
+  // imperatively so clicking "↑ folder" opens a directory picker.
+  useEffect(() => {
+    folderRef.current?.setAttribute("webkitdirectory", "");
+  }, []);
   // Checked entries, tagged with the directory they belong to. Tagging by `cwd`
   // means the selection derives to empty on navigation (no effect needed), and
   // stale names left after a refresh are naturally ignored because every read
@@ -135,9 +188,26 @@ export function FileBrowser({
     });
   const clearSelection = () => setSelection({ cwd, names: new Set() });
 
-  function handleDrop(e: React.DragEvent) {
+  async function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setDragging(false);
+    // Capture entries synchronously — the DataTransferItemList is emptied once
+    // the event handler returns, so grab the FileSystemEntry refs before any
+    // await. When the entry API is available it handles dropped folders too.
+    const entries = Array.from(e.dataTransfer.items ?? [])
+      .filter((it) => it.kind === "file")
+      .map((it) => it.webkitGetAsEntry?.() ?? null)
+      .filter((entry): entry is FileSystemEntry => entry !== null);
+
+    if (entries.length > 0) {
+      const collected: DroppedFile[] = [];
+      for (const entry of entries) await walkEntry(entry, "", collected);
+      for (const { file, relPath } of collected) {
+        onUpload(file, relPath.includes("/") ? relPath : undefined);
+      }
+      return;
+    }
+    // Fallback for browsers without the entry API: flat file list only.
     for (const file of Array.from(e.dataTransfer.files)) onUpload(file);
   }
 
@@ -230,6 +300,15 @@ export function FileBrowser({
         >
           ↑ upload
         </button>
+        <button
+          type="button"
+          onClick={() => folderRef.current?.click()}
+          disabled={loading}
+          className="rounded border border-term-accent/40 bg-term-accent/10 px-2 py-1 text-xs text-term-accent hover:bg-term-accent/20"
+          title="Upload a folder (preserves its subdirectories)"
+        >
+          ↑ folder
+        </button>
         <input
           ref={uploadRef}
           type="file"
@@ -237,6 +316,21 @@ export function FileBrowser({
           className="hidden"
           onChange={(e) => {
             for (const file of Array.from(e.target.files ?? [])) onUpload(file);
+            e.target.value = "";
+          }}
+        />
+        <input
+          ref={folderRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            for (const file of Array.from(e.target.files ?? [])) {
+              // `webkitRelativePath` is like `folder/sub/file.txt`; keep it so
+              // the upload recreates the tree under the current directory.
+              const rel = file.webkitRelativePath || undefined;
+              onUpload(file, rel && rel.includes("/") ? rel : undefined);
+            }
             e.target.value = "";
           }}
         />

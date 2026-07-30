@@ -160,3 +160,34 @@ export function uploadExceedsCap(
   if (cap <= 0) return false;
   return written + incoming > cap;
 }
+
+/**
+ * Whether a chunked upload's `offset` is the one we expect next. A stream opened
+ * on the bridge is written sequentially (append-only — the write stream cannot
+ * seek), so an out-of-order, duplicated or skipped chunk would silently corrupt
+ * the file. The very first chunk must start at 0; each subsequent chunk must
+ * continue exactly where the previous one ended (`written`).
+ */
+export function uploadChunkInOrder(offset: number, written: number): boolean {
+  return offset === written;
+}
+
+/* ------------------------------------------------------------------ */
+/* Idle-session expiry                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Whether a session whose last real activity was at `lastActivity` should be
+ * reaped at time `now`, given an idle `timeoutMs`. "Activity" is genuine shell
+ * or SFTP traffic — latency pings deliberately don't count, so a truly idle
+ * terminal still times out even while its keep-alive probes continue. A
+ * `timeoutMs` of `0` (or less) disables the timeout entirely.
+ */
+export function isIdleExpired(
+  lastActivity: number,
+  now: number,
+  timeoutMs: number,
+): boolean {
+  if (timeoutMs <= 0) return false;
+  return now - lastActivity >= timeoutMs;
+}

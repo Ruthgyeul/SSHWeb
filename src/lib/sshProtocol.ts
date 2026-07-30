@@ -70,12 +70,15 @@ export type ClientMessage =
   // Write a file. When `offset` is a number the write is chunked (offset 0
   // opens the stream, `final: true` closes it) — this drives upload progress;
   // without `offset` the whole `dataB64` is written at once (inline-edit save).
+  // `mkdirp` (honored on the opening chunk) recursively creates the target's
+  // parent directories first — set by folder uploads whose path has subdirs.
   | {
       t: "sftp-write";
       path: string;
       dataB64: string;
       offset?: number;
       final?: boolean;
+      mkdirp?: boolean;
     }
   | { t: "sftp-mkdir"; path: string }
   | { t: "sftp-rm"; path: string; dir?: boolean }

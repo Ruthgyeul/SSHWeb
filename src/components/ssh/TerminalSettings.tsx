@@ -2,6 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { TERMINAL_THEMES } from "@/lib/terminalTheme";
+import {
+  KNOWN_HOSTS_KEY,
+  knownHostEntries,
+  parseKnownHosts,
+  removeKnownHost,
+  serializeKnownHosts,
+  type KnownHostMap,
+} from "@/lib/knownHosts";
 import { cn } from "@/lib/utils";
 import type { TerminalPrefs } from "./useTerminalPrefs";
 
@@ -20,6 +28,37 @@ export function TerminalSettings({
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  // Trusted host keys (TOFU store), read from localStorage when the popover
+  // opens (see `toggle`) so the list reflects any keys accepted since it last
+  // closed.
+  const [hosts, setHosts] = useState<KnownHostMap>({});
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next) {
+      try {
+        setHosts(parseKnownHosts(localStorage.getItem(KNOWN_HOSTS_KEY)));
+      } catch {
+        setHosts({});
+      }
+    }
+  };
+
+  const forgetHost = (id: string) => {
+    setHosts((prev) => {
+      const next = removeKnownHost(prev, id);
+      try {
+        localStorage.setItem(KNOWN_HOSTS_KEY, serializeKnownHosts(next));
+      } catch {
+        /* storage unavailable (private mode) — the in-memory list still updates */
+      }
+      return next;
+    });
+  };
+
+  const hostList = knownHostEntries(hosts);
 
   // Close on outside click or Escape.
   useEffect(() => {
@@ -42,7 +81,7 @@ export function TerminalSettings({
     <div ref={rootRef} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         className={cn(
           "rounded px-2 py-1 text-xs transition-colors",
           open
@@ -57,7 +96,7 @@ export function TerminalSettings({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1.5 w-56 rounded-lg border border-term-border bg-term-panel p-3 shadow-xl">
+        <div className="absolute right-0 top-full z-30 mt-1.5 w-64 rounded-lg border border-term-border bg-term-panel p-3 shadow-xl">
           {/* Theme */}
           <div>
             <span className="mb-1.5 block text-xs font-medium text-term-muted">
@@ -94,6 +133,50 @@ export function TerminalSettings({
                 );
               })}
             </div>
+          </div>
+
+          {/* Known hosts (TOFU store) */}
+          <div className="mt-3 border-t border-term-border pt-3">
+            <span className="mb-1.5 block text-xs font-medium text-term-muted">
+              Trusted host keys
+            </span>
+            {hostList.length === 0 ? (
+              <p className="text-xs text-term-faint">
+                No trusted hosts yet. Keys you accept on first connect appear
+                here.
+              </p>
+            ) : (
+              <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto">
+                {hostList.map((h) => (
+                  <li
+                    key={h.id}
+                    className="flex items-center gap-2 rounded px-2 py-1 hover:bg-term-card"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs text-term-dim">
+                        {h.host}
+                        <span className="text-term-faint">:{h.port}</span>
+                      </span>
+                      <span
+                        className="block truncate font-mono text-[10px] text-term-faint"
+                        title={h.fingerprint}
+                      >
+                        {h.fingerprint}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => forgetHost(h.id)}
+                      className="flex-none rounded px-1.5 py-0.5 text-xs text-term-muted transition-colors hover:text-term-red"
+                      title="Forget this host key"
+                      aria-label={`Forget host key for ${h.host}:${h.port}`}
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       )}
