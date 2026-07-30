@@ -1,7 +1,21 @@
 "use client";
 
-import { useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { highlightToHtml } from "@/lib/syntaxHighlight";
+import { cn } from "@/lib/utils";
+import {
+  findMatches,
+  nextMatchIndex,
+  replaceAll,
+  replaceMatch,
+  type Match,
+} from "@/lib/editorSearch";
 
 // Text metrics shared by the textarea, the highlight overlay and the gutter, so
 // all three line up to the pixel. Any change here must apply to all three.
@@ -44,10 +58,23 @@ export function FileEditor({
   const taRef = useRef<HTMLTextAreaElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
+  const findRef = useRef<HTMLInputElement>(null);
+
+  // Find/replace bar state.
+  const [findOpen, setFindOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [replaceText, setReplaceText] = useState("");
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [matchIdx, setMatchIdx] = useState(0);
 
   const html = useMemo(() => highlightToHtml(text), [text]);
   const lineCount = useMemo(() => text.split("\n").length, [text]);
   const gutterWidth = `${String(lineCount).length + 1}ch`;
+
+  const matches = useMemo(
+    () => findMatches(text, query, caseSensitive),
+    [text, query, caseSensitive],
+  );
 
   // Lock the overlay + gutter to the textarea's scroll offset.
   const syncScroll = () => {
@@ -61,15 +88,89 @@ export function FileEditor({
     }
   };
 
+  // Select a match in the textarea and scroll it into view; keeps the find box
+  // focused (so Enter can keep stepping) while revealing the hit in the editor.
+  const revealMatch = (m: Match) => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.setSelectionRange(m.start, m.end);
+    const lineH = 13 * 1.5; // fontSize * lineHeight from TEXT_STYLE
+    const line = text.slice(0, m.start).split("\n").length - 1;
+    const target = line * lineH;
+    const view = ta.clientHeight;
+    if (target < ta.scrollTop || target > ta.scrollTop + view - lineH) {
+      ta.scrollTop = Math.max(0, target - view / 2);
+    }
+    syncScroll();
+  };
+
+  // Step to the next/previous match relative to the current caret, wrapping.
+  const findStep = (dir: 1 | -1) => {
+    if (matches.length === 0) return;
+    const ta = taRef.current;
+    const caret = ta ? (dir === 1 ? ta.selectionEnd : ta.selectionStart) : 0;
+    const idx = nextMatchIndex(matches, caret, dir);
+    if (idx < 0) return;
+    setMatchIdx(idx);
+    revealMatch(matches[idx]);
+  };
+
+  // Replace the currently selected match (if the selection still spans one),
+  // then move on to the next occurrence.
+  const replaceCurrent = () => {
+    const ta = taRef.current;
+    if (!ta || matches.length === 0) return;
+    const hit = matches.find(
+      (m) => m.start === ta.selectionStart && m.end === ta.selectionEnd,
+    );
+    const m = hit ?? matches[Math.min(matchIdx, matches.length - 1)];
+    const { text: next, caret } = replaceMatch(text, m, replaceText);
+    setText(next);
+    requestAnimationFrame(() => {
+      taRef.current?.setSelectionRange(caret, caret);
+      taRef.current?.focus();
+    });
+  };
+
+  const replaceAllNow = () => {
+    const { text: next, count } = replaceAll(
+      text,
+      query,
+      replaceText,
+      caseSensitive,
+    );
+    if (count > 0) setText(next);
+  };
+
+  const openFind = () => {
+    setFindOpen(true);
+    requestAnimationFrame(() => findRef.current?.focus());
+  };
+  const closeFind = () => {
+    setFindOpen(false);
+    taRef.current?.focus();
+  };
+
+  // Focus the find field whenever the bar opens.
+  useEffect(() => {
+    if (findOpen) findRef.current?.focus();
+  }, [findOpen]);
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       if (dirty && !saving) onSave(text);
       return;
     }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      openFind();
+      return;
+    }
     if (e.key === "Escape") {
       e.preventDefault();
-      onClose();
+      if (findOpen) closeFind();
+      else onClose();
       return;
     }
     if (e.key === "Tab") {
@@ -95,6 +196,14 @@ export function FileEditor({
         </span>
         <button
           type="button"
+          onClick={openFind}
+          className="rounded border border-term-border px-3 py-1 text-xs text-term-muted hover:text-term-text"
+          title="Find / replace (Ctrl+F)"
+        >
+          🔍 Find
+        </button>
+        <button
+          type="button"
           onClick={() => onSave(text)}
           disabled={saving || !dirty}
           className="rounded border border-term-accent/40 bg-term-accent/15 px-3 py-1 text-xs font-medium text-term-accent hover:bg-term-accent/25 disabled:opacity-40"
@@ -109,6 +218,116 @@ export function FileEditor({
           Close
         </button>
       </div>
+
+      {/* Find / replace bar */}
+      {findOpen && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-term-border bg-term-panel/70 px-3 py-1.5">
+          <input
+            ref={findRef}
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                findStep(e.shiftKey ? -1 : 1);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                closeFind();
+              }
+            }}
+            placeholder="Find"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="min-w-0 flex-1 rounded border border-term-border bg-term-bg px-2 py-1 font-mono text-xs text-term-text outline-none placeholder:text-term-faint focus:border-term-accent"
+            aria-label="Find"
+          />
+          <span className="tabular-nums text-xs text-term-faint">
+            {matches.length > 0
+              ? `${Math.min(matchIdx + 1, matches.length)}/${matches.length}`
+              : query
+                ? "0/0"
+                : ""}
+          </span>
+          <button
+            type="button"
+            onClick={() => findStep(-1)}
+            disabled={matches.length === 0}
+            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text disabled:opacity-40"
+            title="Previous match (Shift+Enter)"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            onClick={() => findStep(1)}
+            disabled={matches.length === 0}
+            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text disabled:opacity-40"
+            title="Next match (Enter)"
+          >
+            ↓
+          </button>
+          <input
+            type="text"
+            value={replaceText}
+            onChange={(e) => setReplaceText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                closeFind();
+              }
+            }}
+            placeholder="Replace"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="min-w-0 flex-1 rounded border border-term-border bg-term-bg px-2 py-1 font-mono text-xs text-term-text outline-none placeholder:text-term-faint focus:border-term-accent"
+            aria-label="Replace with"
+          />
+          <button
+            type="button"
+            onClick={replaceCurrent}
+            disabled={matches.length === 0}
+            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text disabled:opacity-40"
+            title="Replace the current match"
+          >
+            Replace
+          </button>
+          <button
+            type="button"
+            onClick={replaceAllNow}
+            disabled={matches.length === 0}
+            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text disabled:opacity-40"
+            title="Replace every match"
+          >
+            All
+          </button>
+          <button
+            type="button"
+            onClick={() => setCaseSensitive((v) => !v)}
+            className={cn(
+              "rounded border px-2 py-1 text-xs transition-colors",
+              caseSensitive
+                ? "border-term-accent/40 bg-term-accent/15 text-term-accent"
+                : "border-term-border text-term-muted hover:text-term-text",
+            )}
+            title="Match case"
+            aria-pressed={caseSensitive}
+          >
+            Aa
+          </button>
+          <button
+            type="button"
+            onClick={closeFind}
+            className="rounded px-2 py-1 text-xs text-term-muted hover:text-term-text"
+            aria-label="Close find bar"
+            title="Close (Esc)"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div className="relative flex min-h-0 flex-1 overflow-hidden bg-term-bg">
         {/* Line-number gutter (scrolls with the text) */}

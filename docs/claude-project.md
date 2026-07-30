@@ -118,14 +118,18 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   `SSH_ALLOWED_HOSTS`, `SSH_MAX_SESSIONS`, `SSH_MAX_DOWNLOAD_BYTES` and
   `SSH_MAX_UPLOAD_BYTES` (server env, read in `server.mjs`) gate reachable hosts,
   concurrency and transfer size, while `SSH_RATE_LIMIT_MAX` /
-  `SSH_RATE_LIMIT_WINDOW_MS` throttle per-IP connection attempts. The WebSocket
-  upgrade is origin-checked (same-origin by default, or `SSH_ALLOWED_ORIGINS`)
-  to block cross-site WebSocket hijacking. The security-critical pure logic
-  (origin check, rate limiter, IP resolution, upload accounting) lives in
+  `SSH_RATE_LIMIT_WINDOW_MS` throttle per-IP connection attempts and
+  `SSH_IDLE_TIMEOUT_MS` (0 = off) reaps sessions with no shell/SFTP activity. The
+  WebSocket upgrade is origin-checked (same-origin by default, or
+  `SSH_ALLOWED_ORIGINS`) to block cross-site WebSocket hijacking. The
+  security-critical pure logic (origin check, rate limiter, IP resolution, upload
+  accounting + chunk-order check, idle expiry) lives in
   `src/lib/serverSecurity.ts` (unit-tested) and is hand-mirrored in `server.mjs`
   — the same "two synchronized places" discipline as the wire protocol. The
   CSP's `connect-src 'self'` already authorizes the same-origin WebSocket —
-  don't widen it for this feature.
+  don't widen it for this feature. Ops surfaces: `server.mjs` emits structured,
+  credential-free event logs (`SSH_LOG=json|off`) and serves a JSON health probe
+  at `GET /api/health`.
 
 ## Assets
 

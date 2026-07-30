@@ -80,8 +80,29 @@ const ALLOWED_ORIGINS = (process.env.SSH_ALLOWED_ORIGINS || "")
   .filter(Boolean);
 // Drop a socket that connects but never sends a `connect` message.
 const CONNECT_GRACE_MS = 30_000;
+// Auto-close a session after this many ms of no shell/SFTP activity. Latency
+// pings don't count as activity, so a truly idle terminal still times out.
+// 0 (the default) disables the idle timeout entirely.
+const IDLE_TIMEOUT_MS = parseInt(process.env.SSH_IDLE_TIMEOUT_MS || "0", 10);
+// Operational logging mode: "json" (structured one-line events, the default) or
+// "off". Credentials are never included in any log line.
+const LOG_MODE = (process.env.SSH_LOG || "json").toLowerCase();
+// Fixed path for the JSON health probe (used by load balancers / uptime checks).
+const HEALTH_PATH = "/api/health";
 
 let activeSessions = 0;
+
+/**
+ * Emit a structured operational event as a single JSON line on stdout. Only
+ * non-sensitive fields (client IP, host, port, reason) are ever passed in —
+ * usernames, passwords and private keys are deliberately never logged.
+ */
+function logEvent(event, fields = {}) {
+  if (LOG_MODE === "off") return;
+  process.stdout.write(
+    JSON.stringify({ ts: new Date().toISOString(), event, ...fields }) + "\n",
+  );
+}
 
 /** Host is allowed when the list is empty, or matches exactly / by `*.` suffix. */
 function isHostAllowed(host) {
@@ -135,6 +156,17 @@ function clientIpFromReq(req) {
   return req.socket?.remoteAddress || "unknown";
 }
 
+/** Whether a chunked upload's offset continues exactly where the last ended. */
+function uploadChunkInOrder(offset, written) {
+  return offset === written;
+}
+
+/** Whether a session idle since `lastActivity` should be reaped at `now`. */
+function isIdleExpired(lastActivity, now, timeoutMs) {
+  if (timeoutMs <= 0) return false;
+  return now - lastActivity >= timeoutMs;
+}
+
 /** Minimal per-key sliding-window rate limiter (see serverSecurity.ts). */
 const rateHits = new Map();
 function rateLimitAllow(key, now) {
@@ -166,6 +198,23 @@ const handle = app.getRequestHandler();
 await app.prepare();
 
 const server = createServer((req, res) => {
+  // Lightweight JSON health probe, answered before Next so load balancers and
+  // uptime checks get a stable, dependency-free 200. No credentials involved.
+  if (req.method === "GET" && parse(req.url).pathname === HEALTH_PATH) {
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    });
+    res.end(
+      JSON.stringify({
+        status: "ok",
+        activeSessions,
+        maxSessions: MAX_SESSIONS,
+        uptime: Math.floor(process.uptime()),
+      }),
+    );
+    return;
+  }
   handle(req, res, parse(req.url, true));
 });
 
@@ -179,6 +228,10 @@ server.on("upgrade", (req, socket, head) => {
   if (pathname === WS_PATH) {
     // Reject cross-site WebSocket handshakes before upgrading (anti-CSWSH).
     if (!isWebSocketOriginAllowed(req.headers.origin, req.headers.host)) {
+      logEvent("reject", {
+        reason: "bad-origin",
+        origin: req.headers.origin || "",
+      });
       socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return;
@@ -210,6 +263,30 @@ function crc32(buf) {
   let c = 0xffffffff;
   for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
+}
+
+// --- Path helpers for chunked uploads --------------------------------------
+
+/** The parent directory of a POSIX path (`/a/b/c` → `/a/b`, `/a` → `/`). */
+function parentDirOf(p) {
+  const idx = p.lastIndexOf("/");
+  return idx <= 0 ? "/" : p.slice(0, idx);
+}
+
+/**
+ * Recursively create `dir` over SFTP (like `mkdir -p`), then call `done`. An
+ * already-existing directory is not an error here: the final `mkdir`'s error is
+ * intentionally ignored so a folder upload into an existing tree still proceeds.
+ */
+function mkdirp(sftp, dir, done) {
+  if (!dir || dir === "/" || dir === ".") return done();
+  sftp.mkdir(dir, (err) => {
+    if (!err) return done();
+    // The parent may be missing — create it first, then retry this level.
+    const parent = parentDirOf(dir);
+    if (parent === dir) return done();
+    mkdirp(sftp, parent, () => sftp.mkdir(dir, () => done()));
+  });
 }
 
 /**
@@ -344,6 +421,7 @@ function buildStoreZip(files) {
 
 wss.on("connection", (ws, req) => {
   const clientIp = clientIpFromReq(req);
+  logEvent("ws-open", { ip: clientIp });
   /** @type {import('ssh2').Client | null} */
   let ssh = null;
   let shell = null; // interactive PTY stream
@@ -357,6 +435,12 @@ wss.on("connection", (ws, req) => {
   const uploads = new Map();
   // In-flight download read streams, so they can be torn down on cleanup.
   const downloads = new Set();
+  // Timestamp of the last genuine shell/SFTP activity (not latency pings), used
+  // by the idle-timeout reaper below.
+  let lastActivity = Date.now();
+  const touch = () => {
+    lastActivity = Date.now();
+  };
 
   const send = (obj) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
@@ -371,10 +455,31 @@ wss.on("connection", (ws, req) => {
     }
   }, CONNECT_GRACE_MS);
 
+  // Idle-session reaper: close a connection with no shell/SFTP traffic for
+  // IDLE_TIMEOUT_MS. Disabled when the timeout is 0. The check runs at most
+  // every 30s so a long timeout doesn't hold a tight interval.
+  const idleTimer =
+    IDLE_TIMEOUT_MS > 0
+      ? setInterval(
+          () => {
+            if (isIdleExpired(lastActivity, Date.now(), IDLE_TIMEOUT_MS)) {
+              logEvent("idle-timeout", { ip: clientIp });
+              sendError("Session closed after inactivity.", "shell");
+              cleanup();
+              ws.close();
+            }
+          },
+          Math.max(1000, Math.min(IDLE_TIMEOUT_MS, 30_000)),
+        )
+      : null;
+  idleTimer?.unref?.();
+
   function cleanup() {
     if (closed) return;
     closed = true;
     clearTimeout(graceTimer);
+    if (idleTimer) clearInterval(idleTimer);
+    logEvent("ws-close", { ip: clientIp });
     if (counted) {
       activeSessions = Math.max(0, activeSessions - 1);
       counted = false;
@@ -460,14 +565,17 @@ wss.on("connection", (ws, req) => {
       return ws.close();
     }
     if (!isHostAllowed(host)) {
+      logEvent("reject", { ip: clientIp, host, reason: "host-not-allowed" });
       sendError(`Host not allowed by this server: ${host}`, "auth");
       return ws.close();
     }
     if (!rateLimitAllow(clientIp, Date.now())) {
+      logEvent("reject", { ip: clientIp, host, reason: "rate-limit" });
       sendError("Too many connection attempts. Please slow down.", "auth");
       return ws.close();
     }
     if (activeSessions >= MAX_SESSIONS) {
+      logEvent("reject", { ip: clientIp, host, reason: "at-capacity" });
       sendError("Server is at capacity. Try again shortly.", "auth");
       return ws.close();
     }
@@ -480,6 +588,7 @@ wss.on("connection", (ws, req) => {
 
     ssh
       .on("ready", () => {
+        logEvent("connect", { ip: clientIp, host, port: targetPort });
         send({ t: "status", state: "connected" });
         ssh.shell(
           {
@@ -493,12 +602,14 @@ wss.on("connection", (ws, req) => {
               return cleanup();
             }
             shell = stream;
-            stream.on("data", (data) =>
-              send({ t: "data", data: data.toString("base64") }),
-            );
-            stream.stderr?.on("data", (data) =>
-              send({ t: "data", data: data.toString("base64") }),
-            );
+            stream.on("data", (data) => {
+              touch();
+              send({ t: "data", data: data.toString("base64") });
+            });
+            stream.stderr?.on("data", (data) => {
+              touch();
+              send({ t: "data", data: data.toString("base64") });
+            });
             stream.on("close", () => {
               send({ t: "status", state: "closed" });
               cleanup();
@@ -564,6 +675,84 @@ wss.on("connection", (ws, req) => {
     return "other";
   }
 
+  // Append `buffer` to an open upload, enforcing the size cap and closing the
+  // stream on the final chunk.
+  function appendUploadChunk(entry, path, buffer, isFinal) {
+    if (
+      MAX_UPLOAD_BYTES > 0 &&
+      entry.written + buffer.length > MAX_UPLOAD_BYTES
+    ) {
+      try {
+        entry.stream.destroy();
+      } catch {
+        /* stream already gone */
+      }
+      uploads.delete(path);
+      return sendError(
+        `File too large to upload (> ${MAX_UPLOAD_BYTES} bytes).`,
+        "sftp",
+      );
+    }
+    entry.written += buffer.length;
+    entry.stream.write(buffer);
+    if (isFinal) {
+      entry.stream.end(() => {
+        uploads.delete(path);
+        send({ t: "sftp-ok", op: "write", path });
+      });
+    }
+  }
+
+  // Open a fresh write stream for `path` and write the first chunk into it.
+  function openUpload(s, path, buffer, isFinal) {
+    const stream = s.createWriteStream(path);
+    stream.on("error", (err) => {
+      uploads.delete(path);
+      sendError(err.message, "sftp");
+    });
+    const entry = { stream, written: 0 };
+    uploads.set(path, entry);
+    appendUploadChunk(entry, path, buffer, isFinal);
+  }
+
+  // Drive one chunk of a chunked upload. offset 0 (re)opens the stream —
+  // optionally creating parent directories first (folder uploads); later chunks
+  // must arrive in order or the transfer is aborted to avoid silent corruption.
+  function handleChunkedWrite(s, msg, buffer) {
+    const path = msg.path;
+    const existing = uploads.get(path);
+    if (msg.offset === 0) {
+      if (existing) {
+        try {
+          existing.stream.destroy();
+        } catch {
+          /* stream already gone */
+        }
+        uploads.delete(path);
+      }
+      if (msg.mkdirp) {
+        mkdirp(s, parentDirOf(path), () =>
+          openUpload(s, path, buffer, msg.final === true),
+        );
+      } else {
+        openUpload(s, path, buffer, msg.final === true);
+      }
+      return;
+    }
+    if (!existing || !uploadChunkInOrder(msg.offset, existing.written)) {
+      if (existing) {
+        try {
+          existing.stream.destroy();
+        } catch {
+          /* stream already gone */
+        }
+        uploads.delete(path);
+      }
+      return sendError("Upload chunk out of order.", "sftp");
+    }
+    appendUploadChunk(existing, path, buffer, msg.final === true);
+  }
+
   ws.on("message", (raw) => {
     let msg;
     try {
@@ -572,6 +761,9 @@ wss.on("connection", (ws, req) => {
       return;
     }
     if (!msg || typeof msg.t !== "string") return;
+    // Any real shell/SFTP traffic counts as activity for the idle reaper;
+    // latency pings deliberately don't, so an idle terminal still times out.
+    if (msg.t !== "ping") touch();
 
     switch (msg.t) {
       case "connect":
@@ -706,43 +898,9 @@ wss.on("connection", (ws, req) => {
         withSftp((s) => {
           const buffer = Buffer.from(msg.dataB64 || "", "base64");
           if (typeof msg.offset === "number") {
-            // Chunked upload: open a stream on the first chunk, append on the
-            // rest, and close on the final one — this is what drives progress.
-            let entry = uploads.get(msg.path);
-            if (msg.offset === 0 || !entry) {
-              const stream = s.createWriteStream(msg.path);
-              stream.on("error", (err) => {
-                uploads.delete(msg.path);
-                sendError(err.message, "sftp");
-              });
-              entry = { stream, written: 0 };
-              uploads.set(msg.path, entry);
-            }
-            // Enforce the upload cap: abort the stream if this chunk would push
-            // the running total past MAX_UPLOAD_BYTES.
-            if (
-              MAX_UPLOAD_BYTES > 0 &&
-              entry.written + buffer.length > MAX_UPLOAD_BYTES
-            ) {
-              try {
-                entry.stream.destroy();
-              } catch {
-                /* stream already gone */
-              }
-              uploads.delete(msg.path);
-              return sendError(
-                `File too large to upload (> ${MAX_UPLOAD_BYTES} bytes).`,
-                "sftp",
-              );
-            }
-            entry.written += buffer.length;
-            entry.stream.write(buffer);
-            if (msg.final) {
-              entry.stream.end(() => {
-                uploads.delete(msg.path);
-                send({ t: "sftp-ok", op: "write", path: msg.path });
-              });
-            }
+            // Chunked upload: open on the first chunk, append (in order) on the
+            // rest, close on the final one — this is what drives progress.
+            handleChunkedWrite(s, msg, buffer);
           } else {
             // Whole-file write (inline-edit save / empty-file touch).
             if (MAX_UPLOAD_BYTES > 0 && buffer.length > MAX_UPLOAD_BYTES) {
@@ -862,4 +1020,12 @@ server.listen(port, hostname, () => {
   if (ALLOWLIST.length > 0) {
     console.log(`> SSH host allowlist active: ${ALLOWLIST.join(", ")}`);
   }
+  if (IDLE_TIMEOUT_MS > 0) {
+    console.log(`> Idle sessions closed after ${IDLE_TIMEOUT_MS} ms`);
+  }
+  logEvent("server-start", {
+    port,
+    maxSessions: MAX_SESSIONS,
+    idleTimeoutMs: IDLE_TIMEOUT_MS,
+  });
 });

@@ -19,14 +19,18 @@ all from a web page. Built with **Next.js** and a terminal-styled design system.
   manual "Reconnect" button
 - **Password or private-key** authentication (paste a key or load from file,
   with optional passphrase)
-- **SFTP file browser** — navigate, drag-and-drop upload with progress,
-  download, delete, rename, `chmod`, create folders, inline text editing, and
-  whole-folder download as a zip
+- **SFTP file browser** — navigate, drag-and-drop upload with progress
+  (drop or pick a whole **folder** and its subdirectories are recreated
+  remotely), download, delete, rename, `chmod`, create folders, inline text
+  editing with **find/replace**, and whole-folder download as a zip
+- **Manage trusted host keys** — the gear popover lists the host keys you've
+  accepted (trust-on-first-use) and lets you forget any of them
 - **WebSocket ↔ SSH bridge** — a custom Node server (`server.mjs`) relays the
   browser to a real [`ssh2`](https://github.com/mscdex/ssh2) connection
 - **Hardened by default** — strict CSP and security headers; credentials are
-  relayed to the host and never stored or logged; optional host allowlist and
-  session limits
+  relayed to the host and never stored or logged; optional host allowlist,
+  session limits, per-IP rate limiting and an optional **idle-session timeout**;
+  structured (credential-free) event logs and a `/api/health` probe for ops
 - **Env-driven config** — brand/host/limits via `.env.local`, not source edits
 - **Next.js 16** (App Router) · **React 19** · **TypeScript** (strict) ·
   **Tailwind CSS v4**, plus SEO metadata, PWA manifest and Vitest/ESLint/CI

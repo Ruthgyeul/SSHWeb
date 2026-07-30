@@ -18,6 +18,12 @@ import {
   type ServerMessage,
 } from "@/lib/sshProtocol";
 import { getThemePreset } from "@/lib/terminalTheme";
+import {
+  KNOWN_HOSTS_KEY,
+  parseKnownHosts,
+  serializeKnownHosts,
+  type KnownHostMap,
+} from "@/lib/knownHosts";
 import { SITE_NAME, SSH_WS_PATH } from "@/config/siteConfig";
 import { cn } from "@/lib/utils";
 import { XtermView, type XtermHandle } from "./XtermView";
@@ -77,15 +83,10 @@ type Tab = "terminal" | "files";
 /** How many times to auto-reconnect a dropped session before giving up. */
 const MAX_RECONNECT = 3;
 
-/** localStorage key holding the trusted host-key fingerprints (TOFU store). */
-const KNOWN_HOSTS_KEY = "sshweb.knownHosts";
-
-/** Read the `host:port → fingerprint` map of trusted host keys. */
-function loadKnownHosts(): Record<string, string> {
+/** Read the `host:port → fingerprint` map of trusted host keys (TOFU store). */
+function loadKnownHosts(): KnownHostMap {
   try {
-    const raw = localStorage.getItem(KNOWN_HOSTS_KEY);
-    const parsed = raw ? JSON.parse(raw) : null;
-    return parsed && typeof parsed === "object" ? parsed : {};
+    return parseKnownHosts(localStorage.getItem(KNOWN_HOSTS_KEY));
   } catch {
     return {};
   }
@@ -96,7 +97,7 @@ function saveKnownHost(id: string, fingerprint: string) {
   try {
     const hosts = loadKnownHosts();
     hosts[id] = fingerprint;
-    localStorage.setItem(KNOWN_HOSTS_KEY, JSON.stringify(hosts));
+    localStorage.setItem(KNOWN_HOSTS_KEY, serializeKnownHosts(hosts));
   } catch {
     /* storage unavailable (private mode) — verification just won't persist */
   }
@@ -703,12 +704,16 @@ export function SshSession({
     });
   };
   // Chunked upload with progress: one sftp-write per chunk, throttled by the
-  // socket's buffered amount so a big file doesn't flood the connection.
-  const uploadFile = async (file: File, dir: string) => {
-    const path = joinPath(dir, file.name);
+  // socket's buffered amount so a big file doesn't flood the connection. A
+  // `relPath` (folder upload) preserves subdirectories; the opening chunk asks
+  // the server to `mkdir -p` the parents.
+  const uploadFile = async (file: File, dir: string, relPath?: string) => {
+    const rel = relPath && relPath.trim() !== "" ? relPath : file.name;
+    const path = joinPath(dir, rel);
+    const needsDir = rel.includes("/");
     const total = file.size;
     const report = (sent: number) =>
-      setUploads((u) => ({ ...u, [path]: { name: file.name, sent, total } }));
+      setUploads((u) => ({ ...u, [path]: { name: rel, sent, total } }));
     report(0);
     const buf = new Uint8Array(await file.arrayBuffer());
     const ws = wsRef.current;
@@ -721,6 +726,9 @@ export function SshSession({
         dataB64: bytesToBase64(buf.subarray(offset, end)),
         offset,
         final: end >= total,
+        // Only the opening chunk carries the mkdirp request (that's when the
+        // server opens the write stream and can create the parents first).
+        mkdirp: offset === 0 && needsDir ? true : undefined,
       });
       offset = end;
       report(offset);
@@ -907,7 +915,7 @@ export function SshSession({
               onDownloadMany={(paths) => send({ t: "sftp-download-many", paths })}
               onDelete={onDelete}
               onDeleteMany={onDeleteMany}
-              onUpload={(file) => uploadFile(file, cwd)}
+              onUpload={(file, relPath) => uploadFile(file, cwd, relPath)}
               onMkdir={onMkdir}
               onTouch={onTouch}
               onRename={onRename}

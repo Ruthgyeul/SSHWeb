@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   clientIpFromHeaders,
+  isIdleExpired,
   isWebSocketOriginAllowed,
   normalizeOrigin,
   SlidingWindowRateLimiter,
+  uploadChunkInOrder,
   uploadExceedsCap,
 } from "./serverSecurity";
 
@@ -169,5 +171,35 @@ describe("uploadExceedsCap", () => {
   it("treats a cap of 0 or less as unlimited", () => {
     expect(uploadExceedsCap(1_000_000, 1_000_000, 0)).toBe(false);
     expect(uploadExceedsCap(5, 5, -1)).toBe(false);
+  });
+});
+
+describe("uploadChunkInOrder", () => {
+  it("accepts a chunk that continues exactly where the last ended", () => {
+    expect(uploadChunkInOrder(0, 0)).toBe(true); // first chunk
+    expect(uploadChunkInOrder(262144, 262144)).toBe(true); // next chunk
+  });
+
+  it("rejects a skipped, duplicated or reordered chunk", () => {
+    expect(uploadChunkInOrder(512, 256)).toBe(false); // gap
+    expect(uploadChunkInOrder(0, 256)).toBe(false); // duplicate/restart mid-stream
+    expect(uploadChunkInOrder(256, 512)).toBe(false); // out of order
+  });
+});
+
+describe("isIdleExpired", () => {
+  it("reaps a session idle for at least the timeout", () => {
+    expect(isIdleExpired(0, 60_000, 60_000)).toBe(true); // exactly at the limit
+    expect(isIdleExpired(0, 90_000, 60_000)).toBe(true);
+  });
+
+  it("keeps a session that is still within the window", () => {
+    expect(isIdleExpired(0, 59_999, 60_000)).toBe(false);
+    expect(isIdleExpired(1000, 1500, 60_000)).toBe(false);
+  });
+
+  it("treats a timeout of 0 or less as disabled", () => {
+    expect(isIdleExpired(0, 10_000_000, 0)).toBe(false);
+    expect(isIdleExpired(0, 10_000_000, -1)).toBe(false);
   });
 });
