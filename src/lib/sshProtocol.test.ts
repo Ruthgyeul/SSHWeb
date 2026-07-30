@@ -16,6 +16,7 @@ import {
   isProbablyTextFile,
   isProbablyVideoFile,
   joinPath,
+  forwardLabel,
   previewKind,
   videoMimeType,
   modeToOctal,
@@ -26,6 +27,7 @@ import {
   parseOctalMode,
   sortEntries,
   validateConnectInput,
+  validateForward,
   type FileEntry,
 } from "./sshProtocol";
 
@@ -89,6 +91,56 @@ describe("validateConnectInput", () => {
       privateKey: "",
     });
     expect(errors).toContain("A private key is required.");
+  });
+});
+
+describe("validateForward", () => {
+  const base = {
+    bindHost: "127.0.0.1",
+    bindPort: 8080,
+    destHost: "db.internal",
+    destPort: 5432,
+  };
+
+  it("accepts a complete forward", () => {
+    expect(validateForward(base)).toEqual([]);
+  });
+
+  it("flags out-of-range ports and a missing destination host", () => {
+    const errors = validateForward({
+      ...base,
+      bindPort: 0,
+      destHost: "  ",
+      destPort: 70000,
+    });
+    expect(errors).toHaveLength(3);
+  });
+
+  it("rejects non-numeric ports", () => {
+    expect(validateForward({ ...base, bindPort: "abc" })).toContain(
+      "Local port must be an integer between 1 and 65535.",
+    );
+  });
+});
+
+describe("forwardLabel", () => {
+  it("renders a bind→dest label, normalizing loopback to localhost", () => {
+    expect(
+      forwardLabel({
+        bindHost: "127.0.0.1",
+        bindPort: 8080,
+        destHost: "db",
+        destPort: 5432,
+      }),
+    ).toBe("localhost:8080 → db:5432");
+    expect(
+      forwardLabel({
+        bindHost: "0.0.0.0",
+        bindPort: 80,
+        destHost: "web",
+        destPort: 8080,
+      }),
+    ).toBe("0.0.0.0:80 → web:8080");
   });
 });
 

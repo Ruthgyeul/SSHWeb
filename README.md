@@ -21,16 +21,22 @@ all from a web page. Built with **Next.js** and a terminal-styled design system.
   with optional passphrase)
 - **SFTP file browser** — navigate, drag-and-drop upload with progress
   (drop or pick a whole **folder** and its subdirectories are recreated
-  remotely), download, delete, rename, `chmod`, create folders, inline text
-  editing with **find/replace**, and whole-folder download as a zip
+  remotely), download, delete, rename, `chmod`, create folders, and whole-folder
+  download as a zip
+- **Multi-file inline editor** — open several remote files at once as **tabs**,
+  each with its own edit buffer, **find/replace**, and an unsaved-changes guard
+- **Local port forwarding** (`ssh -L`) — tunnel a local port to a host reachable
+  from the SSH server (opt-in; loopback-only by default)
 - **Manage trusted host keys** — the gear popover lists the host keys you've
   accepted (trust-on-first-use) and lets you forget any of them
 - **WebSocket ↔ SSH bridge** — a custom Node server (`server.mjs`) relays the
   browser to a real [`ssh2`](https://github.com/mscdex/ssh2) connection
 - **Hardened by default** — strict CSP and security headers; credentials are
   relayed to the host and never stored or logged; optional host allowlist,
-  session limits, per-IP rate limiting and an optional **idle-session timeout**;
-  structured (credential-free) event logs and a `/api/health` probe for ops
+  session limits, per-IP rate limiting, an optional **idle-session timeout** and
+  an optional **shared access key** gating the whole relay; structured
+  (credential-free) event logs, a metrics-carrying `/api/health` probe and
+  **graceful shutdown** (drains sessions on SIGTERM/SIGINT)
 - **Env-driven config** — brand/host/limits via `.env.local`, not source edits
 - **Next.js 16** (App Router) · **React 19** · **TypeScript** (strict) ·
   **Tailwind CSS v4**, plus SEO metadata, PWA manifest and Vitest/ESLint/CI
@@ -71,8 +77,9 @@ and is read from `NEXT_PUBLIC_*` environment variables. Copy `.env.example` to
 
 The SSH bridge has its own (server-only) settings — `SSH_ALLOWED_HOSTS`,
 `SSH_MAX_SESSIONS`, `SSH_MAX_DOWNLOAD_BYTES`, `SSH_MAX_UPLOAD_BYTES`,
-`SSH_RATE_LIMIT_MAX`, `SSH_ALLOWED_ORIGINS`, `NEXT_PUBLIC_SSH_WS_PATH` — covered
-under [Security](#security). See [`.env.example`](.env.example) for the full,
+`SSH_RATE_LIMIT_MAX`, `SSH_ALLOWED_ORIGINS`, `SSH_ACCESS_TOKEN`,
+`SSH_ALLOW_PORT_FORWARD`, `NEXT_PUBLIC_SSH_WS_PATH` — covered under
+[Security](#security). See [`.env.example`](.env.example) for the full,
 commented list.
 
 ## Scripts
@@ -158,6 +165,13 @@ mirrors the same message names.
   explicit **`SSH_ALLOWED_ORIGINS`** allowlist) to block cross-site WebSocket
   hijacking. The CSP also only allows same-origin WebSockets, so a page can reach
   *this* site's relay and nothing else.
+- **An optional shared access key** (**`SSH_ACCESS_TOKEN`**) gates the relay
+  itself: when set, the browser must present it (a one-time prompt, exchanged for
+  an HttpOnly cookie at `POST /api/access`) before any WebSocket upgrade is
+  accepted. The raw token is never stored in the cookie or logged.
+- **Local port forwarding is opt-in** (**`SSH_ALLOW_PORT_FORWARD`**) and binds to
+  loopback only unless **`SSH_FORWARD_ALLOW_PUBLIC_BIND`** is set, so a tunnel is
+  reachable from the relay host and nowhere else by default.
 
 > Run it behind HTTPS/TLS in production so credentials and session bytes travel
 > over `wss://`, and keep the allowlist tight if the deployment is public.

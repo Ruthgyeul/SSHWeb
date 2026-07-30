@@ -29,7 +29,8 @@ import { cn } from "@/lib/utils";
 import { XtermView, type XtermHandle } from "./XtermView";
 import { ConnectForm, type ConnectDetails } from "./ConnectForm";
 import { FileBrowser, type UploadItem, type DownloadItem } from "./FileBrowser";
-import { FileEditor } from "./FileEditor";
+import { FileEditor, type EditorFile } from "./FileEditor";
+import { Tunnels, type ForwardState, type NewForward } from "./Tunnels";
 import { FilePreview } from "./FilePreview";
 import { PasteConfirm } from "./PasteConfirm";
 import { PromptDialog, type DialogRequest } from "./PromptDialog";
@@ -43,13 +44,6 @@ import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 /** Upload chunk size; each chunk is one `sftp-write` message (drives progress). */
 const UPLOAD_CHUNK = 256 * 1024;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** An open file in the inline editor. */
-interface EditorState {
-  path: string;
-  name: string;
-  content: string;
-}
 
 /** An image or video open in the preview modal. */
 interface PreviewState {
@@ -78,7 +72,7 @@ export interface SessionMeta {
   status: SessionStatus;
 }
 
-type Tab = "terminal" | "files";
+type Tab = "terminal" | "files" | "tunnels";
 
 /** How many times to auto-reconnect a dropped session before giving up. */
 const MAX_RECONNECT = 3;
@@ -180,9 +174,14 @@ export function SshSession({
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [authPrompt, setAuthPrompt] = useState<AuthPromptState | null>(null);
-  const [editor, setEditor] = useState<EditorState | null>(null);
-  const [editorSaving, setEditorSaving] = useState(false);
+  // Files open in the inline editor (tabs), plus which one is shown and which
+  // (if any) is being saved right now.
+  const [editors, setEditors] = useState<EditorFile[]>([]);
+  const [activeEditor, setActiveEditor] = useState<string | null>(null);
+  const [savingPath, setSavingPath] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
+  // Active local port-forwards, keyed by their client-generated id.
+  const [forwards, setForwards] = useState<Record<string, ForwardState>>({});
   const [uploads, setUploads] = useState<Record<string, UploadItem>>({});
   const [downloads, setDownloads] = useState<Record<string, DownloadItem>>({});
   // Accumulated download chunks (bytes), keyed by remote path. A ref so pushing
@@ -190,7 +189,9 @@ export function SshSession({
   const downloadBuffersRef = useRef<
     Record<string, { name: string; chunks: Uint8Array[] }>
   >({});
-  const editorSaveTextRef = useRef("");
+  // Text captured at save time per path, so `sftp-ok` can reconcile the editor's
+  // saved content (marking that file clean) without a re-read.
+  const editorSaveTextRef = useRef<Record<string, string>>({});
 
   // Round-trip latency (ms) to the SSH bridge, sampled while connected.
   const [latency, setLatency] = useState<number | null>(null);
@@ -304,7 +305,12 @@ export function SshSession({
         case "sftp-read":
           if (msg.edit) {
             const text = new TextDecoder().decode(base64ToBytes(msg.dataB64));
-            setEditor({ path: msg.path, name: msg.name, content: text });
+            setEditors((prev) =>
+              prev.some((e) => e.path === msg.path)
+                ? prev // already open — just focus it (don't clobber edits)
+                : [...prev, { path: msg.path, name: msg.name, content: text }],
+            );
+            setActiveEditor(msg.path);
           } else if (msg.preview) {
             const bytes = base64ToBytes(msg.dataB64);
             const kind = previewKind(msg.name) ?? "image";
@@ -367,14 +373,60 @@ export function SshSession({
               delete rest[msg.path];
               return rest;
             });
-            setEditorSaving(false);
-            setEditor((ed) =>
-              ed && ed.path === msg.path
-                ? { ...ed, content: editorSaveTextRef.current }
-                : ed,
-            );
+            setSavingPath((cur) => (cur === msg.path ? null : cur));
+            const saved = editorSaveTextRef.current[msg.path];
+            if (saved !== undefined) {
+              setEditors((prev) =>
+                prev.map((e) =>
+                  e.path === msg.path ? { ...e, content: saved } : e,
+                ),
+              );
+              delete editorSaveTextRef.current[msg.path];
+            }
           }
           listDir(cwdRef.current);
+          break;
+
+        case "forward-opened":
+          setForwards((f) => ({
+            ...f,
+            [msg.id]: {
+              id: msg.id,
+              bindHost: msg.bindHost,
+              bindPort: msg.bindPort,
+              destHost: msg.destHost,
+              destPort: msg.destPort,
+              status: "open",
+              conns: f[msg.id]?.conns ?? 0,
+            },
+          }));
+          break;
+
+        case "forward-closed":
+          setForwards((f) => {
+            const rest = { ...f };
+            delete rest[msg.id];
+            return rest;
+          });
+          break;
+
+        case "forward-error":
+          setForwards((f) => {
+            const cur = f[msg.id];
+            if (!cur) return f; // error for a forward we already dropped
+            return {
+              ...f,
+              [msg.id]: { ...cur, status: "error", error: msg.message },
+            };
+          });
+          break;
+
+        case "forward-conn":
+          setForwards((f) => {
+            const cur = f[msg.id];
+            if (!cur) return f;
+            return { ...f, [msg.id]: { ...cur, conns: msg.count } };
+          });
           break;
 
         case "error":
@@ -505,7 +557,11 @@ export function SshSession({
     setEntries([]);
     setStatusMessage("");
     setAuthPrompt(null);
-    setEditor(null);
+    setEditors([]);
+    setActiveEditor(null);
+    setSavingPath(null);
+    editorSaveTextRef.current = {};
+    setForwards({});
     setPreview(null);
     setPastePending(null);
     setDialog(null);
@@ -793,14 +849,47 @@ export function SshSession({
       },
     });
   };
-  const onSaveEdit = (text: string) => {
-    if (!editor) return;
-    editorSaveTextRef.current = text;
-    setEditorSaving(true);
+  const onSaveEdit = (path: string, text: string) => {
+    editorSaveTextRef.current[path] = text;
+    setSavingPath(path);
     send({
       t: "sftp-write",
-      path: editor.path,
+      path,
       dataB64: bytesToBase64(new TextEncoder().encode(text)),
+    });
+  };
+  // Close one editor tab; if it was active, fall back to the last remaining file.
+  const closeEditorFile = (path: string) => {
+    const remaining = editors.filter((e) => e.path !== path);
+    setEditors(remaining);
+    setActiveEditor((cur) =>
+      cur !== path ? cur : remaining.length ? remaining[remaining.length - 1].path : null,
+    );
+  };
+  const closeAllEditors = () => {
+    setEditors([]);
+    setActiveEditor(null);
+  };
+
+  // --- Port-forward actions ---
+  const openForward = (nf: NewForward) => {
+    const id =
+      globalThis.crypto?.randomUUID?.() ??
+      `fwd-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    // Optimistic "opening" entry so the tunnel shows immediately; forward-opened
+    // / forward-error will resolve its status.
+    setForwards((f) => ({
+      ...f,
+      [id]: { id, ...nf, status: "opening", conns: 0 },
+    }));
+    send({ t: "forward-open", id, ...nf });
+  };
+  const closeForward = (id: string) => {
+    send({ t: "forward-close", id });
+    setForwards((f) => {
+      const rest = { ...f };
+      delete rest[id];
+      return rest;
     });
   };
 
@@ -841,7 +930,7 @@ export function SshSession({
               </button>
             )}
             <TerminalSettings prefs={termPrefs} onChange={updateTermPrefs} />
-            {(["terminal", "files"] as const).map((t) => (
+            {(["terminal", "files", "tunnels"] as const).map((t) => (
               <button
                 key={t}
                 type="button"
@@ -872,7 +961,7 @@ export function SshSession({
         <div
           className={cn(
             "absolute inset-0 flex-col bg-term-bg",
-            connected && tab === "files" ? "hidden" : "flex",
+            connected && tab !== "terminal" ? "hidden" : "flex",
           )}
         >
           <div className="min-h-0 flex-1 p-2">
@@ -923,17 +1012,6 @@ export function SshSession({
               onEdit={(path) => send({ t: "sftp-read", path, edit: true })}
               onPreview={(path) => send({ t: "sftp-read", path, preview: true })}
             />
-            {editor && (
-              <FileEditor
-                key={editor.path}
-                name={editor.name}
-                path={editor.path}
-                content={editor.content}
-                saving={editorSaving}
-                onSave={onSaveEdit}
-                onClose={() => setEditor(null)}
-              />
-            )}
             {preview && (
               <FilePreview
                 key={preview.path}
@@ -946,6 +1024,30 @@ export function SshSession({
               />
             )}
           </div>
+        )}
+
+        {connected && tab === "tunnels" && (
+          <div className="absolute inset-0 bg-term-bg">
+            <Tunnels
+              forwards={Object.values(forwards)}
+              onOpen={openForward}
+              onClose={closeForward}
+            />
+          </div>
+        )}
+
+        {/* Inline editor overlays every tab so switching tabs keeps unsaved
+            buffers alive; it's only populated while connected. */}
+        {activeEditor && editors.length > 0 && (
+          <FileEditor
+            files={editors}
+            activePath={activeEditor}
+            savingPath={savingPath}
+            onSave={onSaveEdit}
+            onSelect={setActiveEditor}
+            onCloseFile={closeEditorFile}
+            onCloseAll={closeAllEditors}
+          />
         )}
 
         {showOverlay && (
