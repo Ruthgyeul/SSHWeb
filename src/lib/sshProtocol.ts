@@ -89,6 +89,20 @@ export type ClientMessage =
   // Download several selected entries (files and/or directories) as a single
   // (store-only) zip archive. The server replies with a one-shot `sftp-read`.
   | { t: "sftp-download-many"; paths: string[] }
+  // Open a local port-forward (`ssh -L`): the bridge listens on
+  // `bindHost:bindPort` and tunnels each accepted TCP connection to
+  // `destHost:destPort` *through the SSH session*. `id` is a client-generated
+  // handle the two ends use to correlate status and teardown.
+  | {
+      t: "forward-open";
+      id: string;
+      bindHost: string;
+      bindPort: number;
+      destHost: string;
+      destPort: number;
+    }
+  // Tear down a previously opened forward and close its listener.
+  | { t: "forward-close"; id: string }
   | { t: "disconnect" };
 
 /* ------------------------------------------------------------------ */
@@ -148,6 +162,22 @@ export type ServerMessage =
       preview?: boolean;
     }
   | { t: "sftp-ok"; op: string; path: string }
+  // A local port-forward the bridge is now listening for (echoes the resolved
+  // bind/destination so the UI can show exactly what was opened).
+  | {
+      t: "forward-opened";
+      id: string;
+      bindHost: string;
+      bindPort: number;
+      destHost: string;
+      destPort: number;
+    }
+  // A forward's listener has been torn down (by the user or on disconnect).
+  | { t: "forward-closed"; id: string }
+  // A forward could not be opened, or failed while running.
+  | { t: "forward-error"; id: string; message: string }
+  // Live count of connections currently tunnelled through a forward.
+  | { t: "forward-conn"; id: string; count: number }
   | { t: "error"; message: string; scope?: "sftp" | "shell" | "auth" };
 
 /* ------------------------------------------------------------------ */
@@ -218,6 +248,53 @@ export function validateConnectInput(input: ConnectInput): string[] {
   }
 
   return errors;
+}
+
+/** A local port-forward request, as gathered from the tunnels form. */
+export interface ForwardInput {
+  /** Address the bridge listens on (defaults to loopback in the UI). */
+  bindHost: string;
+  bindPort: number | string;
+  /** Destination host, resolved *from the SSH server's* network. */
+  destHost: string;
+  destPort: number | string;
+}
+
+/** Validate a port number is an integer in the 1–65535 range. */
+function isValidPort(value: number | string): boolean {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= 65535;
+}
+
+/**
+ * Validate a local port-forward form. Returns human-readable errors; an empty
+ * array means the input is ready to send. Kept pure so the tunnels form and its
+ * tests share one rule set. The server enforces its own bind-safety policy on
+ * top of this (see `isForwardBindAllowed` in `serverSecurity.ts`).
+ */
+export function validateForward(input: ForwardInput): string[] {
+  const errors: string[] = [];
+  if (!isValidPort(input.bindPort)) {
+    errors.push("Local port must be an integer between 1 and 65535.");
+  }
+  if (!input.destHost || input.destHost.trim() === "") {
+    errors.push("Destination host is required.");
+  }
+  if (!isValidPort(input.destPort)) {
+    errors.push("Destination port must be an integer between 1 and 65535.");
+  }
+  return errors;
+}
+
+/** Compact `bind:port → dest:port` label for a forward chip. */
+export function forwardLabel(f: {
+  bindHost: string;
+  bindPort: number;
+  destHost: string;
+  destPort: number;
+}): string {
+  const bind = f.bindHost && f.bindHost !== "127.0.0.1" ? f.bindHost : "localhost";
+  return `${bind}:${f.bindPort} → ${f.destHost}:${f.destPort}`;
 }
 
 /**

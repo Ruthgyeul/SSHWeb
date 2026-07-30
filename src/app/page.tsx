@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { TerminalBar } from "@/components/TerminalBar";
 import { SshClient } from "@/components/ssh/SshClient";
+import { AccessGate } from "@/components/ssh/AccessGate";
 import { SITE_DESCRIPTION } from "@/config/siteConfig";
 
 export const metadata: Metadata = {
@@ -29,7 +30,9 @@ export default function Home() {
             {SITE_DESCRIPTION}
           </p>
         </div>
-        <SshClient />
+        <AccessGate>
+          <SshClient />
+        </AccessGate>
       </div>
     </main>
   );

@@ -191,3 +191,82 @@ export function isIdleExpired(
   if (timeoutMs <= 0) return false;
   return now - lastActivity >= timeoutMs;
 }
+
+/* ------------------------------------------------------------------ */
+/* Relay access gate (optional shared secret)                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Whether the relay is gated by an access token. The bridge is only guarded when
+ * `SSH_ACCESS_TOKEN` is set to a non-empty value; an empty/whitespace token
+ * means the relay is open (the default), matching the reference client.
+ */
+export function accessTokenRequired(configured: string | undefined): boolean {
+  return !!configured && configured.trim() !== "";
+}
+
+/**
+ * Whether a caller-supplied `provided` token authorizes access. The gate is only
+ * satisfied when a token is actually configured *and* the supplied value matches
+ * it exactly. An unconfigured gate is never satisfied by this check — callers use
+ * {@link accessTokenRequired} to decide whether a token is needed at all, so an
+ * open relay never routes through here.
+ *
+ * `server.mjs` mirrors this but compares in constant time (`crypto.timingSafeEqual`)
+ * to avoid leaking the token's length/prefix through response timing.
+ */
+export function accessTokenMatches(
+  configured: string | undefined,
+  provided: string | undefined,
+): boolean {
+  if (!accessTokenRequired(configured)) return false;
+  return provided === configured;
+}
+
+/**
+ * Parse a `Cookie` request header into a `name → value` map. Values are
+ * URL-decoded; malformed pairs are skipped. Absent/empty headers yield `{}`.
+ * Used by the WebSocket upgrade gate to read the access cookie set by
+ * `POST /api/access`.
+ */
+export function parseCookieHeader(
+  header: string | undefined,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    const name = part.slice(0, eq).trim();
+    if (name === "") continue;
+    const raw = part.slice(eq + 1).trim();
+    try {
+      out[name] = decodeURIComponent(raw);
+    } catch {
+      out[name] = raw;
+    }
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* Port-forward bind safety                                            */
+/* ------------------------------------------------------------------ */
+
+/** Loopback bind addresses a local port-forward may always listen on. */
+const LOOPBACK_BINDS = new Set(["127.0.0.1", "::1", "localhost", ""]);
+
+/**
+ * Whether a local port-forward may bind to `bindHost`. Opening a listening
+ * socket is sensitive, so by default a forward may only listen on loopback
+ * (reachable from the machine running the relay, not the wider network). Set
+ * `allowPublic` (from `SSH_FORWARD_ALLOW_PUBLIC_BIND`) to permit any bind
+ * address, e.g. `0.0.0.0`. An empty/absent bind host is treated as loopback.
+ */
+export function isForwardBindAllowed(
+  bindHost: string | undefined,
+  allowPublic: boolean,
+): boolean {
+  if (allowPublic) return true;
+  return LOOPBACK_BINDS.has((bindHost ?? "").trim().toLowerCase());
+}

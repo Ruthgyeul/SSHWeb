@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  accessTokenMatches,
+  accessTokenRequired,
   clientIpFromHeaders,
+  isForwardBindAllowed,
   isIdleExpired,
   isWebSocketOriginAllowed,
   normalizeOrigin,
+  parseCookieHeader,
   SlidingWindowRateLimiter,
   uploadChunkInOrder,
   uploadExceedsCap,
@@ -201,5 +205,68 @@ describe("isIdleExpired", () => {
   it("treats a timeout of 0 or less as disabled", () => {
     expect(isIdleExpired(0, 10_000_000, 0)).toBe(false);
     expect(isIdleExpired(0, 10_000_000, -1)).toBe(false);
+  });
+});
+
+describe("accessTokenRequired", () => {
+  it("is true only for a non-empty configured token", () => {
+    expect(accessTokenRequired("s3cret")).toBe(true);
+    expect(accessTokenRequired("  ")).toBe(false);
+    expect(accessTokenRequired("")).toBe(false);
+    expect(accessTokenRequired(undefined)).toBe(false);
+  });
+});
+
+describe("accessTokenMatches", () => {
+  it("authorizes only an exact match against a configured token", () => {
+    expect(accessTokenMatches("s3cret", "s3cret")).toBe(true);
+    expect(accessTokenMatches("s3cret", "nope")).toBe(false);
+    expect(accessTokenMatches("s3cret", "S3cret")).toBe(false);
+  });
+
+  it("never authorizes when no token is configured", () => {
+    expect(accessTokenMatches("", "")).toBe(false);
+    expect(accessTokenMatches(undefined, "anything")).toBe(false);
+    expect(accessTokenMatches("  ", "  ")).toBe(false);
+  });
+});
+
+describe("parseCookieHeader", () => {
+  it("parses name=value pairs, URL-decoding values", () => {
+    expect(parseCookieHeader("a=1; b=two")).toEqual({ a: "1", b: "two" });
+    expect(parseCookieHeader("sshweb_access=ab%20cd")).toEqual({
+      sshweb_access: "ab cd",
+    });
+  });
+
+  it("returns an empty map for an absent or empty header", () => {
+    expect(parseCookieHeader(undefined)).toEqual({});
+    expect(parseCookieHeader("")).toEqual({});
+  });
+
+  it("skips malformed pairs", () => {
+    expect(parseCookieHeader("nonsense; good=1; =orphan")).toEqual({
+      good: "1",
+    });
+  });
+});
+
+describe("isForwardBindAllowed", () => {
+  it("permits loopback binds by default", () => {
+    expect(isForwardBindAllowed("127.0.0.1", false)).toBe(true);
+    expect(isForwardBindAllowed("::1", false)).toBe(true);
+    expect(isForwardBindAllowed("localhost", false)).toBe(true);
+    expect(isForwardBindAllowed("", false)).toBe(true);
+    expect(isForwardBindAllowed(undefined, false)).toBe(true);
+  });
+
+  it("rejects a public bind unless explicitly allowed", () => {
+    expect(isForwardBindAllowed("0.0.0.0", false)).toBe(false);
+    expect(isForwardBindAllowed("192.168.1.5", false)).toBe(false);
+  });
+
+  it("permits any bind when public binds are allowed", () => {
+    expect(isForwardBindAllowed("0.0.0.0", true)).toBe(true);
+    expect(isForwardBindAllowed("192.168.1.5", true)).toBe(true);
   });
 });

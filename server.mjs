@@ -20,8 +20,9 @@
  */
 
 import { createServer } from "node:http";
+import net from "node:net";
 import { parse } from "node:url";
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import next from "next";
 import nextEnv from "@next/env";
 import { WebSocketServer } from "ws";
@@ -89,8 +90,42 @@ const IDLE_TIMEOUT_MS = parseInt(process.env.SSH_IDLE_TIMEOUT_MS || "0", 10);
 const LOG_MODE = (process.env.SSH_LOG || "json").toLowerCase();
 // Fixed path for the JSON health probe (used by load balancers / uptime checks).
 const HEALTH_PATH = "/api/health";
+// Optional shared secret gating the whole relay. When set, the browser must
+// exchange it for an access cookie at POST /api/access before its WebSocket
+// upgrade is accepted. Empty (the default) leaves the relay open.
+const ACCESS_TOKEN = process.env.SSH_ACCESS_TOKEN || "";
+// Fixed path for the access-gate probe/exchange endpoint, and the cookie it sets.
+const ACCESS_PATH = "/api/access";
+const ACCESS_COOKIE = "sshweb_access";
+// Allow local port-forwarding (`ssh -L`). Opening a listening TCP socket on the
+// relay host is sensitive, so it's off unless explicitly enabled.
+const ALLOW_FORWARD =
+  (process.env.SSH_ALLOW_PORT_FORWARD || "false").toLowerCase() === "true";
+// Whether a forward may bind to a non-loopback address (e.g. 0.0.0.0). Off by
+// default: forwards may only listen on loopback so they aren't network-reachable.
+const FORWARD_ALLOW_PUBLIC_BIND =
+  (process.env.SSH_FORWARD_ALLOW_PUBLIC_BIND || "false").toLowerCase() ===
+  "true";
+// Cap on concurrent forwards per session, so a client can't exhaust host ports.
+const MAX_FORWARDS = parseInt(process.env.SSH_MAX_FORWARDS || "10", 10);
 
 let activeSessions = 0;
+// Cumulative operational counters surfaced by the health probe (process-wide).
+let totalConnections = 0; // SSH sessions that reached "ready"
+let rejectedConnections = 0; // connection attempts refused (any reason)
+let bytesUp = 0; // bytes relayed browser → remote (shell input + uploads)
+let bytesDown = 0; // bytes relayed remote → browser (shell output + downloads)
+// Set once a graceful shutdown starts, so new upgrades are refused.
+let shuttingDown = false;
+
+/**
+ * The value stored in the access cookie: a SHA-256 hex digest of the configured
+ * token, so the raw secret never sits in a cookie. The WebSocket upgrade gate
+ * compares the presented cookie against this.
+ */
+const ACCESS_COOKIE_VALUE = ACCESS_TOKEN
+  ? createHash("sha256").update(ACCESS_TOKEN).digest("hex")
+  : "";
 
 /**
  * Emit a structured operational event as a single JSON line on stdout. Only
@@ -167,6 +202,62 @@ function isIdleExpired(lastActivity, now, timeoutMs) {
   return now - lastActivity >= timeoutMs;
 }
 
+/** Whether the relay is gated by an access token (mirrors serverSecurity.ts). */
+function accessTokenRequired(configured) {
+  return !!configured && configured.trim() !== "";
+}
+
+/**
+ * Constant-time check that `provided` matches the configured access token. Uses
+ * `timingSafeEqual` so response timing doesn't leak the token's length/prefix
+ * (the pure mirror in serverSecurity.ts uses plain equality; the algorithm — an
+ * exact match against a configured token — is the same).
+ */
+function accessTokenMatches(configured, provided) {
+  if (!accessTokenRequired(configured)) return false;
+  const a = Buffer.from(String(configured));
+  const b = Buffer.from(String(provided ?? ""));
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/** Parse a Cookie header into a name→value map (mirrors serverSecurity.ts). */
+function parseCookieHeader(header) {
+  const out = {};
+  if (!header) return out;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    const name = part.slice(0, eq).trim();
+    if (name === "") continue;
+    const raw = part.slice(eq + 1).trim();
+    try {
+      out[name] = decodeURIComponent(raw);
+    } catch {
+      out[name] = raw;
+    }
+  }
+  return out;
+}
+
+/** Whether the request carries a valid access cookie (constant-time compare). */
+function requestIsAuthorized(req) {
+  if (!accessTokenRequired(ACCESS_TOKEN)) return true;
+  const cookie = parseCookieHeader(req.headers.cookie)[ACCESS_COOKIE] || "";
+  const a = Buffer.from(ACCESS_COOKIE_VALUE);
+  const b = Buffer.from(cookie);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+const FORWARD_LOOPBACK_BINDS = new Set(["127.0.0.1", "::1", "localhost", ""]);
+
+/** Whether a forward may bind to `bindHost` (mirrors serverSecurity.ts). */
+function isForwardBindAllowed(bindHost, allowPublic) {
+  if (allowPublic) return true;
+  return FORWARD_LOOPBACK_BINDS.has((bindHost ?? "").trim().toLowerCase());
+}
+
 /** Minimal per-key sliding-window rate limiter (see serverSecurity.ts). */
 const rateHits = new Map();
 function rateLimitAllow(key, now) {
@@ -197,24 +288,83 @@ const handle = app.getRequestHandler();
 
 await app.prepare();
 
+/** Send a JSON body with no-store caching. */
+function sendJson(res, status, body) {
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+  });
+  res.end(JSON.stringify(body));
+}
+
 const server = createServer((req, res) => {
+  const pathname = parse(req.url).pathname;
+
   // Lightweight JSON health probe, answered before Next so load balancers and
   // uptime checks get a stable, dependency-free 200. No credentials involved.
-  if (req.method === "GET" && parse(req.url).pathname === HEALTH_PATH) {
-    res.writeHead(200, {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store",
+  if (req.method === "GET" && pathname === HEALTH_PATH) {
+    sendJson(res, shuttingDown ? 503 : 200, {
+      status: shuttingDown ? "shutting_down" : "ok",
+      activeSessions,
+      maxSessions: MAX_SESSIONS,
+      totalConnections,
+      rejectedConnections,
+      bytesUp,
+      bytesDown,
+      uptime: Math.floor(process.uptime()),
     });
-    res.end(
-      JSON.stringify({
-        status: "ok",
-        activeSessions,
-        maxSessions: MAX_SESSIONS,
-        uptime: Math.floor(process.uptime()),
-      }),
-    );
     return;
   }
+
+  // Access gate: report whether a token is required and whether this caller is
+  // already authorized (GET), or exchange a token for the access cookie (POST).
+  // Credentials for the target host never pass through here — only the relay's
+  // own optional shared secret does.
+  if (pathname === ACCESS_PATH) {
+    if (req.method === "GET") {
+      sendJson(res, 200, {
+        required: accessTokenRequired(ACCESS_TOKEN),
+        authorized: requestIsAuthorized(req),
+      });
+      return;
+    }
+    if (req.method === "POST") {
+      let body = "";
+      let tooBig = false;
+      req.on("data", (chunk) => {
+        body += chunk;
+        if (body.length > 4096) {
+          tooBig = true;
+          req.destroy();
+        }
+      });
+      req.on("end", () => {
+        if (tooBig) return;
+        let token = "";
+        try {
+          token = String(JSON.parse(body).token ?? "");
+        } catch {
+          /* malformed body → treated as an empty (failing) token */
+        }
+        if (!accessTokenMatches(ACCESS_TOKEN, token)) {
+          logEvent("reject", { ip: clientIpFromReq(req), reason: "bad-access-token" });
+          sendJson(res, 401, { authorized: false });
+          return;
+        }
+        const secure = (req.headers["x-forwarded-proto"] || "").includes("https");
+        res.setHeader(
+          "Set-Cookie",
+          `${ACCESS_COOKIE}=${ACCESS_COOKIE_VALUE}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800${secure ? "; Secure" : ""}`,
+        );
+        sendJson(res, 200, { authorized: true });
+      });
+      return;
+    }
+    res.writeHead(405, { Allow: "GET, POST" });
+    res.end();
+    return;
+  }
+
   handle(req, res, parse(req.url, true));
 });
 
@@ -226,6 +376,12 @@ const wss = new WebSocketServer({ noServer: true });
 server.on("upgrade", (req, socket, head) => {
   const { pathname } = parse(req.url || "");
   if (pathname === WS_PATH) {
+    // Refuse new sessions once a graceful shutdown has begun.
+    if (shuttingDown) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     // Reject cross-site WebSocket handshakes before upgrading (anti-CSWSH).
     if (!isWebSocketOriginAllowed(req.headers.origin, req.headers.host)) {
       logEvent("reject", {
@@ -233,6 +389,14 @@ server.on("upgrade", (req, socket, head) => {
         origin: req.headers.origin || "",
       });
       socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    // Enforce the optional access gate before spending a session on the upgrade.
+    if (!requestIsAuthorized(req)) {
+      rejectedConnections += 1;
+      logEvent("reject", { ip: clientIpFromReq(req), reason: "unauthorized" });
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return;
     }
@@ -435,6 +599,8 @@ wss.on("connection", (ws, req) => {
   const uploads = new Map();
   // In-flight download read streams, so they can be torn down on cleanup.
   const downloads = new Set();
+  // Open local port-forwards, keyed by client id → { server, sockets:Set }.
+  const forwards = new Map();
   // Timestamp of the last genuine shell/SFTP activity (not latency pings), used
   // by the idle-timeout reaper below.
   let lastActivity = Date.now();
@@ -520,6 +686,21 @@ wss.on("connection", (ws, req) => {
       }
     }
     downloads.clear();
+    for (const fwd of forwards.values()) {
+      try {
+        fwd.server.close();
+      } catch {
+        /* listener already gone */
+      }
+      for (const s of fwd.sockets) {
+        try {
+          s.destroy();
+        } catch {
+          /* socket already gone */
+        }
+      }
+    }
+    forwards.clear();
     ssh = null;
     shell = null;
     sftp = null;
@@ -565,16 +746,19 @@ wss.on("connection", (ws, req) => {
       return ws.close();
     }
     if (!isHostAllowed(host)) {
+      rejectedConnections += 1;
       logEvent("reject", { ip: clientIp, host, reason: "host-not-allowed" });
       sendError(`Host not allowed by this server: ${host}`, "auth");
       return ws.close();
     }
     if (!rateLimitAllow(clientIp, Date.now())) {
+      rejectedConnections += 1;
       logEvent("reject", { ip: clientIp, host, reason: "rate-limit" });
       sendError("Too many connection attempts. Please slow down.", "auth");
       return ws.close();
     }
     if (activeSessions >= MAX_SESSIONS) {
+      rejectedConnections += 1;
       logEvent("reject", { ip: clientIp, host, reason: "at-capacity" });
       sendError("Server is at capacity. Try again shortly.", "auth");
       return ws.close();
@@ -588,6 +772,7 @@ wss.on("connection", (ws, req) => {
 
     ssh
       .on("ready", () => {
+        totalConnections += 1;
         logEvent("connect", { ip: clientIp, host, port: targetPort });
         send({ t: "status", state: "connected" });
         ssh.shell(
@@ -604,10 +789,12 @@ wss.on("connection", (ws, req) => {
             shell = stream;
             stream.on("data", (data) => {
               touch();
+              bytesDown += data.length;
               send({ t: "data", data: data.toString("base64") });
             });
             stream.stderr?.on("data", (data) => {
               touch();
+              bytesDown += data.length;
               send({ t: "data", data: data.toString("base64") });
             });
             stream.on("close", () => {
@@ -694,6 +881,7 @@ wss.on("connection", (ws, req) => {
       );
     }
     entry.written += buffer.length;
+    bytesUp += buffer.length;
     entry.stream.write(buffer);
     if (isFinal) {
       entry.stream.end(() => {
@@ -753,6 +941,105 @@ wss.on("connection", (ws, req) => {
     appendUploadChunk(existing, path, buffer, msg.final === true);
   }
 
+  // Open a local port-forward (`ssh -L`): listen on bindHost:bindPort and tunnel
+  // each accepted TCP connection to destHost:destPort *through the SSH session*.
+  // Guarded by ALLOW_FORWARD, a loopback-only bind policy, and a per-session cap.
+  function openForward(msg) {
+    const id = String(msg.id || "");
+    if (!id || forwards.has(id)) return;
+    const fail = (message) => send({ t: "forward-error", id, message });
+    if (!ALLOW_FORWARD) {
+      return fail("Port forwarding is disabled on this server.");
+    }
+    if (!ssh) return fail("Not connected.");
+    if (forwards.size >= MAX_FORWARDS) {
+      return fail(`Too many forwards (max ${MAX_FORWARDS}).`);
+    }
+    const bindHost = String(msg.bindHost || "127.0.0.1").trim() || "127.0.0.1";
+    const bindPort = Number(msg.bindPort) || 0;
+    const destHost = String(msg.destHost || "").trim();
+    const destPort = Number(msg.destPort) || 0;
+    if (bindPort < 1 || bindPort > 65535 || destPort < 1 || destPort > 65535 || !destHost) {
+      return fail("Invalid forward specification.");
+    }
+    if (!isForwardBindAllowed(bindHost, FORWARD_ALLOW_PUBLIC_BIND)) {
+      return fail(
+        "Forward may only bind to loopback on this server (127.0.0.1).",
+      );
+    }
+
+    const sockets = new Set();
+    const local = net.createServer((socket) => {
+      if (!ssh) return socket.destroy();
+      const srcIp = socket.remoteAddress || "127.0.0.1";
+      const srcPort = socket.remotePort || 0;
+      ssh.forwardOut(srcIp, srcPort, destHost, destPort, (err, stream) => {
+        if (err) {
+          socket.destroy();
+          return;
+        }
+        sockets.add(socket);
+        send({ t: "forward-conn", id, count: sockets.size });
+        // Meter forwarded traffic into the same up/down counters as the shell.
+        socket.on("data", (d) => {
+          bytesUp += d.length;
+        });
+        stream.on("data", (d) => {
+          bytesDown += d.length;
+        });
+        socket.pipe(stream).pipe(socket);
+        const done = () => {
+          if (sockets.delete(socket)) {
+            send({ t: "forward-conn", id, count: sockets.size });
+          }
+          try {
+            socket.destroy();
+          } catch {
+            /* already gone */
+          }
+          try {
+            stream.destroy();
+          } catch {
+            /* already gone */
+          }
+        };
+        socket.on("close", done);
+        socket.on("error", done);
+        stream.on("close", done);
+        stream.on("error", done);
+      });
+    });
+    local.on("error", (err) => {
+      forwards.delete(id);
+      fail(err.code === "EADDRINUSE" ? `Port ${bindPort} is already in use.` : err.message);
+    });
+    forwards.set(id, { server: local, sockets, bindHost, bindPort, destHost, destPort });
+    local.listen(bindPort, bindHost, () => {
+      logEvent("forward-open", { ip: clientIp, bindPort, destHost, destPort });
+      send({ t: "forward-opened", id, bindHost, bindPort, destHost, destPort });
+    });
+  }
+
+  // Tear down a forward: close its listener and drop any live tunnelled sockets.
+  function closeForward(id) {
+    const fwd = forwards.get(String(id || ""));
+    if (!fwd) return;
+    forwards.delete(String(id));
+    try {
+      fwd.server.close();
+    } catch {
+      /* listener already gone */
+    }
+    for (const s of fwd.sockets) {
+      try {
+        s.destroy();
+      } catch {
+        /* socket already gone */
+      }
+    }
+    send({ t: "forward-closed", id: String(id) });
+  }
+
   ws.on("message", (raw) => {
     let msg;
     try {
@@ -771,7 +1058,10 @@ wss.on("connection", (ws, req) => {
         break;
 
       case "data":
-        if (shell) shell.write(msg.data, "utf8");
+        if (shell) {
+          bytesUp += Buffer.byteLength(msg.data || "", "utf8");
+          shell.write(msg.data, "utf8");
+        }
         break;
 
       case "resize":
@@ -864,6 +1154,7 @@ wss.on("connection", (ws, req) => {
               size: stats.size,
             });
             stream.on("data", (chunk) => {
+              bytesDown += chunk.length;
               send({
                 t: "sftp-download-chunk",
                 path: msg.path,
@@ -1002,6 +1293,14 @@ wss.on("connection", (ws, req) => {
         });
         break;
 
+      case "forward-open":
+        openForward(msg);
+        break;
+
+      case "forward-close":
+        closeForward(msg.id);
+        break;
+
       case "disconnect":
         cleanup();
         ws.close();
@@ -1023,9 +1322,59 @@ server.listen(port, hostname, () => {
   if (IDLE_TIMEOUT_MS > 0) {
     console.log(`> Idle sessions closed after ${IDLE_TIMEOUT_MS} ms`);
   }
+  if (ACCESS_TOKEN) {
+    console.log("> Relay access gate enabled (SSH_ACCESS_TOKEN set)");
+  }
+  if (ALLOW_FORWARD) {
+    console.log(
+      `> Port forwarding enabled (bind: ${FORWARD_ALLOW_PUBLIC_BIND ? "any" : "loopback only"})`,
+    );
+  }
   logEvent("server-start", {
     port,
     maxSessions: MAX_SESSIONS,
     idleTimeoutMs: IDLE_TIMEOUT_MS,
+    accessGate: accessTokenRequired(ACCESS_TOKEN),
+    portForward: ALLOW_FORWARD,
   });
 });
+
+/**
+ * Graceful shutdown: stop accepting new connections, tell every live client the
+ * server is going away, and exit once they've drained (or after a short grace
+ * period). Lets a process manager (systemd, a container orchestrator) recycle
+ * the relay without abruptly cutting active sessions.
+ */
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logEvent("shutdown", { signal, activeSessions });
+  server.close();
+  for (const client of wss.clients) {
+    try {
+      client.send(
+        JSON.stringify({
+          t: "status",
+          state: "closed",
+          message: "Server is shutting down.",
+        }),
+      );
+      client.close(1001, "server shutdown");
+    } catch {
+      /* client already gone */
+    }
+  }
+  // Exit as soon as all sockets have closed, or force it after the grace period.
+  const forceTimer = setTimeout(() => process.exit(0), 5000);
+  forceTimer.unref?.();
+  const drain = setInterval(() => {
+    if (wss.clients.size === 0) {
+      clearInterval(drain);
+      process.exit(0);
+    }
+  }, 200);
+  drain.unref?.();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
