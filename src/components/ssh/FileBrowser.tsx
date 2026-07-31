@@ -14,6 +14,7 @@ import {
   type FileEntry,
 } from "@/lib/sshProtocol";
 import { cn } from "@/lib/utils";
+import { collectDroppedFiles, droppedEntries } from "./dropUpload";
 
 /** One in-flight upload's progress, shown in the progress panel. */
 export interface UploadItem {
@@ -31,52 +32,6 @@ export interface DownloadItem {
 
 const actionBtn =
   "rounded px-1.5 py-0.5 text-xs text-term-muted transition-colors";
-
-/** A file gathered from a drop, tagged with its path relative to the drop root. */
-interface DroppedFile {
-  file: File;
-  /** e.g. `photos/2024/a.jpg`, or just `a.jpg` for a top-level file. */
-  relPath: string;
-}
-
-/** Read a `FileSystemFileEntry` as a `File` (promisified callback API). */
-function entryToFile(entry: FileSystemFileEntry): Promise<File> {
-  return new Promise((resolve, reject) => entry.file(resolve, reject));
-}
-
-/** Drain a directory reader — `readEntries` yields at most ~100 items per call. */
-function readAllDirEntries(
-  reader: FileSystemDirectoryReader,
-): Promise<FileSystemEntry[]> {
-  return new Promise((resolve, reject) => {
-    const all: FileSystemEntry[] = [];
-    const read = () =>
-      reader.readEntries((batch) => {
-        if (batch.length === 0) return resolve(all);
-        all.push(...batch);
-        read();
-      }, reject);
-    read();
-  });
-}
-
-/** Recursively collect files under a dropped entry, preserving relative paths. */
-async function walkEntry(
-  entry: FileSystemEntry,
-  prefix: string,
-  out: DroppedFile[],
-): Promise<void> {
-  if (entry.isFile) {
-    const file = await entryToFile(entry as FileSystemFileEntry);
-    out.push({ file, relPath: prefix + entry.name });
-  } else if (entry.isDirectory) {
-    const reader = (entry as FileSystemDirectoryEntry).createReader();
-    const children = await readAllDirEntries(reader);
-    for (const child of children) {
-      await walkEntry(child, `${prefix}${entry.name}/`, out);
-    }
-  }
-}
 
 /** Shared empty set for a listing with no active selection (stable identity). */
 const EMPTY_NAMES: ReadonlySet<string> = new Set();
@@ -205,14 +160,10 @@ export function FileBrowser({
     // Capture entries synchronously — the DataTransferItemList is emptied once
     // the event handler returns, so grab the FileSystemEntry refs before any
     // await. When the entry API is available it handles dropped folders too.
-    const entries = Array.from(e.dataTransfer.items ?? [])
-      .filter((it) => it.kind === "file")
-      .map((it) => it.webkitGetAsEntry?.() ?? null)
-      .filter((entry): entry is FileSystemEntry => entry !== null);
+    const entries = droppedEntries(e.dataTransfer.items);
 
     if (entries.length > 0) {
-      const collected: DroppedFile[] = [];
-      for (const entry of entries) await walkEntry(entry, "", collected);
+      const collected = await collectDroppedFiles(entries);
       for (const { file, relPath } of collected) {
         onUpload(file, relPath.includes("/") ? relPath : undefined);
       }
@@ -571,7 +522,7 @@ export function FileBrowser({
           <tbody>
             {visible.map((entry) => {
               const isDir = entry.type === "dir";
-              const target = `${cwd.replace(/\/$/, "")}/${entry.name}`;
+              const target = pathFor(entry.name);
               const editable = !isDir && isProbablyTextFile(entry.name);
               const previewable = !isDir && isProbablyPreviewableFile(entry.name);
               // Double-click opens by type: dir → navigate, image/video →

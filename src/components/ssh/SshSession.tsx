@@ -25,7 +25,15 @@ import {
   type KnownHostMap,
 } from "@/lib/knownHosts";
 import { SITE_NAME, SSH_WS_PATH } from "@/config/siteConfig";
+import { base64ToBytes, bytesToBase64, concatBytes } from "@/lib/bytes";
 import { cn } from "@/lib/utils";
+import { triggerDownload } from "./download";
+import {
+  StatusDot,
+  Uptime,
+  LatencyChip,
+  type SessionStatus,
+} from "./SessionStatus";
 import { XtermView, type XtermHandle } from "./XtermView";
 import { ConnectForm, type ConnectDetails } from "./ConnectForm";
 import { FileBrowser, type UploadItem, type DownloadItem } from "./FileBrowser";
@@ -58,20 +66,17 @@ interface PreviewState {
   bytes: Uint8Array<ArrayBuffer>;
 }
 
-/** Lifecycle phase of a single SSH session. */
-export type SessionStatus =
-  | "idle"
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "dropped"
-  | "error";
-
 /** What a session reports up to the tab manager for its tab chip. */
 export interface SessionMeta {
   label: string;
   status: SessionStatus;
 }
+
+// `SessionStatus` and the header status widgets (StatusDot/Uptime/LatencyChip)
+// live in ./SessionStatus and are re-exported here so existing importers (the
+// tab manager) keep resolving them from this module.
+export type { SessionStatus };
+export { StatusDot };
 
 type Tab = "terminal" | "files" | "tunnels";
 
@@ -96,49 +101,6 @@ function saveKnownHost(id: string, fingerprint: string) {
   } catch {
     /* storage unavailable (private mode) — verification just won't persist */
   }
-}
-
-/** Decode a base64 string to raw bytes for writing into xterm. */
-function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
-  const bin = atob(b64);
-  const buffer = new ArrayBuffer(bin.length);
-  const bytes = new Uint8Array(buffer);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-}
-
-/** Encode raw bytes to base64 in chunks (avoids call-stack limits on big files). */
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
-/** Concatenate a list of byte chunks into one contiguous buffer. */
-function concatBytes(chunks: Uint8Array[]): Uint8Array<ArrayBuffer> {
-  const total = chunks.reduce((n, c) => n + c.length, 0);
-  const out = new Uint8Array(new ArrayBuffer(total));
-  let offset = 0;
-  for (const c of chunks) {
-    out.set(c, offset);
-    offset += c.length;
-  }
-  return out;
-}
-
-/** Kick off a browser download of some bytes. */
-function triggerDownload(name: string, bytes: Uint8Array<ArrayBuffer>) {
-  const url = URL.createObjectURL(new Blob([bytes]));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
 }
 
 /**
@@ -1249,64 +1211,5 @@ export function SshSession({
         <ToastStack toasts={toasts} onDismiss={dismiss} />
       </div>
     </div>
-  );
-}
-
-/** The coloured status dot shared by the header and the manager's tabs. */
-export function StatusDot({ status }: { status: SessionStatus }) {
-  const busy = status === "connecting" || status === "reconnecting";
-  return (
-    <span
-      className={cn(
-        "h-2.5 w-2.5 flex-none rounded-full",
-        status === "connected"
-          ? "bg-term-green term-pulse-soft"
-          : status === "error" || status === "dropped"
-            ? "bg-term-red"
-            : busy
-              ? "bg-term-yellow term-pulse"
-              : "bg-term-fainter",
-      )}
-      aria-hidden
-    />
-  );
-}
-
-/** Live "connected for" clock, ticking once a second (mm:ss, or h:mm:ss). */
-function Uptime({ since }: { since: number }) {
-  // Seed with `since` (elapsed 0) so render stays pure; the interval advances it
-  // to real time on the first tick (~1s later — an unnoticeable initial delay).
-  const [now, setNow] = useState(since);
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, []);
-  const total = Math.max(0, Math.floor((now - since) / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const label = h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-  return (
-    <span
-      className="flex-none tabular-nums text-[11px] text-term-faint"
-      title="Connected for"
-    >
-      ⏱ {label}
-    </span>
-  );
-}
-
-/** A small latency read-out (ms), colour-coded green/yellow/red by round-trip. */
-function LatencyChip({ ms }: { ms: number }) {
-  const color =
-    ms < 100 ? "text-term-green" : ms < 300 ? "text-term-yellow" : "text-term-red";
-  return (
-    <span
-      className={cn("flex-none tabular-nums text-[11px]", color)}
-      title="Round-trip latency to the SSH bridge"
-    >
-      {ms} ms
-    </span>
   );
 }

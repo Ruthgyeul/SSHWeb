@@ -22,7 +22,8 @@ that actually talks SSH is [`server.mjs`](../server.mjs).
 | Component     | Purpose                                                                 |
 | ------------- | ----------------------------------------------------------------------- |
 | `SshClient`   | Multi-session tab manager — mounts one `SshSession` per tab; **double-click a tab to rename it** |
-| `SshSession`  | One connection: owns a WebSocket + terminal + files, auto-reconnects; header shows live uptime + latency |
+| `SshSession`  | One connection: owns a WebSocket + terminal + files, auto-reconnects; header shows live uptime + latency (status widgets live in `SessionStatus`) |
+| `SessionStatus` | The header/tab status widgets — `StatusDot`, `Uptime` clock, `LatencyChip` — plus the `SessionStatus` union type, shared by `SshSession` and `SshClient` |
 | `ConnectForm` | Host/port/user + password-or-key login (validated via `sshProtocol`)    |
 | `XtermView`   | xterm.js wrapper; xterm is dynamically imported (never during SSR)      |
 | `MobileKeys`  | On-screen key bar (Esc/Tab/Ctrl/Alt/arrows/Fn/…) for touch devices; Ctrl/Alt are sticky one-shot modifiers |
@@ -40,6 +41,13 @@ that actually talks SSH is [`server.mjs`](../server.mjs).
 | `Toast` (`ToastStack` + `useToasts`) | Transient error/notice toasts so a failed action is never silent — every bridge `error` frame (over-cap upload/download, rejected chmod/rename/mkdir, capacity/rate-limit) plus `forward-error` and clipboard failures surface here while connected. Sits at `z-50` above every tab and modal; messages are shown verbatim from the (deliberately short, credential-free) server text, clamped by the pure `clampToastMessage` (unit-tested in `Toast.test.ts`) |
 
 The terminal also has a built-in **scrollback search** bar (Ctrl/Cmd+F, `@xterm/addon-search`) that lives inside `XtermView`, and a **latency read-out** + **uptime clock** in the session header (latency fed by a `ping`/`pong` round-trip). The terminal color theme is shared across sessions via the `useTerminalPrefs` hook (localStorage-backed); the presets are defined and unit-tested in `src/lib/terminalTheme.ts`. Plain SFTP **downloads stream in chunks** (`sftp-download-begin`/`chunk`/`end`) so the browser can show a progress bar; edit/preview reads still arrive as a single `sftp-read`.
+
+Alongside the components, a few small **DOM helper modules** keep the big
+components lean: `download.ts` (`triggerDownload` — save bytes as a file) and
+`dropUpload.ts` (`droppedEntries` + `collectDroppedFiles` — walk a dropped
+folder tree into relative-path files). Pure, DOM-free helpers stay in `src/lib`
+instead — the base64 ↔ byte codec used across the wire is `src/lib/bytes.ts`
+(unit-tested in `bytes.test.ts`).
 
 ## Conventions
 
