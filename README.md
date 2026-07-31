@@ -191,11 +191,6 @@ same way. This is **not** compatible with a static export or an edge-only host â
 the SSH bridge needs a long-lived Node process. Terminate TLS in front of it so
 the SSH WebSocket runs over `wss://`.
 
-To run it as a long-lived Linux service, use the hardened systemd unit template
-and step-by-step guide under [`deploy/`](deploy/) â€” see
-[`deploy/README.md`](deploy/README.md) and
-[`deploy/SSHWeb.service`](deploy/SSHWeb.service).
-
 ## Contributing
 
 Branch, commit, PR and merge conventions live in
