@@ -58,10 +58,13 @@ const MAX_SESSIONS = parseInt(process.env.SSH_MAX_SESSIONS || "25", 10);
 const MAX_DOWNLOAD_MB = parseInt(process.env.SSH_MAX_DOWNLOAD_MB || "25", 10);
 const MAX_DOWNLOAD_BYTES =
   MAX_DOWNLOAD_MB > 0 ? MAX_DOWNLOAD_MB * 1024 * 1024 : 0;
-// Upper bound on an image fetched whole to feed a file-browser grid thumbnail.
-// Mirrors `THUMBNAIL_MAX_BYTES` in src/lib/sshProtocol.ts — a `thumb` read past
-// this is silently ignored so a client can't pull a huge file "as a thumbnail".
-const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
+// Absolute ceiling on a file fetched whole to feed a file-browser grid
+// thumbnail. Mirrors `THUMBNAIL_VIDEO_MAX_BYTES` in src/lib/sshProtocol.ts (the
+// larger of the image/video caps) — a `thumb` read past it is silently ignored
+// so a client can't pull a huge file "as a thumbnail". The client also gates
+// per-type via `isThumbnailable` (2 MB images / 8 MB videos), which is a
+// bandwidth nicety rather than the security bound.
+const THUMBNAIL_VIDEO_MAX_BYTES = 8 * 1024 * 1024;
 // Cap a single SFTP upload so an unbounded stream can't fill the target disk
 // (symmetric with the download cap). Configured in whole megabytes; 0 (or less)
 // disables the limit.
@@ -1348,12 +1351,13 @@ wss.on("connection", (ws, req) => {
             }
             const name = msg.path.split("/").pop() || "download";
 
-            // Thumbnails feed the grid view: read the whole (small) image and
-            // echo `thumb`. Guard with a tight cap of its own — a grid renders
-            // many at once, and there's no server-side resizing — so an oversized
-            // image is silently skipped (the client just keeps the generic icon).
+            // Thumbnails feed the grid view: read the whole (small) image or
+            // video clip and echo `thumb`. Guard with a cap of its own — a grid
+            // renders many at once, and there's no server-side resizing/frame
+            // extraction — so an oversized file is silently skipped (the client
+            // just keeps the generic icon). Videos are allowed the larger cap.
             if (msg.thumb === true) {
-              if (stats.size > THUMBNAIL_MAX_BYTES) return;
+              if (stats.size > THUMBNAIL_VIDEO_MAX_BYTES) return;
               s.readFile(msg.path, (err, buffer) => {
                 if (err) return; // best-effort: a failed thumb just shows the icon
                 send({

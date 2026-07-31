@@ -300,6 +300,12 @@ export function SshSession({
           if (msg.enabled) {
             notify("success", "Elevated access on — file operations run as root.");
           }
+          // The access identity just changed, so drop every cached thumbnail:
+          // an image only root could read must not linger after dropping root
+          // (nor should a user-visible one be assumed still readable as root).
+          // The re-list below re-fetches thumbnails under the new identity.
+          requestedThumbsRef.current = new Set();
+          setThumbnails({});
           // Re-list the current directory so the view reflects root's access.
           listDir(cwdRef.current);
           break;
@@ -328,7 +334,10 @@ export function SshSession({
             );
             setActiveEditor(msg.path);
           } else if (msg.thumb) {
-            const mime = imageMimeType(msg.name) ?? "application/octet-stream";
+            const mime =
+              imageMimeType(msg.name) ??
+              videoMimeType(msg.name) ??
+              "application/octet-stream";
             setThumbnails((prev) => ({
               ...prev,
               [msg.path]: `data:${mime};base64,${msg.dataB64}`,

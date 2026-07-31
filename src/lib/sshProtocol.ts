@@ -569,13 +569,18 @@ export function applyKeyModifiers(
 /** Image extensions the browser can render inline, mapped to their MIME type. */
 const IMAGE_MIME: Record<string, string> = {
   png: "image/png",
+  apng: "image/apng",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
+  jfif: "image/jpeg",
+  pjpeg: "image/jpeg",
+  pjp: "image/jpeg",
   gif: "image/gif",
   webp: "image/webp",
   svg: "image/svg+xml",
   bmp: "image/bmp",
   ico: "image/x-icon",
+  cur: "image/x-icon",
   avif: "image/avif",
 };
 
@@ -597,17 +602,29 @@ export function isProbablyImageFile(name: string): boolean {
 export const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
 
 /**
- * Whether a listing entry should get an auto-loaded image thumbnail in the grid
- * view: a regular file that's a browser-renderable image and small enough that
- * fetching it whole is cheap (see {@link THUMBNAIL_MAX_BYTES}).
+ * Upper bound (bytes) on a video the grid will auto-fetch to render a poster
+ * frame. Video thumbnails work by pulling the whole (short) clip and letting a
+ * `<video>` element paint its first frame — no server-side frame extraction —
+ * so the cap is a bit higher than the image one but still keeps the grid cheap;
+ * larger clips just show the film icon. Mirrored in `server.mjs` (as the
+ * absolute ceiling for any `thumb` read).
+ */
+export const THUMBNAIL_VIDEO_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Whether a listing entry should get an auto-loaded thumbnail in the grid view:
+ * a regular file that's a browser-renderable image or video and small enough
+ * that fetching it whole is cheap (see {@link THUMBNAIL_MAX_BYTES} /
+ * {@link THUMBNAIL_VIDEO_MAX_BYTES}). Use {@link previewKind} to decide whether
+ * to render the fetched bytes as an `<img>` or a `<video>`.
  */
 export function isThumbnailable(entry: FileEntry): boolean {
-  return (
-    entry.type === "file" &&
-    isProbablyImageFile(entry.name) &&
-    entry.size >= 0 &&
-    entry.size <= THUMBNAIL_MAX_BYTES
-  );
+  if (entry.type !== "file" || entry.size < 0) return false;
+  if (isProbablyImageFile(entry.name)) return entry.size <= THUMBNAIL_MAX_BYTES;
+  if (isProbablyVideoFile(entry.name)) {
+    return entry.size <= THUMBNAIL_VIDEO_MAX_BYTES;
+  }
+  return false;
 }
 
 /**
