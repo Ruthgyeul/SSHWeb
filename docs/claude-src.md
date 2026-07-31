@@ -27,6 +27,7 @@ src/
 │   ├── og.tsx           # shared OG/Twitter image renderer
 │   ├── sshProtocol.ts   # web-SSH wire types + pure helpers
 │   ├── serverSecurity.ts # origin check / rate limiter / IP + upload cap (mirrored in server.mjs)
+│   ├── bytes.ts         # pure base64 ↔ byte helpers (web-SSH data plane)
 │   └── utils.ts         # cn() classname helper
 ├── styles/
 │   └── globals.css      # Tailwind import + @theme palette + terminal utilities
