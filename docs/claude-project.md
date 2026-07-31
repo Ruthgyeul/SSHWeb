@@ -145,7 +145,12 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   don't widen it for this feature. Ops surfaces: `server.mjs` emits structured,
   credential-free event logs (`SSH_LOG=json|off`), serves a metrics-carrying JSON
   health probe at `GET /api/health`, and shuts down gracefully (drains sessions
-  on SIGTERM/SIGINT).
+  on SIGTERM/SIGINT). Grid thumbnails are downscaled in-memory with `sharp`
+  (`THUMBNAIL_PIXELS`, mirrored from `sshProtocol.ts`) before being sent — the
+  original file is only read, never modified — and `sharp` is loaded optionally,
+  so a build without it just falls back to sending full-size images. The client
+  concurrency-limits thumbnail reads and caches finished thumbnails in IndexedDB
+  (`src/lib/thumbnailCache.ts`) so revisiting a folder needs no re-fetch.
 
 ## Assets
 

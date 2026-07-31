@@ -8,6 +8,7 @@ import {
   encodeMessage,
   hostKeyId,
   imageMimeType,
+  isThumbnailable,
   joinPath,
   modeToOctal,
   parseMessage,
@@ -19,6 +20,12 @@ import {
   type ServerMessage,
 } from "@/lib/sshProtocol";
 import { getThemePreset } from "@/lib/terminalTheme";
+import {
+  fileVersionTag,
+  getCachedThumbnails,
+  putCachedThumbnail,
+  thumbnailCacheKey,
+} from "@/lib/thumbnailCache";
 import {
   KNOWN_HOSTS_KEY,
   parseKnownHosts,
@@ -62,12 +69,29 @@ interface PreviewState {
   name: string;
   /** Which media surface to render; `unsupported` shows a download-only card. */
   kind: PreviewKind | "unsupported";
-  /** `data:` URL for the media element; empty until loaded / for `unsupported`. */
+  /** `blob:` URL for the media element; empty until loaded / for `unsupported`. */
   src: string;
+  /** True from the click until the file's bytes arrive — the modal opens
+   * immediately in a loading state instead of waiting silently for transfer. */
+  loading: boolean;
+  /** Cached grid thumbnail (`data:` URL), painted instantly behind the spinner
+   * while the full-resolution media loads. Absent in list view / for audio. */
+  placeholder?: string;
   /** Raw bytes, kept so "Download" doesn't need a second round-trip. Absent for
    * `unsupported` previews, which stream the file only if the user downloads. */
   bytes?: Uint8Array<ArrayBuffer>;
 }
+
+/** Max concurrent grid-thumbnail reads. Enough to fill a visible screen of tiles
+ * quickly without swamping the single bridge WebSocket when a folder holds
+ * hundreds of images; the rest queue and drain as replies arrive. */
+const MAX_INFLIGHT_THUMBS = 6;
+
+/** Only persist small thumbnails (the server-resized WebP images, a few KB). This
+ * skips raw video clips and full images sent when server-side resizing is
+ * unavailable, so the on-disk cache never balloons with multi-MB payloads. Length
+ * is of the `data:` URL string (~1.33× the byte size). */
+const THUMB_PERSIST_MAX_CHARS = 512 * 1024;
 
 /** What a session reports up to the tab manager for its tab chip. */
 export interface SessionMeta {
@@ -153,12 +177,27 @@ export function SshSession({
   const [activeEditor, setActiveEditor] = useState<string | null>(null);
   const [savingPath, setSavingPath] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
+  // Mirrors the open preview's path so a late `sftp-read` reply can tell whether
+  // the user is still viewing that file before it builds a blob URL for it.
+  const previewPathRef = useRef<string | null>(null);
   // Cached grid-view image thumbnails, keyed by remote path → `data:` URL.
   // Populated lazily as tiles scroll into view; cleared on each directory change
   // (below) to bound memory. `requestedThumbsRef` dedupes in-flight requests so
   // a tile re-rendering never re-fetches.
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const requestedThumbsRef = useRef<Set<string>>(new Set());
+  // Bound how many thumbnail reads are outstanding at once so a directory of
+  // hundreds of images loads the visible tiles first instead of flooding the
+  // bridge with every request the moment they scroll near the viewport.
+  const thumbInFlightRef = useRef(0);
+  const thumbQueueRef = useRef<string[]>([]);
+  // path → `size:mtime` version tag for the current listing, for cache keys.
+  const entryVersionRef = useRef<Map<string, string>>(new Map());
+  // Mirrors of state the (bound-once) ws message handler reads: the connection
+  // scope for cache keys, and whether we're elevated (root) — elevated reads are
+  // never persisted so a `sudo` thumbnail can't linger on disk.
+  const scopeRef = useRef("");
+  const elevatedRef = useRef(false);
   // Active local port-forwards, keyed by their client-generated id.
   const [forwards, setForwards] = useState<Record<string, ForwardState>>({});
   const [uploads, setUploads] = useState<Record<string, UploadItem>>({});
@@ -224,16 +263,32 @@ export function SshSession({
     [send],
   );
 
+  // Drain the thumbnail queue up to the concurrency limit. Each `thumb` reply
+  // (success, skip, or error — the server always replies) frees a slot and calls
+  // this again, so the queue keeps flowing until it empties.
+  const pumpThumbs = useCallback(() => {
+    while (
+      thumbInFlightRef.current < MAX_INFLIGHT_THUMBS &&
+      thumbQueueRef.current.length > 0
+    ) {
+      const path = thumbQueueRef.current.shift()!;
+      thumbInFlightRef.current += 1;
+      send({ t: "sftp-read", path, thumb: true });
+    }
+  }, [send]);
+
   // Lazily fetch a grid thumbnail for `path`, at most once (the ref dedupes so a
-  // tile scrolling in and out never re-requests). The reply arrives as an
-  // `sftp-read` with `thumb: true` and lands in the `thumbnails` cache.
+  // tile scrolling in and out never re-requests). The request is queued behind a
+  // concurrency limit; the reply arrives as an `sftp-read` with `thumb: true` and
+  // lands in the `thumbnails` cache (and, when not elevated, IndexedDB).
   const requestThumbnail = useCallback(
     (path: string) => {
       if (requestedThumbsRef.current.has(path)) return;
       requestedThumbsRef.current.add(path);
-      send({ t: "sftp-read", path, thumb: true });
+      thumbQueueRef.current.push(path);
+      pumpThumbs();
     },
-    [send],
+    [pumpThumbs],
   );
 
   const handleServerMessage = useCallback(
@@ -308,6 +363,8 @@ export function SshSession({
           // (nor should a user-visible one be assumed still readable as root).
           // The re-list below re-fetches thumbnails under the new identity.
           requestedThumbsRef.current = new Set();
+          thumbQueueRef.current = [];
+          thumbInFlightRef.current = 0;
           setThumbnails({});
           // Re-list the current directory so the view reflects root's access.
           listDir(cwdRef.current);
@@ -319,6 +376,8 @@ export function SshSession({
           // a file op doesn't re-fetch every image).
           if (msg.path !== cwdRef.current) {
             requestedThumbsRef.current = new Set();
+            thumbQueueRef.current = [];
+            thumbInFlightRef.current = 0;
             setThumbnails({});
           }
           cwdRef.current = msg.path;
@@ -337,15 +396,40 @@ export function SshSession({
             );
             setActiveEditor(msg.path);
           } else if (msg.thumb) {
-            const mime =
-              imageMimeType(msg.name) ??
-              videoMimeType(msg.name) ??
-              "application/octet-stream";
-            setThumbnails((prev) => ({
-              ...prev,
-              [msg.path]: `data:${mime};base64,${msg.dataB64}`,
-            }));
+            // Free the concurrency slot and let the next queued tile go, whether
+            // this one produced a thumbnail or not.
+            thumbInFlightRef.current = Math.max(0, thumbInFlightRef.current - 1);
+            pumpThumbs();
+            // Empty payload = server skipped it (too big / not decodable): keep
+            // the generic icon. `requestedThumbsRef` already blocks a re-request.
+            if (msg.dataB64) {
+              const mime =
+                msg.mime ??
+                imageMimeType(msg.name) ??
+                videoMimeType(msg.name) ??
+                "application/octet-stream";
+              const dataUrl = `data:${mime};base64,${msg.dataB64}`;
+              setThumbnails((prev) => ({ ...prev, [msg.path]: dataUrl }));
+              // Persist so a return visit paints instantly — but never persist a
+              // root-read (elevated) thumbnail (those stay in-memory only), nor a
+              // large payload (only the small resized thumbnails are worth caching).
+              if (
+                !elevatedRef.current &&
+                dataUrl.length <= THUMB_PERSIST_MAX_CHARS
+              ) {
+                const version = entryVersionRef.current.get(msg.path);
+                if (version) {
+                  void putCachedThumbnail(
+                    thumbnailCacheKey(scopeRef.current, msg.path, version),
+                    dataUrl,
+                  );
+                }
+              }
+            }
           } else if (msg.preview) {
+            // Ignore a reply the user already navigated away from (modal closed
+            // or a different file opened) so we don't build an orphan blob URL.
+            if (previewPathRef.current !== msg.path) break;
             const bytes = base64ToBytes(msg.dataB64);
             const kind = previewKind(msg.name) ?? "image";
             const mime =
@@ -354,13 +438,14 @@ export function SshSession({
                 : kind === "audio"
                   ? audioMimeType(msg.name)
                   : imageMimeType(msg.name)) ?? "application/octet-stream";
-            setPreview({
-              path: msg.path,
-              name: msg.name,
-              kind,
-              src: `data:${mime};base64,${msg.dataB64}`,
-              bytes,
-            });
+            // A blob: URL renders large images/video far faster than a giant
+            // data: URL and lets <video> seek; revoked in the effect below.
+            const src = URL.createObjectURL(new Blob([bytes], { type: mime }));
+            setPreview((prev) =>
+              prev && prev.path === msg.path
+                ? { ...prev, kind, src, bytes, loading: false }
+                : prev,
+            );
           } else {
             triggerDownload(msg.name, base64ToBytes(msg.dataB64));
           }
@@ -486,7 +571,7 @@ export function SshSession({
           break;
       }
     },
-    [listDir, send, notify],
+    [listDir, send, notify, pumpThumbs],
   );
 
   // openSocket and scheduleReconnect reference each other; a ref breaks the
@@ -666,6 +751,67 @@ export function SshSession({
   useEffect(() => {
     connectedRef.current = connected;
   }, [connected]);
+
+  // Keep previewPathRef in sync so a late preview reply knows what's open.
+  useEffect(() => {
+    previewPathRef.current = preview?.path ?? null;
+  }, [preview?.path]);
+
+  // Revoke a preview's blob URL once it's replaced or the modal closes, so
+  // decoded media doesn't leak for the life of the session.
+  useEffect(() => {
+    const url = preview?.src;
+    if (url && url.startsWith("blob:")) return () => URL.revokeObjectURL(url);
+  }, [preview?.src]);
+
+  // Keep the refs the (bound-once) ws handler reads current.
+  useEffect(() => {
+    scopeRef.current = target ? `${target.user}@${target.host}` : "";
+  }, [target]);
+  useEffect(() => {
+    elevatedRef.current = elevated;
+  }, [elevated]);
+
+  // On each listing, rebuild the path→version map (for cache keys) and preload
+  // any persisted thumbnails so a revisited folder paints instantly with no
+  // bridge round-trips. Elevated (root) sessions are never persisted, so they
+  // skip the cache entirely and just re-fetch (in-memory only) as before.
+  useEffect(() => {
+    const base = cwd.replace(/\/$/, "");
+    const versions = new Map<string, string>();
+    for (const e of entries) versions.set(`${base}/${e.name}`, fileVersionTag(e));
+    entryVersionRef.current = versions;
+
+    const scope = target ? `${target.user}@${target.host}` : "";
+    if (elevated || !scope) return;
+    const wanted = entries
+      .filter((e) => isThumbnailable(e))
+      .map((e) => {
+        const path = `${base}/${e.name}`;
+        return { path, key: thumbnailCacheKey(scope, path, fileVersionTag(e)) };
+      })
+      .filter((w) => !requestedThumbsRef.current.has(w.path));
+    if (wanted.length === 0) return;
+
+    let cancelled = false;
+    void getCachedThumbnails(wanted.map((w) => w.key)).then((hits) => {
+      if (cancelled || hits.size === 0) return;
+      const found: Record<string, string> = {};
+      for (const w of wanted) {
+        const url = hits.get(w.key);
+        if (url) {
+          found[w.path] = url;
+          requestedThumbsRef.current.add(w.path); // don't re-fetch from the bridge
+        }
+      }
+      if (Object.keys(found).length > 0) {
+        setThumbnails((prev) => ({ ...prev, ...found }));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [entries, cwd, elevated, target]);
 
   // Report label + status to the tab manager whenever they change.
   useEffect(() => {
@@ -1102,9 +1248,28 @@ export function SshSession({
               onRename={onRename}
               onChmod={onChmod}
               onEdit={(path) => send({ t: "sftp-read", path, edit: true })}
-              onPreview={(path) => send({ t: "sftp-read", path, preview: true })}
+              onPreview={(path, name) => {
+                // Open the modal immediately in a loading state (with the cached
+                // grid thumbnail as an instant placeholder, if any) so the click
+                // feels responsive while the full file transfers.
+                setPreview({
+                  path,
+                  name,
+                  kind: previewKind(name) ?? "image",
+                  src: "",
+                  loading: true,
+                  placeholder: thumbnails[path],
+                });
+                send({ t: "sftp-read", path, preview: true });
+              }}
               onOpenUnsupported={(path, name) =>
-                setPreview({ path, name, kind: "unsupported", src: "" })
+                setPreview({
+                  path,
+                  name,
+                  kind: "unsupported",
+                  src: "",
+                  loading: false,
+                })
               }
               thumbnails={thumbnails}
               onRequestThumbnail={requestThumbnail}
@@ -1116,6 +1281,8 @@ export function SshSession({
                 path={preview.path}
                 src={preview.src}
                 kind={preview.kind}
+                loading={preview.loading}
+                placeholder={preview.placeholder}
                 onDownload={() =>
                   // Media previews already hold the bytes; the download-only
                   // fallback fetches on demand (streamed, with a progress bar).

@@ -1,6 +1,7 @@
 "use client";
 
 import type { PreviewKind } from "@/lib/sshProtocol";
+import { cn } from "@/lib/utils";
 
 /** What the preview modal can show: a media kind, or a download-only fallback. */
 export type PreviewMode = PreviewKind | "unsupported";
@@ -22,20 +23,30 @@ const MODE_ICON: Record<PreviewMode, string> = {
  * browser can't render inline open in the `unsupported` mode — no bytes are
  * fetched; the modal just offers a download. Rendered as a modal, mirroring
  * {@link FileEditor}.
+ *
+ * The modal opens immediately in a `loading` state (the file transfers over the
+ * bridge whole, which can take a moment), showing a spinner over the cached grid
+ * thumbnail `placeholder` when one is available so an image appears instantly.
  */
 export function FilePreview({
   name,
   path,
   src,
   kind,
+  loading = false,
+  placeholder,
   onDownload,
   onClose,
 }: {
   name: string;
   path: string;
-  /** `data:` URL for the media element; empty for the `unsupported` mode. */
+  /** `blob:` URL for the media element; empty while loading / for `unsupported`. */
   src: string;
   kind: PreviewMode;
+  /** True until the file's bytes arrive — show a spinner instead of blank space. */
+  loading?: boolean;
+  /** Cached grid thumbnail (`data:` URL) painted behind the spinner while loading. */
+  placeholder?: string;
   onDownload: () => void;
   onClose: () => void;
 }) {
@@ -67,33 +78,52 @@ export function FilePreview({
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto bg-term-bg p-4">
-        <div className="flex min-h-full items-center justify-center">
+        <div className="relative flex min-h-full items-center justify-center">
+          {loading && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center">
+              <span
+                className="h-9 w-9 animate-spin rounded-full border-2 border-term-border border-t-term-accent"
+                role="status"
+                aria-label="Loading preview"
+              />
+            </div>
+          )}
           {kind === "video" ? (
-            <video
-              src={src}
-              controls
-              playsInline
-              className="max-h-full max-w-full"
-            >
-              Your browser cannot play this video.
-            </video>
+            src ? (
+              <video
+                src={src}
+                controls
+                playsInline
+                className="max-h-full max-w-full"
+              >
+                Your browser cannot play this video.
+              </video>
+            ) : null
           ) : kind === "audio" ? (
-            <audio src={src} controls className="w-full max-w-md">
-              Your browser cannot play this audio.
-            </audio>
+            src ? (
+              <audio src={src} controls className="w-full max-w-md">
+                Your browser cannot play this audio.
+              </audio>
+            ) : null
           ) : kind === "image" ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={src}
-              alt={name}
-              className="max-h-full max-w-full object-contain"
-              style={{
-                // Checkerboard so transparent PNGs stay legible.
-                backgroundImage:
-                  "conic-gradient(#ffffff10 25%, transparent 0 50%, #ffffff10 0 75%, transparent 0)",
-                backgroundSize: "16px 16px",
-              }}
-            />
+            src || placeholder ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={src || placeholder}
+                alt={name}
+                className={cn(
+                  "max-h-full max-w-full object-contain transition",
+                  // While the full image loads, blur the low-res placeholder.
+                  loading && !src && "scale-95 blur-md",
+                )}
+                style={{
+                  // Checkerboard so transparent PNGs stay legible.
+                  backgroundImage:
+                    "conic-gradient(#ffffff10 25%, transparent 0 50%, #ffffff10 0 75%, transparent 0)",
+                  backgroundSize: "16px 16px",
+                }}
+              />
+            ) : null
           ) : (
             <div className="flex flex-col items-center gap-3 text-center text-term-muted">
               <span className="text-4xl opacity-60" aria-hidden>

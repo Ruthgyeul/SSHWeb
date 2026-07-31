@@ -179,6 +179,11 @@ export type ServerMessage =
       edit?: boolean;
       preview?: boolean;
       thumb?: boolean;
+      /** MIME type of `dataB64` when it differs from what the file name implies
+       * — set for `thumb` replies whose image was re-encoded to WebP server-side.
+       * A `thumb` reply with an empty `dataB64` means "no thumbnail" (skipped or
+       * failed) so the client can keep the icon and advance its request queue. */
+      mime?: string;
     }
   | { t: "sftp-ok"; op: string; path: string }
   // Optional per-session capability advertisement, sent once the session is
@@ -593,21 +598,32 @@ export function isProbablyImageFile(name: string): boolean {
 }
 
 /**
- * Upper bound (bytes) on an image the file-browser grid will auto-fetch as a
- * thumbnail. Thumbnails read the whole file over the wire (there's no
- * server-side resizing), so a small cap keeps the grid cheap — larger images
- * just show the generic icon until opened. Mirrored in `server.mjs`, which also
- * enforces it so a client can't request a huge file "as a thumbnail".
+ * Upper bound (bytes) on the *original* image the file-browser grid will
+ * auto-fetch as a thumbnail. The bridge reads the original into memory and
+ * downscales it (originals are never modified) before sending, so what crosses
+ * the WebSocket is tiny; this cap bounds the read the bridge does from the SSH
+ * target. Larger images just show the generic icon until opened. Mirrored in
+ * `server.mjs`, which also enforces it so a client can't request a huge file
+ * "as a thumbnail".
  */
 export const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
 
 /**
+ * Longest edge (px) of a generated grid thumbnail. The bridge downscales images
+ * to fit within this box (preserving aspect ratio, never enlarging) and re-encodes
+ * them as WebP, turning multi-MB photos into a few KB. Sized with room for
+ * hi-DPI grid tiles. Mirrored in `server.mjs`.
+ */
+export const THUMBNAIL_PIXELS = 256;
+
+/**
  * Upper bound (bytes) on a video the grid will auto-fetch to render a poster
  * frame. Video thumbnails work by pulling the whole (short) clip and letting a
- * `<video>` element paint its first frame — no server-side frame extraction —
- * so the cap is a bit higher than the image one but still keeps the grid cheap;
- * larger clips just show the film icon. Mirrored in `server.mjs` (as the
- * absolute ceiling for any `thumb` read).
+ * `<video>` element paint its first frame — there's no server-side frame
+ * extraction (unlike images, which are downscaled on the bridge) — so the cap is
+ * a bit higher than the image one but still keeps the grid cheap; larger clips
+ * just show the film icon. Mirrored in `server.mjs` (as the absolute ceiling for
+ * any `thumb` read).
  */
 export const THUMBNAIL_VIDEO_MAX_BYTES = 8 * 1024 * 1024;
 
