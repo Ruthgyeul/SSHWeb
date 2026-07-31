@@ -31,6 +31,19 @@ import ssh2 from "ssh2";
 const { Client: SSHClient, utils: sshUtils } = ssh2;
 const { loadEnvConfig } = nextEnv;
 
+// `sharp` downscales grid thumbnails in-memory (originals are never modified) so
+// a directory of hundreds of photos sends KB per tile instead of MB. It's a
+// native module; if it can't load in this environment we degrade gracefully and
+// keep the old behaviour (send the original bytes whole for the client to scale).
+let sharp = null;
+try {
+  ({ default: sharp } = await import("sharp"));
+} catch {
+  console.warn(
+    "[sshweb] sharp unavailable — grid thumbnails will send full-size images.",
+  );
+}
+
 const dev = process.env.NODE_ENV !== "production";
 // Load `.env`, `.env.local`, `.env.[development|production]`, … into
 // process.env (the same files Next loads) BEFORE reading PORT and friends, so
@@ -65,6 +78,10 @@ const MAX_DOWNLOAD_BYTES =
 // per-type via `isThumbnailable` (2 MB images / 8 MB videos), which is a
 // bandwidth nicety rather than the security bound.
 const THUMBNAIL_VIDEO_MAX_BYTES = 8 * 1024 * 1024;
+// Longest edge (px) of a generated thumbnail. Mirrors `THUMBNAIL_PIXELS` in
+// src/lib/sshProtocol.ts. Images are downscaled to fit this box and re-encoded
+// as WebP before being sent to the grid.
+const THUMBNAIL_PIXELS = 256;
 // Cap a single SFTP upload so an unbounded stream can't fill the target disk
 // (symmetric with the download cap). Configured in whole megabytes; 0 (or less)
 // disables the limit.
@@ -1342,24 +1359,55 @@ wss.on("connection", (ws, req) => {
       case "sftp-read":
         withSftp((s) =>
           s.stat(msg.path, (statErr, stats) => {
-            if (statErr) return sendError(statErr.message, "sftp");
-            if (MAX_DOWNLOAD_BYTES > 0 && stats.size > MAX_DOWNLOAD_BYTES) {
-              return sendError(
-                `File too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
-                "sftp",
-              );
-            }
             const name = msg.path.split("/").pop() || "download";
 
-            // Thumbnails feed the grid view: read the whole (small) image or
-            // video clip and echo `thumb`. Guard with a cap of its own — a grid
-            // renders many at once, and there's no server-side resizing/frame
-            // extraction — so an oversized file is silently skipped (the client
-            // just keeps the generic icon). Videos are allowed the larger cap.
+            // Thumbnails feed the grid view. A grid renders many at once, so this
+            // path is optimised for volume: images are downscaled to a tiny WebP
+            // in-memory (the original is only read, never modified) so what
+            // crosses the wire is KB not MB; videos are still sent whole (no
+            // server-side frame extractor) and let a <video> paint frame 0.
+            //
+            // A `thumb` request ALWAYS gets a reply — even a skip or error sends
+            // an empty payload — so the client can drop the tile back to its icon
+            // and, crucially, advance its bounded request queue (no dead slot).
             if (msg.thumb === true) {
-              if (stats.size > THUMBNAIL_VIDEO_MAX_BYTES) return;
-              s.readFile(msg.path, (err, buffer) => {
-                if (err) return; // best-effort: a failed thumb just shows the icon
+              const skipThumb = () =>
+                send({
+                  t: "sftp-read",
+                  path: msg.path,
+                  name,
+                  dataB64: "",
+                  thumb: true,
+                });
+              if (statErr || stats.size > THUMBNAIL_VIDEO_MAX_BYTES) {
+                return skipThumb();
+              }
+              s.readFile(msg.path, async (err, buffer) => {
+                if (err) return skipThumb();
+                if (sharp) {
+                  try {
+                    // sharp throws on non-image input (e.g. video); fall through
+                    // to the raw bytes for those. `.rotate()` honours EXIF.
+                    const out = await sharp(buffer)
+                      .rotate()
+                      .resize(THUMBNAIL_PIXELS, THUMBNAIL_PIXELS, {
+                        fit: "inside",
+                        withoutEnlargement: true,
+                      })
+                      .webp({ quality: 70 })
+                      .toBuffer();
+                    return send({
+                      t: "sftp-read",
+                      path: msg.path,
+                      name,
+                      dataB64: out.toString("base64"),
+                      thumb: true,
+                      mime: "image/webp",
+                    });
+                  } catch {
+                    // Not a sharp-decodable image (video, or corrupt) — send raw.
+                  }
+                }
                 send({
                   t: "sftp-read",
                   path: msg.path,
@@ -1369,6 +1417,14 @@ wss.on("connection", (ws, req) => {
                 });
               });
               return;
+            }
+
+            if (statErr) return sendError(statErr.message, "sftp");
+            if (MAX_DOWNLOAD_BYTES > 0 && stats.size > MAX_DOWNLOAD_BYTES) {
+              return sendError(
+                `File too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
+                "sftp",
+              );
             }
 
             // Edit/preview need the whole file in one message (they build an
