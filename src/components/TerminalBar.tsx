@@ -15,7 +15,7 @@ export function TerminalBar({ branch }: { branch?: string }) {
       <span className="term-dot bg-term-green" aria-hidden />
       <span className="ml-2 text-xs text-term-faint">
         {TERMINAL_USER}@{TERMINAL_HOST}
-        <span className="text-term-fainter"> — </span>~<span className="text-term-fainter"> — </span>zsh
+        <span className="text-term-fainter"> — </span>~/.ssh<span className="text-term-fainter"> — </span>zsh
       </span>
       {branch && (
         <span className="ml-auto flex items-center gap-1.5 text-xs text-term-faint">
