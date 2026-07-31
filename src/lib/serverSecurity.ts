@@ -316,3 +316,58 @@ export function isForwardBindAllowed(
   if (allowPublic) return true;
   return LOOPBACK_BINDS.has((bindHost ?? "").trim().toLowerCase());
 }
+
+/* ------------------------------------------------------------------ */
+/* Elevated (sudo) SFTP command                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Where `sftp-server` typically lives across distributions, tried in order.
+ * The plain SFTP subsystem always runs as the logged-in user, so to browse or
+ * edit files that user can't reach the bridge instead launches this binary
+ * under `sudo` over an exec channel (see `buildSudoSftpCommand`). Debian/Ubuntu
+ * put it under `/usr/lib/openssh`, RHEL/Fedora under `/usr/libexec/openssh`,
+ * Arch/Alpine under `/usr/lib/ssh`, and the BSDs under `/usr/libexec`.
+ */
+export const DEFAULT_SFTP_SERVER_PATHS = [
+  "/usr/lib/openssh/sftp-server",
+  "/usr/libexec/openssh/sftp-server",
+  "/usr/lib/ssh/sftp-server",
+  "/usr/libexec/sftp-server",
+  "/usr/lib/sftp-server",
+  "/usr/local/libexec/sftp-server",
+];
+
+/**
+ * Build the remote command that starts an `sftp-server` running as root, for the
+ * file browser's opt-in elevated mode. It shells out to the first `sftp-server`
+ * that exists among `paths` and `exec`s it under `sudo`, so every SFTP operation
+ * on that channel runs with root's permissions — the SFTP equivalent of
+ * `sudo su` in the terminal (which never affected the file browser, because the
+ * SFTP subsystem is a separate channel bound to the login user).
+ *
+ * Two sudo modes:
+ *   - `hasPassword: false` → `sudo -n` (non-interactive): requires passwordless
+ *     sudo (a `NOPASSWD` sudoers rule) for the sftp-server binary. Fails fast if
+ *     a password would be needed, rather than hanging on a prompt.
+ *   - `hasPassword: true` → `sudo -k -S`: sudo reads the password from stdin
+ *     (`-k` first invalidates any cached credentials so it always prompts, which
+ *     keeps stdin consumption deterministic). The bridge writes exactly that one
+ *     password line to the channel before the SFTP protocol starts.
+ *
+ * The browser never supplies `paths` — they come from server configuration only
+ * — so nothing user-controlled is interpolated into this shell command. The
+ * optional sudo password travels separately (fed to `sudo -S` on the channel's
+ * stdin), never spliced into the command string.
+ */
+export function buildSudoSftpCommand(
+  hasPassword: boolean,
+  paths: string[] = DEFAULT_SFTP_SERVER_PATHS,
+): string {
+  const list = (paths.length > 0 ? paths : DEFAULT_SFTP_SERVER_PATHS).join(" ");
+  const finder =
+    `for p in ${list}; do [ -x "$p" ] && exec "$p"; done; ` +
+    `echo "sftp-server not found" >&2; exit 127`;
+  const sudo = hasPassword ? "sudo -k -S -p ''" : "sudo -n";
+  return `${sudo} /bin/sh -c '${finder}'`;
+}

@@ -81,6 +81,14 @@ export type ClientMessage =
       mkdirp?: boolean;
     }
   | { t: "sftp-mkdir"; path: string }
+  // Turn the file browser's elevated (sudo) mode on or off. When enabled the
+  // bridge routes every SFTP operation through an `sftp-server` running as root
+  // (`sudo sftp-server` over an exec channel), so files the login user can't
+  // reach become browsable/editable — the SFTP counterpart to `sudo su` in the
+  // terminal. `password` is an optional sudo password (fed to `sudo -S`); omit
+  // it when passwordless sudo (`NOPASSWD`) is configured. Server-gated by
+  // `SSH_ALLOW_SUDO`.
+  | { t: "sftp-sudo"; enable: boolean; password?: string }
   | { t: "sftp-rm"; path: string; dir?: boolean }
   | { t: "sftp-rename"; from: string; to: string }
   | { t: "sftp-chmod"; path: string; mode: number }
@@ -162,6 +170,15 @@ export type ServerMessage =
       preview?: boolean;
     }
   | { t: "sftp-ok"; op: string; path: string }
+  // Optional per-session capability advertisement, sent once the session is
+  // ready. `sudo` reflects whether the server permits elevated (root) file
+  // access (`SSH_ALLOW_SUDO`), so the client only shows the sudo toggle when the
+  // deployment allows it.
+  | { t: "caps"; sudo: boolean }
+  // Acknowledges an `sftp-sudo` request: `enabled` is the mode now in effect.
+  // A failure to gain elevation is reported separately as an `error` (scope
+  // `sftp`) and leaves the session unelevated.
+  | { t: "sftp-sudo"; enabled: boolean }
   // A local port-forward the bridge is now listening for (echoes the resolved
   // bind/destination so the UI can show exactly what was opened).
   | {

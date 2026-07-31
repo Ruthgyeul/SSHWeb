@@ -94,6 +94,10 @@ export function FileBrowser({
   loading,
   uploads,
   downloads,
+  canElevate,
+  elevated,
+  elevatedPending,
+  onToggleElevated,
   onNavigate,
   onDownload,
   onDownloadDir,
@@ -114,6 +118,13 @@ export function FileBrowser({
   loading: boolean;
   uploads: UploadItem[];
   downloads: DownloadItem[];
+  /** Whether the server permits elevated (sudo) file access at all. */
+  canElevate: boolean;
+  /** Whether elevated (root) mode is currently active. */
+  elevated: boolean;
+  /** Whether an elevate/de-elevate request is in flight. */
+  elevatedPending: boolean;
+  onToggleElevated: () => void;
   onNavigate: (path: string) => void;
   onDownload: (path: string) => void;
   onDownloadDir: (path: string) => void;
@@ -275,6 +286,28 @@ export function FileBrowser({
         >
           ⟳
         </button>
+        {canElevate && (
+          <button
+            type="button"
+            onClick={onToggleElevated}
+            disabled={elevatedPending}
+            aria-pressed={elevated}
+            className={cn(
+              "rounded border px-2 py-1 text-xs transition-colors",
+              elevated
+                ? "border-term-yellow/50 bg-term-yellow/15 text-term-yellow"
+                : "border-term-border text-term-muted hover:text-term-text",
+              elevatedPending && "opacity-50",
+            )}
+            title={
+              elevated
+                ? "Elevated (root) access is on — click to drop back to your user"
+                : "Access files as root via sudo"
+            }
+          >
+            {elevatedPending ? "sudo…" : elevated ? "sudo ●" : "sudo"}
+          </button>
+        )}
         <button
           type="button"
           onClick={onMkdir}
@@ -335,6 +368,17 @@ export function FileBrowser({
           }}
         />
       </div>
+
+      {/* Elevated-mode banner: a persistent reminder that actions run as root. */}
+      {elevated && (
+        <div className="flex items-center gap-2 border-b border-term-yellow/30 bg-term-yellow/10 px-3 py-1.5 text-xs text-term-yellow">
+          <span aria-hidden>⚠</span>
+          <span>
+            Elevated access: file operations run as <strong>root</strong> via
+            sudo.
+          </span>
+        </div>
+      )}
 
       {/* In-CWD name filter */}
       {sorted.length > 0 && (

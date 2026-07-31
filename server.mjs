@@ -107,6 +107,19 @@ const FORWARD_ALLOW_PUBLIC_BIND =
   "true";
 // Cap on concurrent forwards per session, so a client can't exhaust host ports.
 const MAX_FORWARDS = parseInt(process.env.SSH_MAX_FORWARDS || "10", 10);
+// Allow the file browser's elevated (sudo) mode. When enabled, a session may
+// ask the bridge to run `sftp-server` under `sudo` so file operations execute
+// as root (see buildSudoSftpCommand). This grants far-reaching access on the
+// target, so it's OFF by default — opt in per deployment. The remote host's
+// sudoers policy still governs whether the elevation actually succeeds.
+const ALLOW_SUDO =
+  (process.env.SSH_ALLOW_SUDO || "false").toLowerCase() === "true";
+// Optional override of where to look for `sftp-server` on the target (comma/
+// space separated, tried in order). Empty = the built-in cross-distro list.
+const SFTP_SERVER_PATHS = (process.env.SSH_SFTP_SERVER_PATHS || "")
+  .split(/[\s,]+/)
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 let activeSessions = 0;
 // Cumulative operational counters surfaced by the health probe (process-wide).
@@ -256,6 +269,36 @@ function isForwardBindAllowed(bindHost, allowPublic) {
   if (allowPublic) return true;
   return FORWARD_LOOPBACK_BINDS.has((bindHost ?? "").trim().toLowerCase());
 }
+
+/** Default cross-distro `sftp-server` locations (mirrors serverSecurity.ts). */
+const DEFAULT_SFTP_SERVER_PATHS = [
+  "/usr/lib/openssh/sftp-server",
+  "/usr/libexec/openssh/sftp-server",
+  "/usr/lib/ssh/sftp-server",
+  "/usr/libexec/sftp-server",
+  "/usr/lib/sftp-server",
+  "/usr/local/libexec/sftp-server",
+];
+
+/**
+ * Remote command that starts `sftp-server` as root under `sudo` (mirrors
+ * serverSecurity.ts). `paths` come from server config only — never the browser —
+ * so nothing user-controlled is interpolated here; the optional sudo password is
+ * fed separately to `sudo -S` on the channel's stdin.
+ */
+function buildSudoSftpCommand(hasPassword, paths = SFTP_SERVER_PATHS) {
+  const list = (paths.length > 0 ? paths : DEFAULT_SFTP_SERVER_PATHS).join(" ");
+  const finder =
+    `for p in ${list}; do [ -x "$p" ] && exec "$p"; done; ` +
+    `echo "sftp-server not found" >&2; exit 127`;
+  const sudo = hasPassword ? "sudo -k -S -p ''" : "sudo -n";
+  return `${sudo} /bin/sh -c '${finder}'`;
+}
+
+// SFTP channel window/packet sizes, mirrored from ssh2's lib/Channel.js so we
+// can open an SFTP-over-exec channel the same way ssh2's own Client.sftp does.
+const SFTP_CHAN_WINDOW = 2 * 1024 * 1024;
+const SFTP_CHAN_PACKET = 32 * 1024;
 
 /** Largest WebSocket frame to accept, from the upload cap (serverSecurity.ts). */
 function computeMaxPayloadBytes(maxUploadBytes) {
@@ -623,7 +666,9 @@ wss.on("connection", (ws, req) => {
   /** @type {import('ssh2').Client | null} */
   let ssh = null;
   let shell = null; // interactive PTY stream
-  let sftp = null; // cached SFTP subsystem
+  let sftp = null; // cached SFTP subsystem (runs as the login user)
+  let elevatedSftp = null; // cached `sudo sftp-server` handle (runs as root)
+  let elevated = false; // whether SFTP ops are currently routed through sudo
   let counted = false; // whether this connection is included in activeSessions
   let closed = false;
   // Pending handshake callbacks that wait on a round-trip to the browser.
@@ -735,9 +780,16 @@ wss.on("connection", (ws, req) => {
       }
     }
     forwards.clear();
+    try {
+      elevatedSftp?.end();
+    } catch {
+      /* channel already gone */
+    }
     ssh = null;
     shell = null;
     sftp = null;
+    elevatedSftp = null;
+    elevated = false;
   }
 
   /** SHA256 fingerprint of a host public key, in OpenSSH's `SHA256:…` form. */
@@ -758,14 +810,144 @@ wss.on("connection", (ws, req) => {
     return { fingerprint: `SHA256:${digest}`, keyType };
   }
 
-  /** Lazily open (and cache) the SFTP subsystem, then run `fn(sftp)`. */
+  /**
+   * Lazily open (and cache) an SFTP handle, then run `fn(sftp)`. While elevated
+   * mode is on and the `sudo sftp-server` handle is live, operations route
+   * through it (root); otherwise they use the login user's own SFTP subsystem.
+   */
   function withSftp(fn) {
     if (!ssh) return sendError("Not connected.", "sftp");
+    if (elevated && elevatedSftp) return fn(elevatedSftp);
     if (sftp) return fn(sftp);
     ssh.sftp((err, s) => {
       if (err) return sendError(`SFTP unavailable: ${err.message}`, "sftp");
       sftp = s;
       fn(s);
+    });
+  }
+
+  /**
+   * Open an SFTP handle backed by `sudo sftp-server` over an exec channel, so
+   * file operations run as root. This mirrors ssh2's own `Client.prototype.sftp`
+   * (lib/client.js) but sends an `exec` request (our sudo command) instead of the
+   * plain `sftp` subsystem request — reusing ssh2's SFTP protocol object, which
+   * ssh2 builds for any channel opened with type `sftp`. It therefore reaches
+   * into a few ssh2 internals (`_chanMgr`, `_protocol`, the channel's
+   * `_callbacks`), kept in step with the ssh2 version pinned in package.json.
+   */
+  function openElevatedSftp(password, cb) {
+    const client = ssh;
+    if (!client) return cb(new Error("Not connected."));
+    const hasPassword = password !== "";
+    const command = buildSudoSftpCommand(hasPassword);
+    let settled = false;
+    const done = (err, s) => {
+      if (settled) return;
+      settled = true;
+      cb(err, s);
+    };
+
+    // Invoked by ssh2 once the channel is confirmed; `chan` is a ready-made SFTP
+    // protocol instance because we tag the request with type `sftp`.
+    const onChannel = (err, chan) => {
+      if (err) return done(err);
+      // Equivalent of ssh2's reqExec: queue the channel-request reply handler,
+      // then send the exec request for our sudo command.
+      chan._callbacks.push((hadErr) => {
+        if (hadErr) {
+          return done(
+            hadErr !== true
+              ? hadErr
+              : new Error(
+                  "Could not start sudo sftp-server (is sudo access configured?).",
+                ),
+          );
+        }
+        chan.subtype = "exec";
+        const detach = () => {
+          chan.removeListener("ready", onReady);
+          chan.removeListener("error", onError);
+          chan.removeListener("exit", onExit);
+          chan.removeListener("close", onExit);
+        };
+        const onReady = () => {
+          detach();
+          done(undefined, chan);
+        };
+        const onError = (e) => {
+          detach();
+          done(e);
+        };
+        const onExit = () => {
+          detach();
+          done(
+            new Error(
+              "sudo/sftp-server exited before the session started (check the sudo password or sudoers policy).",
+            ),
+          );
+        };
+        chan.on("ready", onReady)
+          .on("error", onError)
+          .on("exit", onExit)
+          .on("close", onExit);
+        // With `sudo -S`, feed the password as the first stdin line *before* the
+        // SFTP protocol begins, so sudo consumes exactly that line and
+        // sftp-server reads the protocol that follows. Never logged.
+        if (hasPassword) {
+          try {
+            chan._protocol.channelData(
+              chan.outgoing.id,
+              Buffer.from(`${password}\n`),
+            );
+          } catch {
+            /* fall through — _init still drives the handshake */
+          }
+        }
+        chan._init();
+      });
+      client._protocol.exec(chan.outgoing.id, command, true);
+    };
+    onChannel.type = "sftp";
+
+    const localChan = client._chanMgr.add(onChannel);
+    if (localChan === -1) return done(new Error("No free channels available."));
+    client._protocol.session(localChan, SFTP_CHAN_WINDOW, SFTP_CHAN_PACKET);
+  }
+
+  /** Turn elevated (sudo) SFTP mode on or off for this session. */
+  function handleSudo(msg) {
+    const enable = msg.enable === true;
+    if (!enable) {
+      elevated = false;
+      const prev = elevatedSftp;
+      elevatedSftp = null;
+      try {
+        prev?.end();
+      } catch {
+        /* channel already gone */
+      }
+      logEvent("sudo", { ip: clientIp, enabled: false });
+      return send({ t: "sftp-sudo", enabled: false });
+    }
+    if (!ALLOW_SUDO) {
+      return sendError(
+        "Elevated (sudo) file access is disabled on this server.",
+        "sftp",
+      );
+    }
+    if (!ssh) return sendError("Not connected.", "sftp");
+    if (elevated && elevatedSftp) return send({ t: "sftp-sudo", enabled: true });
+    const password = typeof msg.password === "string" ? msg.password : "";
+    openElevatedSftp(password, (err, s) => {
+      if (err) {
+        elevated = false;
+        elevatedSftp = null;
+        return sendError(`Elevated access failed: ${err.message}`, "sftp");
+      }
+      elevatedSftp = s;
+      elevated = true;
+      logEvent("sudo", { ip: clientIp, enabled: true });
+      send({ t: "sftp-sudo", enabled: true });
     });
   }
 
@@ -809,6 +991,9 @@ wss.on("connection", (ws, req) => {
         totalConnections += 1;
         logEvent("connect", { ip: clientIp, host, port: targetPort });
         send({ t: "status", state: "connected" });
+        // Advertise per-deployment capabilities so the UI only offers what the
+        // server actually permits (e.g. the elevated/sudo file-access toggle).
+        send({ t: "caps", sudo: ALLOW_SUDO });
         ssh.shell(
           {
             term: "xterm-256color",
@@ -1307,6 +1492,10 @@ wss.on("connection", (ws, req) => {
         });
         break;
 
+      case "sftp-sudo":
+        handleSudo(msg);
+        break;
+
       case "sftp-mkdir":
         withSftp((s) =>
           s.mkdir(msg.path, (err) => {
@@ -1364,12 +1553,16 @@ server.listen(port, hostname, () => {
       `> Port forwarding enabled (bind: ${FORWARD_ALLOW_PUBLIC_BIND ? "any" : "loopback only"})`,
     );
   }
+  if (ALLOW_SUDO) {
+    console.log("> Elevated (sudo) file access enabled (SSH_ALLOW_SUDO=true)");
+  }
   logEvent("server-start", {
     port,
     maxSessions: MAX_SESSIONS,
     idleTimeoutMs: IDLE_TIMEOUT_MS,
     accessGate: accessTokenRequired(ACCESS_TOKEN),
     portForward: ALLOW_FORWARD,
+    sudo: ALLOW_SUDO,
   });
 });
 

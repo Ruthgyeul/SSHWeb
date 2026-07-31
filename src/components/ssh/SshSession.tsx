@@ -174,6 +174,13 @@ export function SshSession({
   const cwdRef = useRef("~");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
+  // Whether this deployment permits elevated (sudo) file access, learned from
+  // the server's `caps` message once connected.
+  const [canElevate, setCanElevate] = useState(false);
+  // Whether SFTP operations are currently routed through `sudo` (root), and
+  // whether an enable/disable request is in flight.
+  const [elevated, setElevated] = useState(false);
+  const [elevatedPending, setElevatedPending] = useState(false);
   const [authPrompt, setAuthPrompt] = useState<AuthPromptState | null>(null);
   // Files open in the inline editor (tabs), plus which one is shown and which
   // (if any) is being saved right now.
@@ -301,6 +308,20 @@ export function SshSession({
             instructions: msg.instructions,
             prompts: msg.prompts,
           });
+          break;
+
+        case "caps":
+          setCanElevate(msg.sudo);
+          break;
+
+        case "sftp-sudo":
+          setElevated(msg.enabled);
+          setElevatedPending(false);
+          if (msg.enabled) {
+            notify("success", "Elevated access on — file operations run as root.");
+          }
+          // Re-list the current directory so the view reflects root's access.
+          listDir(cwdRef.current);
           break;
 
         case "sftp-list":
@@ -445,6 +466,7 @@ export function SshSession({
             // Clear any in-flight spinners so a failed list/save doesn't hang.
             setFilesLoading(false);
             setSavingPath(null);
+            setElevatedPending(false);
             notify("error", msg.message);
           } else {
             // Shell/auth errors: echo into the terminal, and while connected
@@ -572,6 +594,9 @@ export function SshSession({
     setStatus("idle");
     setTarget(null);
     setEntries([]);
+    setCanElevate(false);
+    setElevated(false);
+    setElevatedPending(false);
     setStatusMessage("");
     setAuthPrompt(null);
     setEditors([]);
@@ -884,6 +909,27 @@ export function SshSession({
       },
     });
   };
+  // Toggle elevated (sudo) file access. Turning it on prompts for an optional
+  // sudo password (blank = passwordless / NOPASSWD); turning it off is immediate.
+  const toggleElevated = () => {
+    if (elevatedPending) return;
+    if (elevated) {
+      setElevatedPending(true);
+      send({ t: "sftp-sudo", enable: false });
+      return;
+    }
+    setDialog({
+      title: "Elevated file access",
+      message:
+        "Run file operations as root via sudo. Enter the sudo password, or leave blank if passwordless sudo is configured.",
+      input: { label: "sudo password", placeholder: "(blank for NOPASSWD)", password: true },
+      confirmLabel: "Enable",
+      onConfirm: (password) => {
+        setElevatedPending(true);
+        send({ t: "sftp-sudo", enable: true, password: password || undefined });
+      },
+    });
+  };
   const onSaveEdit = (path: string, text: string) => {
     editorSaveTextRef.current[path] = text;
     setSavingPath(path);
@@ -1032,6 +1078,10 @@ export function SshSession({
               loading={filesLoading}
               uploads={Object.values(uploads)}
               downloads={Object.values(downloads)}
+              canElevate={canElevate}
+              elevated={elevated}
+              elevatedPending={elevatedPending}
+              onToggleElevated={toggleElevated}
               onNavigate={listDir}
               onRefresh={() => listDir(cwd)}
               onDownload={(path) => send({ t: "sftp-read", path })}
