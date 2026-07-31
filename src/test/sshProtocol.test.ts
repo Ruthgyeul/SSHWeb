@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyKeyModifiers,
+  audioMimeType,
   compareHostKey,
   ctrlChar,
   encodeMessage,
@@ -10,6 +11,7 @@ import {
   hostKeyId,
   imageMimeType,
   isHostAllowed,
+  isProbablyAudioFile,
   isProbablyBinaryFile,
   isProbablyImageFile,
   isProbablyPreviewableFile,
@@ -395,19 +397,45 @@ describe("video detection", () => {
   });
 });
 
+describe("audio detection", () => {
+  it("recognizes audio by extension (case-insensitive)", () => {
+    expect(isProbablyAudioFile("song.mp3")).toBe(true);
+    expect(isProbablyAudioFile("Voice.WAV")).toBe(true);
+    expect(isProbablyAudioFile("track.flac")).toBe(true);
+  });
+
+  it("returns false for non-audio", () => {
+    expect(isProbablyAudioFile("photo.png")).toBe(false);
+    expect(isProbablyAudioFile("clip.mp4")).toBe(false);
+    expect(isProbablyAudioFile("noextension")).toBe(false);
+  });
+
+  it("maps extensions to MIME types", () => {
+    expect(audioMimeType("a.mp3")).toBe("audio/mpeg");
+    expect(audioMimeType("a.WAV")).toBe("audio/wav");
+    expect(audioMimeType("a.m4a")).toBe("audio/mp4");
+    expect(audioMimeType("a.flac")).toBe("audio/flac");
+    expect(audioMimeType("a.png")).toBeNull();
+    expect(audioMimeType("noext")).toBeNull();
+  });
+});
+
 describe("previewKind / isProbablyPreviewableFile", () => {
-  it("classifies images and videos, null otherwise", () => {
+  it("classifies images, videos and audio, null otherwise", () => {
     expect(previewKind("photo.png")).toBe("image");
     expect(previewKind("Banner.JPG")).toBe("image");
     expect(previewKind("clip.mp4")).toBe("video");
     expect(previewKind("Recording.MOV")).toBe("video");
+    expect(previewKind("song.mp3")).toBe("audio");
+    expect(previewKind("Voice.WAV")).toBe("audio");
     expect(previewKind("notes.md")).toBeNull();
     expect(previewKind("noext")).toBeNull();
   });
 
-  it("is previewable exactly when it is an image or a video", () => {
+  it("is previewable exactly when it is an image, a video or audio", () => {
     expect(isProbablyPreviewableFile("photo.png")).toBe(true);
     expect(isProbablyPreviewableFile("clip.mov")).toBe(true);
+    expect(isProbablyPreviewableFile("song.mp3")).toBe(true);
     expect(isProbablyPreviewableFile("notes.md")).toBe(false);
   });
 });
