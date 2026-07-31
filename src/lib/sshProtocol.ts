@@ -63,10 +63,19 @@ export type ClientMessage =
   // the same order as the prompts that were presented.
   | { t: "kbd-response"; responses: string[] }
   | { t: "sftp-list"; path: string }
-  // Read a file. `edit: true` opens it in the inline editor and `preview: true`
-  // opens it in the image preview modal; without either the read triggers a
-  // download. The server echoes whichever flag was set back to the client.
-  | { t: "sftp-read"; path: string; edit?: boolean; preview?: boolean }
+  // Read a file. `edit: true` opens it in the inline editor, `preview: true`
+  // opens it in the image preview modal, and `thumb: true` fetches a small
+  // image for the file-browser grid's thumbnail (like `preview`, but the reply
+  // is cached into a tile instead of a modal); without any of these the read
+  // triggers a download. The server echoes whichever flag was set back to the
+  // client.
+  | {
+      t: "sftp-read";
+      path: string;
+      edit?: boolean;
+      preview?: boolean;
+      thumb?: boolean;
+    }
   // Write a file. When `offset` is a number the write is chunked (offset 0
   // opens the stream, `final: true` closes it) — this drives upload progress;
   // without `offset` the whole `dataB64` is written at once (inline-edit save).
@@ -159,8 +168,9 @@ export type ServerMessage =
       prompts: KbdPrompt[];
     }
   | { t: "sftp-list"; path: string; entries: FileEntry[] }
-  // File contents. `edit`/`preview` echo the request flags: `edit` opens the
-  // editor, `preview` opens the image preview modal, neither triggers a download.
+  // File contents. `edit`/`preview`/`thumb` echo the request flags: `edit` opens
+  // the editor, `preview` opens the image preview modal, `thumb` feeds a grid
+  // thumbnail; none of them triggers a download.
   | {
       t: "sftp-read";
       path: string;
@@ -168,6 +178,7 @@ export type ServerMessage =
       dataB64: string;
       edit?: boolean;
       preview?: boolean;
+      thumb?: boolean;
     }
   | { t: "sftp-ok"; op: string; path: string }
   // Optional per-session capability advertisement, sent once the session is
@@ -574,6 +585,29 @@ const IMAGE_MIME: Record<string, string> = {
  */
 export function isProbablyImageFile(name: string): boolean {
   return imageMimeType(name) !== null;
+}
+
+/**
+ * Upper bound (bytes) on an image the file-browser grid will auto-fetch as a
+ * thumbnail. Thumbnails read the whole file over the wire (there's no
+ * server-side resizing), so a small cap keeps the grid cheap — larger images
+ * just show the generic icon until opened. Mirrored in `server.mjs`, which also
+ * enforces it so a client can't request a huge file "as a thumbnail".
+ */
+export const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Whether a listing entry should get an auto-loaded image thumbnail in the grid
+ * view: a regular file that's a browser-renderable image and small enough that
+ * fetching it whole is cheap (see {@link THUMBNAIL_MAX_BYTES}).
+ */
+export function isThumbnailable(entry: FileEntry): boolean {
+  return (
+    entry.type === "file" &&
+    isProbablyImageFile(entry.name) &&
+    entry.size >= 0 &&
+    entry.size <= THUMBNAIL_MAX_BYTES
+  );
 }
 
 /**

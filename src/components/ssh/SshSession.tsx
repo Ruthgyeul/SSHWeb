@@ -150,6 +150,12 @@ export function SshSession({
   const [activeEditor, setActiveEditor] = useState<string | null>(null);
   const [savingPath, setSavingPath] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
+  // Cached grid-view image thumbnails, keyed by remote path → `data:` URL.
+  // Populated lazily as tiles scroll into view; cleared on each directory change
+  // (below) to bound memory. `requestedThumbsRef` dedupes in-flight requests so
+  // a tile re-rendering never re-fetches.
+  const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
+  const requestedThumbsRef = useRef<Set<string>>(new Set());
   // Active local port-forwards, keyed by their client-generated id.
   const [forwards, setForwards] = useState<Record<string, ForwardState>>({});
   const [uploads, setUploads] = useState<Record<string, UploadItem>>({});
@@ -211,6 +217,18 @@ export function SshSession({
     (path: string) => {
       setFilesLoading(true);
       send({ t: "sftp-list", path });
+    },
+    [send],
+  );
+
+  // Lazily fetch a grid thumbnail for `path`, at most once (the ref dedupes so a
+  // tile scrolling in and out never re-requests). The reply arrives as an
+  // `sftp-read` with `thumb: true` and lands in the `thumbnails` cache.
+  const requestThumbnail = useCallback(
+    (path: string) => {
+      if (requestedThumbsRef.current.has(path)) return;
+      requestedThumbsRef.current.add(path);
+      send({ t: "sftp-read", path, thumb: true });
     },
     [send],
   );
@@ -287,6 +305,13 @@ export function SshSession({
           break;
 
         case "sftp-list":
+          // Landing in a different directory invalidates the thumbnail cache
+          // (a plain refresh of the same directory keeps it, so re-listing after
+          // a file op doesn't re-fetch every image).
+          if (msg.path !== cwdRef.current) {
+            requestedThumbsRef.current = new Set();
+            setThumbnails({});
+          }
           cwdRef.current = msg.path;
           setCwd(msg.path);
           setEntries(msg.entries);
@@ -302,6 +327,12 @@ export function SshSession({
                 : [...prev, { path: msg.path, name: msg.name, content: text }],
             );
             setActiveEditor(msg.path);
+          } else if (msg.thumb) {
+            const mime = imageMimeType(msg.name) ?? "application/octet-stream";
+            setThumbnails((prev) => ({
+              ...prev,
+              [msg.path]: `data:${mime};base64,${msg.dataB64}`,
+            }));
           } else if (msg.preview) {
             const bytes = base64ToBytes(msg.dataB64);
             const kind = previewKind(msg.name) ?? "image";
@@ -1058,6 +1089,8 @@ export function SshSession({
               onChmod={onChmod}
               onEdit={(path) => send({ t: "sftp-read", path, edit: true })}
               onPreview={(path) => send({ t: "sftp-read", path, preview: true })}
+              thumbnails={thumbnails}
+              onRequestThumbnail={requestThumbnail}
             />
             {preview && (
               <FilePreview
