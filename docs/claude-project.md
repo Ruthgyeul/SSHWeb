@@ -126,12 +126,19 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   never stored in the cookie — a SHA-256 digest is — nor logged) before a
   WebSocket upgrade is accepted. Local port-forwarding (`ssh -L`) is opt-in via
   `SSH_ALLOW_PORT_FORWARD` and binds loopback-only unless
-  `SSH_FORWARD_ALLOW_PUBLIC_BIND` is set. The WebSocket upgrade is origin-checked
+  `SSH_FORWARD_ALLOW_PUBLIC_BIND` is set. Elevated (sudo) file access is opt-in
+  via `SSH_ALLOW_SUDO`: when enabled, the file browser's `sudo` toggle routes
+  SFTP through an `sftp-server` launched under `sudo` over an exec channel (the
+  SFTP counterpart to `sudo su`), so file ops run as root — the target's sudoers
+  policy still governs whether it succeeds, and an optional sudo password is fed
+  to `sudo -S` on stdin (never interpolated into the command, never logged), with
+  passwordless `sudo -n` used when none is given (`SSH_SFTP_SERVER_PATHS`
+  overrides where `sftp-server` is found). The WebSocket upgrade is origin-checked
   (same-origin by default, or `SSH_ALLOWED_ORIGINS`) to block cross-site
   WebSocket hijacking. The security-critical pure logic (origin check, rate
   limiter, IP resolution, upload accounting + chunk-order check, idle expiry,
   access-token match, cookie parsing, forward-bind policy, WebSocket frame-size
-  bound, secure-cookie decision) lives in
+  bound, secure-cookie decision, sudo-sftp command builder) lives in
   `src/lib/serverSecurity.ts` (unit-tested) and is hand-mirrored in `server.mjs`
   — the same "two synchronized places" discipline as the wire protocol. The
   CSP's `connect-src 'self'` already authorizes the same-origin WebSocket —

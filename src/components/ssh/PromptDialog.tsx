@@ -17,6 +17,8 @@ export interface DialogRequest {
     label?: string;
     initialValue?: string;
     placeholder?: string;
+    /** Render a masked password field (e.g. for a sudo password). */
+    password?: boolean;
   };
   confirmLabel?: string;
   /** Style the confirm button as a destructive action (e.g. delete). */
@@ -99,6 +101,7 @@ export function PromptDialog({
                   onClose();
                 }
               }}
+              type={request.input.password ? "password" : "text"}
               placeholder={request.input.placeholder}
               spellCheck={false}
               autoCapitalize="off"

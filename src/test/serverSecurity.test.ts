@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   accessTokenMatches,
   accessTokenRequired,
+  buildSudoSftpCommand,
   clientIpFromHeaders,
   computeMaxPayloadBytes,
+  DEFAULT_SFTP_SERVER_PATHS,
   isForwardBindAllowed,
   isIdleExpired,
   isSecureRequest,
@@ -310,5 +312,50 @@ describe("isSecureRequest", () => {
     expect(isSecureRequest(undefined, false)).toBe(false);
     expect(isSecureRequest("http", false)).toBe(false);
     expect(isSecureRequest("", false)).toBe(false);
+  });
+});
+
+describe("buildSudoSftpCommand", () => {
+  it("uses non-interactive sudo (-n) when no password is provided", () => {
+    const cmd = buildSudoSftpCommand(false);
+    expect(cmd.startsWith("sudo -n ")).toBe(true);
+    expect(cmd).not.toContain("-S");
+  });
+
+  it("reads the password from stdin (-S) and clears the cache (-k) with a password", () => {
+    const cmd = buildSudoSftpCommand(true);
+    expect(cmd.startsWith("sudo -k -S -p '' ")).toBe(true);
+  });
+
+  it("searches the default sftp-server locations in order and execs the first", () => {
+    const cmd = buildSudoSftpCommand(false);
+    for (const p of DEFAULT_SFTP_SERVER_PATHS) expect(cmd).toContain(p);
+    expect(cmd).toContain('[ -x "$p" ] && exec "$p"');
+    // Debian/Ubuntu path is tried before the RHEL one.
+    expect(cmd.indexOf("/usr/lib/openssh/sftp-server")).toBeLessThan(
+      cmd.indexOf("/usr/libexec/openssh/sftp-server"),
+    );
+  });
+
+  it("fails loudly when no sftp-server is found", () => {
+    const cmd = buildSudoSftpCommand(false);
+    expect(cmd).toContain('echo "sftp-server not found" >&2');
+    expect(cmd).toContain("exit 127");
+  });
+
+  it("honors a custom path list and falls back to the defaults when empty", () => {
+    expect(buildSudoSftpCommand(false, ["/opt/sftp"])).toContain(
+      "for p in /opt/sftp;",
+    );
+    // An empty override collapses back to the built-in list.
+    expect(buildSudoSftpCommand(false, [])).toContain(
+      DEFAULT_SFTP_SERVER_PATHS[0],
+    );
+  });
+
+  it("never interpolates the password into the command string", () => {
+    // The password travels on stdin, not in the command; the builder only takes
+    // a boolean, so a secret can never leak into the argv it produces.
+    expect(buildSudoSftpCommand(true)).not.toMatch(/hunter2|password/i);
   });
 });
