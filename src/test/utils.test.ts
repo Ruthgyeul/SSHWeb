@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cn, toJsonLd } from "./utils";
+import { cn, toJsonLd } from "@/lib/utils";
 
 describe("cn", () => {
   it("joins truthy class names with spaces", () => {

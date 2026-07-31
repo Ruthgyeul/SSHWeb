@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  */
 async function loadConfig() {
   vi.resetModules();
-  return import("./siteConfig");
+  return import("@/config/siteConfig");
 }
 
 afterEach(() => {

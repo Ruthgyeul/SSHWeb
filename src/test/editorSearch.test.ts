@@ -4,7 +4,7 @@ import {
   nextMatchIndex,
   replaceAll,
   replaceMatch,
-} from "./editorSearch";
+} from "@/lib/editorSearch";
 
 describe("findMatches", () => {
   it("finds all non-overlapping, case-insensitive matches by default", () => {

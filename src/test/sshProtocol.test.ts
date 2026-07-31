@@ -29,7 +29,7 @@ import {
   validateConnectInput,
   validateForward,
   type FileEntry,
-} from "./sshProtocol";
+} from "@/lib/sshProtocol";
 
 describe("encode/parse", () => {
   it("round-trips a message", () => {

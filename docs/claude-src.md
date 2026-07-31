@@ -25,11 +25,12 @@ src/
 ├── lib/
 │   ├── theme.ts         # palette as TS tokens (OG image only)
 │   ├── og.tsx           # shared OG/Twitter image renderer
-│   ├── sshProtocol.ts   # web-SSH wire types + pure helpers (+ .test.ts)
-│   ├── serverSecurity.ts # origin check / rate limiter / IP + upload cap (mirrored in server.mjs, + .test.ts)
-│   └── utils.ts         # cn() classname helper (+ utils.test.ts)
-└── styles/
-    └── globals.css      # Tailwind import + @theme palette + terminal utilities
+│   ├── sshProtocol.ts   # web-SSH wire types + pure helpers
+│   ├── serverSecurity.ts # origin check / rate limiter / IP + upload cap (mirrored in server.mjs)
+│   └── utils.ts         # cn() classname helper
+├── styles/
+│   └── globals.css      # Tailwind import + @theme palette + terminal utilities
+└── test/                # ★ all Vitest unit tests (*.test.ts), import subjects via "@/…"
 ```
 
 ## Rules of thumb
@@ -39,7 +40,8 @@ src/
   interactivity.
 - **Colors come from Tailwind `term-*` tokens** (defined in `styles/globals.css`).
   The only raw-hex source is `lib/theme.ts`, kept in sync for the OG renderer.
-- **Tests** live next to their subject as `*.test.ts` and run under Vitest
-  (`node` environment — no DOM). Add tests for pure logic in `lib/`.
+- **Tests** live under `src/test/` as `*.test.ts` and run under Vitest
+  (`node` environment — no DOM). Import the subject via the `@/…` alias (e.g.
+  `@/lib/utils`), not a relative path. Add tests for pure logic in `lib/`.
 - **New route** → also register it in `app/sitemap.ts` and export page
   `metadata`.
