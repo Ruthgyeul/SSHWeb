@@ -13,7 +13,7 @@ import {
   SlidingWindowRateLimiter,
   uploadChunkInOrder,
   uploadExceedsCap,
-} from "./serverSecurity";
+} from "@/lib/serverSecurity";
 
 describe("normalizeOrigin", () => {
   it("reduces an origin to scheme://host[:port], lowercased", () => {

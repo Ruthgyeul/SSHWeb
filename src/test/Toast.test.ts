@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampToastMessage } from "./Toast";
+import { clampToastMessage } from "@/components/ssh/Toast";
 
 describe("clampToastMessage", () => {
   it("trims and collapses whitespace", () => {

@@ -3,7 +3,7 @@ import {
   DEFAULT_THEME_ID,
   getThemePreset,
   TERMINAL_THEMES,
-} from "./terminalTheme";
+} from "@/lib/terminalTheme";
 
 describe("getThemePreset", () => {
   it("returns the matching preset by id", () => {

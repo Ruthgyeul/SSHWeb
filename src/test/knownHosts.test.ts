@@ -6,7 +6,7 @@ import {
   serializeKnownHosts,
   splitHostId,
   type KnownHostMap,
-} from "./knownHosts";
+} from "@/lib/knownHosts";
 
 describe("parseKnownHosts", () => {
   it("parses a well-formed map", () => {

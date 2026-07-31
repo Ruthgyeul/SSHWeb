@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { escapeHtml, highlightToHtml, tokenizeLine } from "./syntaxHighlight";
+import { escapeHtml, highlightToHtml, tokenizeLine } from "@/lib/syntaxHighlight";
 
 describe("tokenizeLine", () => {
   it("tags a trailing comment", () => {
