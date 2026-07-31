@@ -40,6 +40,7 @@ import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TerminalSettings } from "./TerminalSettings";
 import { useTerminalPrefs } from "./useTerminalPrefs";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
+import { ToastStack, useToasts } from "./Toast";
 
 /** Upload chunk size; each chunk is one `sftp-write` message (drives progress). */
 const UPLOAD_CHUNK = 256 * 1024;
@@ -203,6 +204,13 @@ export function SshSession({
   const [dialog, setDialog] = useState<DialogRequest | null>(null);
   // Whether the keyboard-shortcuts cheat sheet is open.
   const [showShortcuts, setShowShortcuts] = useState(false);
+
+  // Transient error/notice toasts (surface failures that would otherwise leave
+  // the UI silent — e.g. an over-cap upload or download the bridge rejects).
+  const { toasts, notify, dismiss } = useToasts();
+  // Render-safe mirror of "am I connected?" for the ws message handler, whose
+  // closure can't read the `connected` derived value directly.
+  const connectedRef = useRef(false);
 
   // Terminal appearance (font size + color theme), shared across all sessions.
   const [termPrefs, updateTermPrefs] = useTerminalPrefs();
@@ -411,6 +419,7 @@ export function SshSession({
           break;
 
         case "forward-error":
+          notify("error", `Port forward failed: ${msg.message}`);
           setForwards((f) => {
             const cur = f[msg.id];
             if (!cur) return f; // error for a forward we already dropped
@@ -431,16 +440,24 @@ export function SshSession({
 
         case "error":
           if (msg.scope === "sftp") {
+            // SFTP errors only happen while connected, where the overlay's
+            // status text is hidden — a toast is the only visible channel.
+            // Clear any in-flight spinners so a failed list/save doesn't hang.
             setFilesLoading(false);
-            setStatusMessage(`SFTP: ${msg.message}`);
+            setSavingPath(null);
+            notify("error", msg.message);
           } else {
+            // Shell/auth errors: echo into the terminal, and while connected
+            // also toast so the user sees it even away from the terminal tab.
+            // Before connecting, the overlay shows the status text instead.
             xtermRef.current?.writeln(`\x1b[31m✗ ${msg.message}\x1b[0m`);
-            setStatusMessage(msg.message);
+            if (connectedRef.current) notify("error", msg.message);
+            else setStatusMessage(msg.message);
           }
           break;
       }
     },
-    [listDir, send],
+    [listDir, send, notify],
   );
 
   // openSocket and scheduleReconnect reference each other; a ref breaks the
@@ -613,6 +630,11 @@ export function SshSession({
 
   const connected = status === "connected";
 
+  // Mirror `connected` into a ref the ws message handler can read synchronously.
+  useEffect(() => {
+    connectedRef.current = connected;
+  }, [connected]);
+
   // Report label + status to the tab manager whenever they change.
   useEffect(() => {
     onMeta({
@@ -696,7 +718,7 @@ export function SshSession({
     try {
       await navigator.clipboard.writeText(sel);
     } catch {
-      setStatusMessage("Clipboard unavailable (needs HTTPS or localhost).");
+      notify("error", "Clipboard unavailable (needs HTTPS or localhost).");
     }
   };
   const doPaste = async () => {
@@ -704,7 +726,7 @@ export function SshSession({
       const text = await navigator.clipboard.readText();
       if (text) sendInput(text);
     } catch {
-      setStatusMessage("Clipboard unavailable (needs HTTPS or localhost).");
+      notify("error", "Clipboard unavailable (needs HTTPS or localhost).");
     }
   };
 
@@ -770,32 +792,45 @@ export function SshSession({
     const total = file.size;
     const report = (sent: number) =>
       setUploads((u) => ({ ...u, [path]: { name: rel, sent, total } }));
-    report(0);
-    const buf = new Uint8Array(await file.arrayBuffer());
-    const ws = wsRef.current;
-    let offset = 0;
-    do {
-      const end = Math.min(offset + UPLOAD_CHUNK, total);
-      send({
-        t: "sftp-write",
-        path,
-        dataB64: bytesToBase64(buf.subarray(offset, end)),
-        offset,
-        final: end >= total,
-        // Only the opening chunk carries the mkdirp request (that's when the
-        // server opens the write stream and can create the parents first).
-        mkdirp: offset === 0 && needsDir ? true : undefined,
+    const clearUpload = () =>
+      setUploads((u) => {
+        const rest = { ...u };
+        delete rest[path];
+        return rest;
       });
-      offset = end;
-      report(offset);
-      while (
-        ws &&
-        ws.readyState === WebSocket.OPEN &&
-        ws.bufferedAmount > 4 * 1024 * 1024
-      ) {
-        await sleep(25);
-      }
-    } while (offset < total);
+    report(0);
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      const ws = wsRef.current;
+      let offset = 0;
+      do {
+        const end = Math.min(offset + UPLOAD_CHUNK, total);
+        send({
+          t: "sftp-write",
+          path,
+          dataB64: bytesToBase64(buf.subarray(offset, end)),
+          offset,
+          final: end >= total,
+          // Only the opening chunk carries the mkdirp request (that's when the
+          // server opens the write stream and can create the parents first).
+          mkdirp: offset === 0 && needsDir ? true : undefined,
+        });
+        offset = end;
+        report(offset);
+        while (
+          ws &&
+          ws.readyState === WebSocket.OPEN &&
+          ws.bufferedAmount > 4 * 1024 * 1024
+        ) {
+          await sleep(25);
+        }
+      } while (offset < total);
+    } catch {
+      // Reading the local file failed — drop the stuck progress row and tell
+      // the user (a server-side reject arrives separately as an sftp error).
+      clearUpload();
+      notify("error", `Upload failed: ${rel}`);
+    }
   };
   const onMkdir = () => {
     setDialog({
@@ -1158,6 +1193,10 @@ export function SshSession({
             onKbdSubmit={submitKbd}
           />
         )}
+
+        {/* Transient notifications — sit above every tab and modal so a failed
+            action is always visible, even with the editor or a dialog open. */}
+        <ToastStack toasts={toasts} onDismiss={dismiss} />
       </div>
     </div>
   );
