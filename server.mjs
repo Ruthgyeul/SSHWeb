@@ -58,6 +58,10 @@ const MAX_SESSIONS = parseInt(process.env.SSH_MAX_SESSIONS || "25", 10);
 const MAX_DOWNLOAD_MB = parseInt(process.env.SSH_MAX_DOWNLOAD_MB || "25", 10);
 const MAX_DOWNLOAD_BYTES =
   MAX_DOWNLOAD_MB > 0 ? MAX_DOWNLOAD_MB * 1024 * 1024 : 0;
+// Upper bound on an image fetched whole to feed a file-browser grid thumbnail.
+// Mirrors `THUMBNAIL_MAX_BYTES` in src/lib/sshProtocol.ts — a `thumb` read past
+// this is silently ignored so a client can't pull a huge file "as a thumbnail".
+const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
 // Cap a single SFTP upload so an unbounded stream can't fill the target disk
 // (symmetric with the download cap). Configured in whole megabytes; 0 (or less)
 // disables the limit.
@@ -1343,6 +1347,25 @@ wss.on("connection", (ws, req) => {
               );
             }
             const name = msg.path.split("/").pop() || "download";
+
+            // Thumbnails feed the grid view: read the whole (small) image and
+            // echo `thumb`. Guard with a tight cap of its own — a grid renders
+            // many at once, and there's no server-side resizing — so an oversized
+            // image is silently skipped (the client just keeps the generic icon).
+            if (msg.thumb === true) {
+              if (stats.size > THUMBNAIL_MAX_BYTES) return;
+              s.readFile(msg.path, (err, buffer) => {
+                if (err) return; // best-effort: a failed thumb just shows the icon
+                send({
+                  t: "sftp-read",
+                  path: msg.path,
+                  name,
+                  dataB64: buffer.toString("base64"),
+                  thumb: true,
+                });
+              });
+              return;
+            }
 
             // Edit/preview need the whole file in one message (they build an
             // editor buffer or a data: URL); they're already size-capped above.

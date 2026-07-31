@@ -15,6 +15,8 @@ import {
   isProbablyPreviewableFile,
   isProbablyTextFile,
   isProbablyVideoFile,
+  isThumbnailable,
+  THUMBNAIL_MAX_BYTES,
   joinPath,
   forwardLabel,
   previewKind,
@@ -315,6 +317,40 @@ describe("image detection", () => {
     expect(imageMimeType("a.svg")).toBe("image/svg+xml");
     expect(imageMimeType("a.txt")).toBeNull();
     expect(imageMimeType("noext")).toBeNull();
+  });
+});
+
+describe("isThumbnailable", () => {
+  const mk = (over: Partial<FileEntry>): FileEntry => ({
+    name: "photo.png",
+    type: "file",
+    size: 1024,
+    mtime: 0,
+    mode: 0,
+    ...over,
+  });
+
+  it("accepts a small image file", () => {
+    expect(isThumbnailable(mk({}))).toBe(true);
+    expect(isThumbnailable(mk({ name: "a.JPG", size: THUMBNAIL_MAX_BYTES }))).toBe(
+      true,
+    );
+  });
+
+  it("rejects non-image files", () => {
+    expect(isThumbnailable(mk({ name: "notes.md" }))).toBe(false);
+    expect(isThumbnailable(mk({ name: "clip.mp4" }))).toBe(false);
+  });
+
+  it("rejects directories and links even with image-like names", () => {
+    expect(isThumbnailable(mk({ type: "dir", name: "images.png" }))).toBe(false);
+    expect(isThumbnailable(mk({ type: "link", name: "shortcut.png" }))).toBe(
+      false,
+    );
+  });
+
+  it("rejects images larger than the cap", () => {
+    expect(isThumbnailable(mk({ size: THUMBNAIL_MAX_BYTES + 1 }))).toBe(false);
   });
 });
 

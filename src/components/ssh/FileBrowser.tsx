@@ -5,9 +5,11 @@ import {
   filterEntries,
   formatMode,
   formatSize,
+  isProbablyImageFile,
   isProbablyPreviewableFile,
   isProbablyTextFile,
   isProbablyVideoFile,
+  isThumbnailable,
   parentPath,
   pathSegments,
   sortEntries,
@@ -15,6 +17,7 @@ import {
 } from "@/lib/sshProtocol";
 import { cn } from "@/lib/utils";
 import { collectDroppedFiles, droppedEntries } from "./dropUpload";
+import { useFileViewMode } from "./useFileViewMode";
 
 /** One in-flight upload's progress, shown in the progress panel. */
 export interface UploadItem {
@@ -35,6 +38,72 @@ const actionBtn =
 
 /** Shared empty set for a listing with no active selection (stable identity). */
 const EMPTY_NAMES: ReadonlySet<string> = new Set();
+
+/** The emoji stand-in for an entry, by type (shared by both list and grid). */
+function fileIcon(entry: FileEntry): string {
+  if (entry.type === "dir") return "📁";
+  if (entry.type === "link") return "🔗";
+  if (isProbablyVideoFile(entry.name)) return "🎞";
+  if (isProbablyImageFile(entry.name)) return "🖼";
+  return "📄";
+}
+
+/**
+ * A grid-tile thumbnail: shows the file-type icon until the tile scrolls into
+ * view, then lazily requests the image (once) and swaps in the returned
+ * `data:` URL. Non-image / oversized entries just keep showing `fallback`.
+ */
+function Thumbnail({
+  path,
+  src,
+  thumbnailable,
+  fallback,
+  onRequest,
+}: {
+  path: string;
+  src: string | undefined;
+  thumbnailable: boolean;
+  fallback: string;
+  onRequest: (path: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!thumbnailable || src) return;
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          onRequest(path);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [path, src, thumbnailable, onRequest]);
+
+  return (
+    <div
+      ref={ref}
+      className="flex h-24 w-full items-center justify-center overflow-hidden rounded bg-term-panel/50 text-4xl"
+    >
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element -- remote data: URL
+        <img
+          src={src}
+          alt=""
+          className="h-full w-full object-cover"
+          loading="lazy"
+          draggable={false}
+        />
+      ) : (
+        <span aria-hidden>{fallback}</span>
+      )}
+    </div>
+  );
+}
 
 /**
  * SFTP file browser over the live SSH session. Fully controlled by the parent:
@@ -67,6 +136,8 @@ export function FileBrowser({
   onEdit,
   onPreview,
   onRefresh,
+  thumbnails,
+  onRequestThumbnail,
 }: {
   cwd: string;
   entries: FileEntry[];
@@ -94,10 +165,16 @@ export function FileBrowser({
   onEdit: (path: string, name: string) => void;
   onPreview: (path: string, name: string) => void;
   onRefresh: () => void;
+  /** Cached grid thumbnails, keyed by remote path → `data:` URL. */
+  thumbnails: Record<string, string>;
+  /** Ask the parent to fetch a thumbnail for `path` (deduped upstream). */
+  onRequestThumbnail: (path: string) => void;
 }) {
   const uploadRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  // List vs. grid (thumbnail) layout, persisted across sessions/tabs.
+  const [viewMode, setViewMode] = useFileViewMode();
 
   // `webkitdirectory` isn't a typed React attribute; set it on the folder input
   // imperatively so clicking "↑ folder" opens a directory picker.
@@ -237,6 +314,41 @@ export function FileBrowser({
         >
           ⟳
         </button>
+        {/* List / grid layout toggle */}
+        <div
+          className="flex overflow-hidden rounded border border-term-border"
+          role="group"
+          aria-label="View mode"
+        >
+          <button
+            type="button"
+            onClick={() => setViewMode("list")}
+            aria-pressed={viewMode === "list"}
+            className={cn(
+              "px-2 py-1 text-xs transition-colors",
+              viewMode === "list"
+                ? "bg-term-accent/15 text-term-accent"
+                : "text-term-muted hover:text-term-text",
+            )}
+            title="List view"
+          >
+            ☰
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("grid")}
+            aria-pressed={viewMode === "grid"}
+            className={cn(
+              "border-l border-term-border px-2 py-1 text-xs transition-colors",
+              viewMode === "grid"
+                ? "bg-term-accent/15 text-term-accent"
+                : "text-term-muted hover:text-term-text",
+            )}
+            title="Grid view"
+          >
+            ▦
+          </button>
+        </div>
         {canElevate && (
           <button
             type="button"
@@ -518,6 +630,7 @@ export function FileBrowser({
             </button>
           </div>
         )}
+        {viewMode === "list" && (
         <table className="w-full border-collapse text-sm">
           <tbody>
             {visible.map((entry) => {
@@ -565,15 +678,7 @@ export function FileBrowser({
                         isDir ? "text-term-accent" : "text-term-dim",
                       )}
                     >
-                      <span aria-hidden>
-                        {isDir
-                          ? "📁"
-                          : entry.type === "link"
-                            ? "🔗"
-                            : isProbablyVideoFile(entry.name)
-                              ? "🎞"
-                              : "📄"}
-                      </span>
+                      <span aria-hidden>{fileIcon(entry)}</span>
                       <span className="truncate">{entry.name}</span>
                     </button>
                   </td>
@@ -644,6 +749,123 @@ export function FileBrowser({
             })}
           </tbody>
         </table>
+        )}
+        {viewMode === "grid" && visible.length > 0 && (
+          <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+            {visible.map((entry) => {
+              const isDir = entry.type === "dir";
+              const target = pathFor(entry.name);
+              const editable = !isDir && isProbablyTextFile(entry.name);
+              const previewable = !isDir && isProbablyPreviewableFile(entry.name);
+              // Double-click opens by type: dir → navigate, image/video →
+              // preview, text → editor, anything else → download.
+              const open = () => {
+                if (isDir) onNavigate(target);
+                else if (previewable) onPreview(target, entry.name);
+                else if (editable) onEdit(target, entry.name);
+                else onDownload(target);
+              };
+              return (
+                <div
+                  key={entry.name}
+                  onDoubleClick={open}
+                  className={cn(
+                    "group relative flex cursor-pointer flex-col gap-1.5 rounded border p-2 transition-colors hover:bg-term-panel/60",
+                    isSelected(entry.name)
+                      ? "border-term-accent/50 bg-term-accent/5"
+                      : "border-term-border/50",
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected(entry.name)}
+                    onChange={() => toggleOne(entry.name)}
+                    onClick={(e) => e.stopPropagation()}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    className={cn(
+                      "absolute left-2 top-2 z-10 accent-term-accent transition-opacity",
+                      isSelected(entry.name)
+                        ? "opacity-100"
+                        : "opacity-0 group-hover:opacity-100",
+                    )}
+                    aria-label={`Select ${entry.name}`}
+                  />
+                  <Thumbnail
+                    path={target}
+                    src={thumbnails[target]}
+                    thumbnailable={isThumbnailable(entry)}
+                    fallback={fileIcon(entry)}
+                    onRequest={onRequestThumbnail}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => isDir && onNavigate(target)}
+                    title={isDir ? entry.name : "Double-click to open"}
+                    className={cn(
+                      "truncate text-left text-xs",
+                      isDir ? "text-term-accent" : "text-term-dim",
+                    )}
+                  >
+                    {entry.name}
+                  </button>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="truncate font-mono text-[10px] text-term-faint">
+                      {formatSize(entry.size, entry.type)}
+                    </span>
+                    <div className="flex flex-none items-center opacity-0 transition-opacity group-hover:opacity-100">
+                      {previewable && (
+                        <button
+                          type="button"
+                          onClick={() => onPreview(target, entry.name)}
+                          className={cn(actionBtn, "hover:text-term-accent")}
+                          title="Preview"
+                        >
+                          👁
+                        </button>
+                      )}
+                      {editable && (
+                        <button
+                          type="button"
+                          onClick={() => onEdit(target, entry.name)}
+                          className={cn(actionBtn, "hover:text-term-accent")}
+                          title="Edit"
+                        >
+                          ✎
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          isDir ? onDownloadDir(target) : onDownload(target)
+                        }
+                        className={cn(actionBtn, "hover:text-term-accent")}
+                        title={isDir ? "Download as zip" : "Download"}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onRename(entry)}
+                        className={cn(actionBtn, "hover:text-term-text")}
+                        title="Rename"
+                      >
+                        mv
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDelete(entry)}
+                        className={cn(actionBtn, "hover:text-term-red")}
+                        title="Delete"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
