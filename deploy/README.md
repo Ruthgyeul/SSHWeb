@@ -47,7 +47,7 @@ PORT=3000
 # Restrict which hosts the bridge may reach (empty = anywhere):
 # SSH_ALLOWED_HOSTS=example.com,*.internal.example.com
 # SSH_MAX_SESSIONS=25
-# SSH_MAX_DOWNLOAD_BYTES=26214400
+# SSH_MAX_DOWNLOAD_MB=25
 EOF
 sudo chmod 0640 /etc/sshweb/sshweb.env
 ```

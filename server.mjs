@@ -54,16 +54,15 @@ const ALLOWLIST = (process.env.SSH_ALLOWED_HOSTS || "")
 
 const MAX_SESSIONS = parseInt(process.env.SSH_MAX_SESSIONS || "25", 10);
 // Cap a single SFTP download so a huge file can't exhaust server memory.
-const MAX_DOWNLOAD_BYTES = parseInt(
-  process.env.SSH_MAX_DOWNLOAD_BYTES || `${25 * 1024 * 1024}`,
-  10,
-);
+// Configured in whole megabytes; 0 (or less) disables the limit.
+const MAX_DOWNLOAD_MB = parseInt(process.env.SSH_MAX_DOWNLOAD_MB || "25", 10);
+const MAX_DOWNLOAD_BYTES =
+  MAX_DOWNLOAD_MB > 0 ? MAX_DOWNLOAD_MB * 1024 * 1024 : 0;
 // Cap a single SFTP upload so an unbounded stream can't fill the target disk
-// (symmetric with the download cap). 0 disables the limit.
-const MAX_UPLOAD_BYTES = parseInt(
-  process.env.SSH_MAX_UPLOAD_BYTES || `${25 * 1024 * 1024}`,
-  10,
-);
+// (symmetric with the download cap). Configured in whole megabytes; 0 (or less)
+// disables the limit.
+const MAX_UPLOAD_MB = parseInt(process.env.SSH_MAX_UPLOAD_MB || "25", 10);
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB > 0 ? MAX_UPLOAD_MB * 1024 * 1024 : 0;
 // Per-IP throttle on SSH connection *attempts* (anti-brute-force relay).
 const RATE_MAX = parseInt(process.env.SSH_RATE_LIMIT_MAX || "10", 10);
 const RATE_WINDOW_MS = parseInt(
@@ -911,7 +910,7 @@ wss.on("connection", (ws, req) => {
       }
       uploads.delete(path);
       return sendError(
-        `File too large to upload (> ${MAX_UPLOAD_BYTES} bytes).`,
+        `File too large to upload (> ${MAX_UPLOAD_MB} MB).`,
         "sftp",
       );
     }
@@ -1152,9 +1151,9 @@ wss.on("connection", (ws, req) => {
         withSftp((s) =>
           s.stat(msg.path, (statErr, stats) => {
             if (statErr) return sendError(statErr.message, "sftp");
-            if (stats.size > MAX_DOWNLOAD_BYTES) {
+            if (MAX_DOWNLOAD_BYTES > 0 && stats.size > MAX_DOWNLOAD_BYTES) {
               return sendError(
-                `File too large to download (> ${MAX_DOWNLOAD_BYTES} bytes).`,
+                `File too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
                 "sftp",
               );
             }
@@ -1231,7 +1230,7 @@ wss.on("connection", (ws, req) => {
             // Whole-file write (inline-edit save / empty-file touch).
             if (MAX_UPLOAD_BYTES > 0 && buffer.length > MAX_UPLOAD_BYTES) {
               return sendError(
-                `File too large to save (> ${MAX_UPLOAD_BYTES} bytes).`,
+                `File too large to save (> ${MAX_UPLOAD_MB} MB).`,
                 "sftp",
               );
             }
@@ -1266,9 +1265,9 @@ wss.on("connection", (ws, req) => {
           collectDirFiles(s, msg.path, (err, files) => {
             if (err) return sendError(err.message, "sftp");
             const total = files.reduce((n, f) => n + f.data.length, 0);
-            if (total > MAX_DOWNLOAD_BYTES) {
+            if (MAX_DOWNLOAD_BYTES > 0 && total > MAX_DOWNLOAD_BYTES) {
               return sendError(
-                `Folder too large to download (> ${MAX_DOWNLOAD_BYTES} bytes).`,
+                `Folder too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
                 "sftp",
               );
             }
@@ -1291,9 +1290,9 @@ wss.on("connection", (ws, req) => {
           collectPaths(s, paths, (err, files) => {
             if (err) return sendError(err.message, "sftp");
             const total = files.reduce((n, f) => n + f.data.length, 0);
-            if (total > MAX_DOWNLOAD_BYTES) {
+            if (MAX_DOWNLOAD_BYTES > 0 && total > MAX_DOWNLOAD_BYTES) {
               return sendError(
-                `Selection too large to download (> ${MAX_DOWNLOAD_BYTES} bytes).`,
+                `Selection too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
                 "sftp",
               );
             }
