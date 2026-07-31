@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   applyKeyModifiers,
+  audioMimeType,
   compareHostKey,
   encodeMessage,
   hostKeyId,
@@ -54,16 +55,18 @@ import { ToastStack, useToasts } from "./Toast";
 const UPLOAD_CHUNK = 256 * 1024;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** An image or video open in the preview modal. */
+/** A file open in the preview modal (media viewed inline, or a download-only
+ * fallback for types the browser can't render). */
 interface PreviewState {
   path: string;
   name: string;
-  /** Which media surface to render (`<img>` vs `<video>`). */
-  kind: PreviewKind;
-  /** `data:` URL for the <img>/<video>. */
+  /** Which media surface to render; `unsupported` shows a download-only card. */
+  kind: PreviewKind | "unsupported";
+  /** `data:` URL for the media element; empty until loaded / for `unsupported`. */
   src: string;
-  /** Raw bytes, kept so "Download" doesn't need a second round-trip. */
-  bytes: Uint8Array<ArrayBuffer>;
+  /** Raw bytes, kept so "Download" doesn't need a second round-trip. Absent for
+   * `unsupported` previews, which stream the file only if the user downloads. */
+  bytes?: Uint8Array<ArrayBuffer>;
 }
 
 /** What a session reports up to the tab manager for its tab chip. */
@@ -348,7 +351,9 @@ export function SshSession({
             const mime =
               (kind === "video"
                 ? videoMimeType(msg.name)
-                : imageMimeType(msg.name)) ?? "application/octet-stream";
+                : kind === "audio"
+                  ? audioMimeType(msg.name)
+                  : imageMimeType(msg.name)) ?? "application/octet-stream";
             setPreview({
               path: msg.path,
               name: msg.name,
@@ -1098,6 +1103,9 @@ export function SshSession({
               onChmod={onChmod}
               onEdit={(path) => send({ t: "sftp-read", path, edit: true })}
               onPreview={(path) => send({ t: "sftp-read", path, preview: true })}
+              onOpenUnsupported={(path, name) =>
+                setPreview({ path, name, kind: "unsupported", src: "" })
+              }
               thumbnails={thumbnails}
               onRequestThumbnail={requestThumbnail}
             />
@@ -1108,7 +1116,13 @@ export function SshSession({
                 path={preview.path}
                 src={preview.src}
                 kind={preview.kind}
-                onDownload={() => triggerDownload(preview.name, preview.bytes)}
+                onDownload={() =>
+                  // Media previews already hold the bytes; the download-only
+                  // fallback fetches on demand (streamed, with a progress bar).
+                  preview.bytes
+                    ? triggerDownload(preview.name, preview.bytes)
+                    : send({ t: "sftp-read", path: preview.path })
+                }
                 onClose={() => setPreview(null)}
               />
             )}

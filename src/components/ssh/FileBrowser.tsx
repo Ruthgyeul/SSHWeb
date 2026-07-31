@@ -5,6 +5,7 @@ import {
   filterEntries,
   formatMode,
   formatSize,
+  isProbablyAudioFile,
   isProbablyImageFile,
   isProbablyPreviewableFile,
   isProbablyTextFile,
@@ -47,6 +48,7 @@ function fileIcon(entry: FileEntry): string {
   if (entry.type === "link") return "🔗";
   if (isProbablyVideoFile(entry.name)) return "🎞";
   if (isProbablyImageFile(entry.name)) return "🖼";
+  if (isProbablyAudioFile(entry.name)) return "🎵";
   return "📄";
 }
 
@@ -158,6 +160,7 @@ export function FileBrowser({
   onChmod,
   onEdit,
   onPreview,
+  onOpenUnsupported,
   onRefresh,
   thumbnails,
   onRequestThumbnail,
@@ -187,6 +190,9 @@ export function FileBrowser({
   onChmod: (entry: FileEntry) => void;
   onEdit: (path: string, name: string) => void;
   onPreview: (path: string, name: string) => void;
+  /** Open a file the browser can't render inline — a download-only modal (no
+   * auto-download; the user chooses to download from there). */
+  onOpenUnsupported: (path: string, name: string) => void;
   onRefresh: () => void;
   /** Cached grid thumbnails, keyed by remote path → `data:` URL. */
   thumbnails: Record<string, string>;
@@ -661,27 +667,25 @@ export function FileBrowser({
               const target = pathFor(entry.name);
               const editable = !isDir && isProbablyTextFile(entry.name);
               const previewable = !isDir && isProbablyPreviewableFile(entry.name);
-              // Double-click opens by type: dir → navigate, image/video →
-              // preview, text → editor, anything else → download.
+              // Click opens by type — always *viewing* the file, never
+              // downloading it (download is only the explicit ↓ button): dir →
+              // navigate, image/video/audio → preview, text → editor, anything
+              // else → a download-only modal (the browser can't render it).
               const open = () => {
                 if (isDir) onNavigate(target);
                 else if (previewable) onPreview(target, entry.name);
                 else if (editable) onEdit(target, entry.name);
-                else onDownload(target);
+                else onOpenUnsupported(target, entry.name);
               };
               return (
                 <tr
                   key={entry.name}
-                  onDoubleClick={open}
                   className={cn(
-                    "cursor-pointer border-b border-term-border/50 hover:bg-term-panel/60",
+                    "border-b border-term-border/50 hover:bg-term-panel/60",
                     isSelected(entry.name) && "bg-term-accent/5",
                   )}
                 >
-                  <td
-                    className="w-8 py-1.5 pl-3 pr-0 align-middle"
-                    onDoubleClick={(e) => e.stopPropagation()}
-                  >
+                  <td className="w-8 py-1.5 pl-3 pr-0 align-middle">
                     <input
                       type="checkbox"
                       checked={isSelected(entry.name)}
@@ -694,8 +698,8 @@ export function FileBrowser({
                   <td className="w-full py-1.5 pl-1 pr-2">
                     <button
                       type="button"
-                      onClick={() => isDir && onNavigate(target)}
-                      title={isDir ? undefined : "Double-click to open"}
+                      onClick={open}
+                      title={isDir ? undefined : "Click to open"}
                       className={cn(
                         "flex items-center gap-2 text-left",
                         isDir ? "text-term-accent" : "text-term-dim",
@@ -780,20 +784,21 @@ export function FileBrowser({
               const target = pathFor(entry.name);
               const editable = !isDir && isProbablyTextFile(entry.name);
               const previewable = !isDir && isProbablyPreviewableFile(entry.name);
-              // Double-click opens by type: dir → navigate, image/video →
-              // preview, text → editor, anything else → download.
+              // Click opens by type — always *viewing* the file, never
+              // downloading it (download is only the explicit ↓ button): dir →
+              // navigate, image/video/audio → preview, text → editor, anything
+              // else → a download-only modal (the browser can't render it).
               const open = () => {
                 if (isDir) onNavigate(target);
                 else if (previewable) onPreview(target, entry.name);
                 else if (editable) onEdit(target, entry.name);
-                else onDownload(target);
+                else onOpenUnsupported(target, entry.name);
               };
               return (
                 <div
                   key={entry.name}
-                  onDoubleClick={open}
                   className={cn(
-                    "group relative flex cursor-pointer flex-col gap-1.5 rounded border p-2 transition-colors hover:bg-term-panel/60",
+                    "group relative flex flex-col gap-1.5 rounded border p-2 transition-colors hover:bg-term-panel/60",
                     isSelected(entry.name)
                       ? "border-term-accent/50 bg-term-accent/5"
                       : "border-term-border/50",
@@ -813,18 +818,26 @@ export function FileBrowser({
                     )}
                     aria-label={`Select ${entry.name}`}
                   />
-                  <Thumbnail
-                    path={target}
-                    src={thumbnails[target]}
-                    kind={previewKind(entry.name)}
-                    thumbnailable={isThumbnailable(entry)}
-                    fallback={fileIcon(entry)}
-                    onRequest={onRequestThumbnail}
-                  />
                   <button
                     type="button"
-                    onClick={() => isDir && onNavigate(target)}
-                    title={isDir ? entry.name : "Double-click to open"}
+                    onClick={open}
+                    title={isDir ? entry.name : "Click to open"}
+                    className="cursor-pointer"
+                    aria-label={`Open ${entry.name}`}
+                  >
+                    <Thumbnail
+                      path={target}
+                      src={thumbnails[target]}
+                      kind={previewKind(entry.name)}
+                      thumbnailable={isThumbnailable(entry)}
+                      fallback={fileIcon(entry)}
+                      onRequest={onRequestThumbnail}
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={open}
+                    title={isDir ? entry.name : "Click to open"}
                     className={cn(
                       "truncate text-left text-xs",
                       isDir ? "text-term-accent" : "text-term-dim",

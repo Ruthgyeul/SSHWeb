@@ -669,23 +669,61 @@ export function videoMimeType(name: string): string | null {
   return VIDEO_MIME[ext] ?? null;
 }
 
-/** What kind of media the preview modal should render for a file. */
-export type PreviewKind = "image" | "video";
+/** Audio extensions the browser can play inline, mapped to their MIME type. */
+const AUDIO_MIME: Record<string, string> = {
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  oga: "audio/ogg",
+  opus: "audio/ogg",
+  m4a: "audio/mp4",
+  aac: "audio/aac",
+  flac: "audio/flac",
+  weba: "audio/webm",
+};
 
 /**
- * Classify a filename for the inline preview modal: `image`, `video`, or `null`
- * when it isn't a previewable media file. Images win over videos on the (never
- * expected) chance an extension appears in both maps.
+ * Heuristic: is this filename an audio file we can play inline in the browser?
+ * Matches purely by extension (case-insensitive). Actual playback still depends
+ * on the browser's codec support, but the `<audio>` element degrades gracefully
+ * when a codec is missing.
+ */
+export function isProbablyAudioFile(name: string): boolean {
+  return audioMimeType(name) !== null;
+}
+
+/**
+ * The audio MIME type implied by a filename's extension, or `null` when it is
+ * not a playable audio file. Used to build the `data:` URL for the preview
+ * modal's `<audio>` element.
+ */
+export function audioMimeType(name: string): string | null {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return null;
+  const ext = name.slice(dot + 1).toLowerCase();
+  return AUDIO_MIME[ext] ?? null;
+}
+
+/** What kind of media the preview modal should render for a file. */
+export type PreviewKind = "image" | "video" | "audio";
+
+/**
+ * Classify a filename for the inline preview modal: `image`, `video`, `audio`,
+ * or `null` when it isn't a previewable media file. Images win over videos, and
+ * videos over audio, on the (never expected) chance an extension appears in more
+ * than one map.
  */
 export function previewKind(name: string): PreviewKind | null {
   if (imageMimeType(name) !== null) return "image";
   if (videoMimeType(name) !== null) return "video";
+  if (audioMimeType(name) !== null) return "audio";
   return null;
 }
 
 /**
- * Heuristic: can this filename be shown in the inline preview modal (image or
- * video)? Used by the file browser to decide the double-click/👁 action.
+ * Heuristic: can this filename be shown in the inline preview modal (image,
+ * video, or audio)? Used by the file browser to decide the click-to-open/👁
+ * action so opening a media file views it in place instead of downloading it.
  */
 export function isProbablyPreviewableFile(name: string): boolean {
   return previewKind(name) !== null;
