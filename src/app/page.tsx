@@ -19,7 +19,7 @@ export const metadata: Metadata = {
 export default function Home() {
   return (
     <main className="terminal-bg flex h-[100dvh] flex-col">
-      <TerminalBar />
+      <TerminalBar branch="main" />
       <div className="mx-auto flex w-full max-w-5xl min-h-0 flex-1 flex-col gap-3 px-3 py-3 sm:px-4 sm:py-4">
         <div className="flex items-baseline justify-between gap-3">
           <h1 className="text-sm text-term-muted">
