@@ -250,6 +250,52 @@ export function parseCookieHeader(
 }
 
 /* ------------------------------------------------------------------ */
+/* WebSocket frame-size bound                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The largest WebSocket frame the bridge should accept, derived from the upload
+ * cap. `ws` buffers a whole frame in memory *before* any application-level size
+ * check runs, so without a bound a single client frame can force a ~100 MiB
+ * allocation (the library default) regardless of `SSH_MAX_UPLOAD_BYTES`.
+ *
+ * The largest legitimate client→server frame is a whole-file editor save, sent
+ * base64-encoded (≈4/3 inflation) inside a small JSON envelope; that save is
+ * already capped at `maxUploadBytes` on the server. We therefore size the bound
+ * to that cap plus base64/JSON headroom, with an 8 MiB floor so a tiny upload
+ * cap still admits ordinary control frames. A `maxUploadBytes` of `0` (or less)
+ * means uploads are unbounded, so we return `0` — "do not bound frames".
+ */
+export function computeMaxPayloadBytes(maxUploadBytes: number): number {
+  if (maxUploadBytes <= 0) return 0;
+  const bound = Math.ceil(maxUploadBytes * (4 / 3)) + 1024 * 1024;
+  return Math.max(bound, 8 * 1024 * 1024);
+}
+
+/* ------------------------------------------------------------------ */
+/* Secure-cookie decision                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Whether a request arrived over HTTPS, so the access cookie can be flagged
+ * `Secure`. Behind a TLS-terminating reverse proxy the original scheme survives
+ * only in `X-Forwarded-Proto`; when Node terminates TLS itself there is no such
+ * header but the socket is `encrypted`. Honoring both means the cookie never
+ * ships without `Secure` on an HTTPS deployment (which would let it leak over a
+ * downgraded request).
+ */
+export function isSecureRequest(
+  forwardedProto: string | string[] | undefined,
+  encrypted: boolean,
+): boolean {
+  if (encrypted) return true;
+  const raw = Array.isArray(forwardedProto)
+    ? forwardedProto[0]
+    : forwardedProto;
+  return typeof raw === "string" && raw.toLowerCase().includes("https");
+}
+
+/* ------------------------------------------------------------------ */
 /* Port-forward bind safety                                            */
 /* ------------------------------------------------------------------ */
 

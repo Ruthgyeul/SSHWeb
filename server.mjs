@@ -258,6 +258,20 @@ function isForwardBindAllowed(bindHost, allowPublic) {
   return FORWARD_LOOPBACK_BINDS.has((bindHost ?? "").trim().toLowerCase());
 }
 
+/** Largest WebSocket frame to accept, from the upload cap (serverSecurity.ts). */
+function computeMaxPayloadBytes(maxUploadBytes) {
+  if (maxUploadBytes <= 0) return 0;
+  const bound = Math.ceil(maxUploadBytes * (4 / 3)) + 1024 * 1024;
+  return Math.max(bound, 8 * 1024 * 1024);
+}
+
+/** Whether a request arrived over HTTPS (Secure-cookie gate; serverSecurity.ts). */
+function isSecureRequest(forwardedProto, encrypted) {
+  if (encrypted) return true;
+  const raw = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+  return typeof raw === "string" && raw.toLowerCase().includes("https");
+}
+
 /** Minimal per-key sliding-window rate limiter (see serverSecurity.ts). */
 const rateHits = new Map();
 function rateLimitAllow(key, now) {
@@ -340,6 +354,16 @@ const server = createServer((req, res) => {
       });
       req.on("end", () => {
         if (tooBig) return;
+        const ip = clientIpFromReq(req);
+        // Throttle access-key guesses per IP (the WebSocket connect path is
+        // already throttled; this closes the same brute-force door on the
+        // shared-secret exchange). A dedicated `access:` bucket keeps these
+        // attempts from consuming the SSH connection-attempt budget.
+        if (!rateLimitAllow(`access:${ip}`, Date.now())) {
+          logEvent("reject", { ip, reason: "access-rate-limit" });
+          sendJson(res, 429, { authorized: false });
+          return;
+        }
         let token = "";
         try {
           token = String(JSON.parse(body).token ?? "");
@@ -347,11 +371,14 @@ const server = createServer((req, res) => {
           /* malformed body → treated as an empty (failing) token */
         }
         if (!accessTokenMatches(ACCESS_TOKEN, token)) {
-          logEvent("reject", { ip: clientIpFromReq(req), reason: "bad-access-token" });
+          logEvent("reject", { ip, reason: "bad-access-token" });
           sendJson(res, 401, { authorized: false });
           return;
         }
-        const secure = (req.headers["x-forwarded-proto"] || "").includes("https");
+        const secure = isSecureRequest(
+          req.headers["x-forwarded-proto"],
+          req.socket?.encrypted === true,
+        );
         res.setHeader(
           "Set-Cookie",
           `${ACCESS_COOKIE}=${ACCESS_COOKIE_VALUE}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800${secure ? "; Secure" : ""}`,
@@ -371,7 +398,15 @@ const server = createServer((req, res) => {
 // Delegate non-SSH upgrades (e.g. Next dev HMR) to Next's own handler.
 const upgradeHandler = app.getUpgradeHandler?.();
 
-const wss = new WebSocketServer({ noServer: true });
+// Bound the size of a single inbound WebSocket frame so a malicious client can't
+// force a huge allocation before our application-level size checks run. Derived
+// from the upload cap; 0 means "unbounded uploads → keep the library default".
+const MAX_WS_PAYLOAD = computeMaxPayloadBytes(MAX_UPLOAD_BYTES);
+const wss = new WebSocketServer(
+  MAX_WS_PAYLOAD > 0
+    ? { noServer: true, maxPayload: MAX_WS_PAYLOAD }
+    : { noServer: true },
+);
 
 server.on("upgrade", (req, socket, head) => {
   const { pathname } = parse(req.url || "");

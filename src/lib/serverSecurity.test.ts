@@ -3,8 +3,10 @@ import {
   accessTokenMatches,
   accessTokenRequired,
   clientIpFromHeaders,
+  computeMaxPayloadBytes,
   isForwardBindAllowed,
   isIdleExpired,
+  isSecureRequest,
   isWebSocketOriginAllowed,
   normalizeOrigin,
   parseCookieHeader,
@@ -268,5 +270,45 @@ describe("isForwardBindAllowed", () => {
   it("permits any bind when public binds are allowed", () => {
     expect(isForwardBindAllowed("0.0.0.0", true)).toBe(true);
     expect(isForwardBindAllowed("192.168.1.5", true)).toBe(true);
+  });
+});
+
+describe("computeMaxPayloadBytes", () => {
+  it("returns 0 (unbounded) when uploads are unlimited", () => {
+    expect(computeMaxPayloadBytes(0)).toBe(0);
+    expect(computeMaxPayloadBytes(-1)).toBe(0);
+  });
+
+  it("bounds a large upload cap to base64 size plus headroom", () => {
+    const cap = 25 * 1024 * 1024;
+    const bound = computeMaxPayloadBytes(cap);
+    // Must admit the base64-inflated payload of a max-size upload…
+    expect(bound).toBeGreaterThanOrEqual(Math.ceil(cap * (4 / 3)));
+    // …but stay well under the library's 100 MiB default.
+    expect(bound).toBeLessThan(100 * 1024 * 1024);
+  });
+
+  it("enforces an 8 MiB floor so a tiny cap still admits control frames", () => {
+    expect(computeMaxPayloadBytes(1024)).toBe(8 * 1024 * 1024);
+  });
+});
+
+describe("isSecureRequest", () => {
+  it("treats a directly-encrypted socket as HTTPS", () => {
+    expect(isSecureRequest(undefined, true)).toBe(true);
+    expect(isSecureRequest("http", true)).toBe(true);
+  });
+
+  it("honors X-Forwarded-Proto from a TLS-terminating proxy", () => {
+    expect(isSecureRequest("https", false)).toBe(true);
+    expect(isSecureRequest("https,http", false)).toBe(true);
+    expect(isSecureRequest(["https", "http"], false)).toBe(true);
+    expect(isSecureRequest("HTTPS", false)).toBe(true);
+  });
+
+  it("is not secure for plain HTTP with no TLS anywhere", () => {
+    expect(isSecureRequest(undefined, false)).toBe(false);
+    expect(isSecureRequest("http", false)).toBe(false);
+    expect(isSecureRequest("", false)).toBe(false);
   });
 });

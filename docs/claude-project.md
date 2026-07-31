@@ -129,7 +129,8 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   (same-origin by default, or `SSH_ALLOWED_ORIGINS`) to block cross-site
   WebSocket hijacking. The security-critical pure logic (origin check, rate
   limiter, IP resolution, upload accounting + chunk-order check, idle expiry,
-  access-token match, cookie parsing, forward-bind policy) lives in
+  access-token match, cookie parsing, forward-bind policy, WebSocket frame-size
+  bound, secure-cookie decision) lives in
   `src/lib/serverSecurity.ts` (unit-tested) and is hand-mirrored in `server.mjs`
   — the same "two synchronized places" discipline as the wire protocol. The
   CSP's `connect-src 'self'` already authorizes the same-origin WebSocket —
