@@ -76,7 +76,7 @@ and is read from `NEXT_PUBLIC_*` environment variables. Copy `.env.example` to
 | `NEXT_PUBLIC_ALLOW_INDEXING`   | `false` to block crawlers on staging            |
 
 The SSH bridge has its own (server-only) settings — `SSH_ALLOWED_HOSTS`,
-`SSH_MAX_SESSIONS`, `SSH_MAX_DOWNLOAD_BYTES`, `SSH_MAX_UPLOAD_BYTES`,
+`SSH_MAX_SESSIONS`, `SSH_MAX_DOWNLOAD_MB`, `SSH_MAX_UPLOAD_MB`,
 `SSH_RATE_LIMIT_MAX`, `SSH_ALLOWED_ORIGINS`, `SSH_ACCESS_TOKEN`,
 `SSH_ALLOW_PORT_FORWARD`, `NEXT_PUBLIC_SSH_WS_PATH` — covered under
 [Security](#security). See [`.env.example`](.env.example) for the full,
@@ -158,8 +158,9 @@ mirrors the same message names.
   credentials grant, with the host enforcing its own auth and file permissions.
 - **`SSH_ALLOWED_HOSTS`** (server-only) optionally restricts which hosts may be
   reached (empty = anywhere). **`SSH_MAX_SESSIONS`** caps concurrent sessions,
-  **`SSH_MAX_DOWNLOAD_BYTES`** / **`SSH_MAX_UPLOAD_BYTES`** bound a single SFTP
-  transfer, and **`SSH_RATE_LIMIT_MAX`** / **`SSH_RATE_LIMIT_WINDOW_MS`** throttle
+  **`SSH_MAX_DOWNLOAD_MB`** / **`SSH_MAX_UPLOAD_MB`** bound a single SFTP
+  transfer in megabytes (`0` = unlimited), and **`SSH_RATE_LIMIT_MAX`** /
+  **`SSH_RATE_LIMIT_WINDOW_MS`** throttle
   per-IP connection attempts so the bridge can't be used as a brute-force relay.
 - **The WebSocket upgrade is origin-checked** (same-origin by default, or an
   explicit **`SSH_ALLOWED_ORIGINS`** allowlist) to block cross-site WebSocket

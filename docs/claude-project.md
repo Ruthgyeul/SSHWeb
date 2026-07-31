@@ -115,8 +115,9 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   stored or logged; the remote host enforces its own auth/permissions; host keys
   are checked trust-on-first-use (fingerprint prompt + browser known-hosts) and
   keyboard-interactive/2FA is supported;
-  `SSH_ALLOWED_HOSTS`, `SSH_MAX_SESSIONS`, `SSH_MAX_DOWNLOAD_BYTES` and
-  `SSH_MAX_UPLOAD_BYTES` (server env, read in `server.mjs`) gate reachable hosts,
+  `SSH_ALLOWED_HOSTS`, `SSH_MAX_SESSIONS`, `SSH_MAX_DOWNLOAD_MB` and
+  `SSH_MAX_UPLOAD_MB` (server env, read in `server.mjs`, in megabytes; `0` =
+  unlimited) gate reachable hosts,
   concurrency and transfer size, while `SSH_RATE_LIMIT_MAX` /
   `SSH_RATE_LIMIT_WINDOW_MS` throttle per-IP connection attempts and
   `SSH_IDLE_TIMEOUT_MS` (0 = off) reaps sessions with no shell/SFTP activity. An

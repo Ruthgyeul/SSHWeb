@@ -46,7 +46,7 @@ WorkingDirectory=/opt/sshweb
 Environment=NODE_ENV=production
 Environment=PORT=3000
 # Optional: keep secrets / host settings (SSH_ALLOWED_HOSTS, SSH_MAX_SESSIONS,
-# SSH_MAX_DOWNLOAD_BYTES, NEXT_PUBLIC_* …) in a root-owned env file (0640).
+# SSH_MAX_DOWNLOAD_MB, NEXT_PUBLIC_* …) in a root-owned env file (0640).
 # The leading '-' makes the file optional so the unit still starts without it.
 EnvironmentFile=-/etc/sshweb/sshweb.env
 

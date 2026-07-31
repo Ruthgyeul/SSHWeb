@@ -257,7 +257,7 @@ export function parseCookieHeader(
  * The largest WebSocket frame the bridge should accept, derived from the upload
  * cap. `ws` buffers a whole frame in memory *before* any application-level size
  * check runs, so without a bound a single client frame can force a ~100 MiB
- * allocation (the library default) regardless of `SSH_MAX_UPLOAD_BYTES`.
+ * allocation (the library default) regardless of `SSH_MAX_UPLOAD_MB`.
  *
  * The largest legitimate client→server frame is a whole-file editor save, sent
  * base64-encoded (≈4/3 inflation) inside a small JSON envelope; that save is
