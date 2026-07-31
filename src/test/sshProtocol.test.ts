@@ -17,6 +17,7 @@ import {
   isProbablyVideoFile,
   isThumbnailable,
   THUMBNAIL_MAX_BYTES,
+  THUMBNAIL_VIDEO_MAX_BYTES,
   joinPath,
   forwardLabel,
   previewKind,
@@ -303,6 +304,8 @@ describe("image detection", () => {
     expect(isProbablyImageFile("photo.png")).toBe(true);
     expect(isProbablyImageFile("Banner.JPG")).toBe(true);
     expect(isProbablyImageFile("logo.svg")).toBe(true);
+    expect(isProbablyImageFile("anim.apng")).toBe(true);
+    expect(isProbablyImageFile("scan.JFIF")).toBe(true);
   });
 
   it("returns false for non-images", () => {
@@ -337,20 +340,35 @@ describe("isThumbnailable", () => {
     );
   });
 
-  it("rejects non-image files", () => {
-    expect(isThumbnailable(mk({ name: "notes.md" }))).toBe(false);
-    expect(isThumbnailable(mk({ name: "clip.mp4" }))).toBe(false);
+  it("accepts a small video file (up to the larger video cap)", () => {
+    expect(isThumbnailable(mk({ name: "clip.mp4", size: 1024 }))).toBe(true);
+    expect(
+      isThumbnailable(mk({ name: "Movie.MOV", size: THUMBNAIL_VIDEO_MAX_BYTES })),
+    ).toBe(true);
+    // A video between the image and video caps is still thumbnailable.
+    expect(
+      isThumbnailable(mk({ name: "clip.webm", size: THUMBNAIL_MAX_BYTES + 1 })),
+    ).toBe(true);
   });
 
-  it("rejects directories and links even with image-like names", () => {
+  it("rejects non-media files", () => {
+    expect(isThumbnailable(mk({ name: "notes.md" }))).toBe(false);
+    expect(isThumbnailable(mk({ name: "archive.zip" }))).toBe(false);
+  });
+
+  it("rejects directories and links even with media-like names", () => {
     expect(isThumbnailable(mk({ type: "dir", name: "images.png" }))).toBe(false);
     expect(isThumbnailable(mk({ type: "link", name: "shortcut.png" }))).toBe(
       false,
     );
+    expect(isThumbnailable(mk({ type: "link", name: "clip.mp4" }))).toBe(false);
   });
 
-  it("rejects images larger than the cap", () => {
+  it("rejects media larger than its cap", () => {
     expect(isThumbnailable(mk({ size: THUMBNAIL_MAX_BYTES + 1 }))).toBe(false);
+    expect(
+      isThumbnailable(mk({ name: "big.mp4", size: THUMBNAIL_VIDEO_MAX_BYTES + 1 })),
+    ).toBe(false);
   });
 });
 

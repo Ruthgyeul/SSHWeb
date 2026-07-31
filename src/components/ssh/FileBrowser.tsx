@@ -12,8 +12,10 @@ import {
   isThumbnailable,
   parentPath,
   pathSegments,
+  previewKind,
   sortEntries,
   type FileEntry,
+  type PreviewKind,
 } from "@/lib/sshProtocol";
 import { cn } from "@/lib/utils";
 import { collectDroppedFiles, droppedEntries } from "./dropUpload";
@@ -50,18 +52,21 @@ function fileIcon(entry: FileEntry): string {
 
 /**
  * A grid-tile thumbnail: shows the file-type icon until the tile scrolls into
- * view, then lazily requests the image (once) and swaps in the returned
- * `data:` URL. Non-image / oversized entries just keep showing `fallback`.
+ * view, then lazily requests the media (once) and swaps in the returned `data:`
+ * URL — an `<img>` for images, a first-frame `<video>` poster for videos.
+ * Non-media / oversized entries just keep showing `fallback`.
  */
 function Thumbnail({
   path,
   src,
+  kind,
   thumbnailable,
   fallback,
   onRequest,
 }: {
   path: string;
   src: string | undefined;
+  kind: PreviewKind | null;
   thumbnailable: boolean;
   fallback: string;
   onRequest: (path: string) => void;
@@ -87,9 +92,27 @@ function Thumbnail({
   return (
     <div
       ref={ref}
-      className="flex h-24 w-full items-center justify-center overflow-hidden rounded bg-term-panel/50 text-4xl"
+      className="relative flex h-24 w-full items-center justify-center overflow-hidden rounded bg-term-panel/50 text-4xl"
     >
-      {src ? (
+      {src && kind === "video" ? (
+        <>
+          <video
+            // Media fragment nudges the element to paint a frame (not a blank
+            // poster) once metadata loads; muted + no controls for a still look.
+            src={`${src}#t=0.1`}
+            muted
+            playsInline
+            preload="metadata"
+            className="h-full w-full object-cover"
+          />
+          <span
+            className="pointer-events-none absolute text-2xl drop-shadow"
+            aria-hidden
+          >
+            ▶
+          </span>
+        </>
+      ) : src ? (
         // eslint-disable-next-line @next/next/no-img-element -- remote data: URL
         <img
           src={src}
@@ -793,6 +816,7 @@ export function FileBrowser({
                   <Thumbnail
                     path={target}
                     src={thumbnails[target]}
+                    kind={previewKind(entry.name)}
                     thumbnailable={isThumbnailable(entry)}
                     fallback={fileIcon(entry)}
                     onRequest={onRequestThumbnail}
