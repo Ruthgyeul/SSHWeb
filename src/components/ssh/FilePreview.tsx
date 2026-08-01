@@ -1,16 +1,20 @@
 "use client";
 
-import type { PreviewKind } from "@/lib/sshProtocol";
+import { useMemo } from "react";
+import type { PreviewContentKind } from "@/lib/sshProtocol";
+import { renderMarkdown } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
 
-/** What the preview modal can show: a media kind, or a download-only fallback. */
-export type PreviewMode = PreviewKind | "unsupported";
+/** What the preview modal can show: a content kind, or a download-only fallback. */
+export type PreviewMode = PreviewContentKind | "unsupported";
 
 /** Header icon per preview mode. */
 const MODE_ICON: Record<PreviewMode, string> = {
   image: "🖼",
   video: "🎞",
   audio: "🎵",
+  pdf: "📕",
+  markdown: "📝",
   unsupported: "📄",
 };
 
@@ -35,21 +39,39 @@ export function FilePreview({
   kind,
   loading = false,
   placeholder,
+  text,
   onDownload,
   onClose,
 }: {
   name: string;
   path: string;
-  /** `blob:` URL for the media element; empty while loading / for `unsupported`. */
+  /** `blob:` URL for the media/PDF element; empty while loading / for markdown. */
   src: string;
   kind: PreviewMode;
   /** True until the file's bytes arrive — show a spinner instead of blank space. */
   loading?: boolean;
   /** Cached grid thumbnail (`data:` URL) painted behind the spinner while loading. */
   placeholder?: string;
+  /** Decoded file text — only used for the `markdown` kind (rendered to HTML). */
+  text?: string;
   onDownload: () => void;
   onClose: () => void;
 }) {
+  // Markdown is rendered (and sanitised) from the decoded text; skipped for
+  // every other kind so this stays cheap.
+  const markdownHtml = useMemo(
+    () => (kind === "markdown" ? renderMarkdown(text ?? "") : ""),
+    [kind, text],
+  );
+  const spinner = (
+    <div className="absolute inset-0 z-10 flex items-center justify-center">
+      <span
+        className="h-9 w-9 animate-spin rounded-full border-2 border-term-border border-t-term-accent"
+        role="status"
+        aria-label="Loading preview"
+      />
+    </div>
+  );
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-term-card">
       <div className="flex items-center gap-3 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
@@ -77,17 +99,31 @@ export function FilePreview({
           Close
         </button>
       </div>
+      {kind === "pdf" ? (
+        <div className="relative min-h-0 flex-1 bg-term-bg">
+          {loading && spinner}
+          {src && (
+            <iframe
+              src={src}
+              title={name}
+              className="h-full w-full border-0"
+            />
+          )}
+        </div>
+      ) : kind === "markdown" ? (
+        <div className="relative min-h-0 flex-1 overflow-auto bg-term-bg">
+          {loading && spinner}
+          {!loading && (
+            <div
+              className="md-preview mx-auto max-w-3xl px-6 py-5"
+              dangerouslySetInnerHTML={{ __html: markdownHtml }}
+            />
+          )}
+        </div>
+      ) : (
       <div className="min-h-0 flex-1 overflow-auto bg-term-bg p-4">
         <div className="relative flex min-h-full items-center justify-center">
-          {loading && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center">
-              <span
-                className="h-9 w-9 animate-spin rounded-full border-2 border-term-border border-t-term-accent"
-                role="status"
-                aria-label="Loading preview"
-              />
-            </div>
-          )}
+          {loading && spinner}
           {kind === "video" ? (
             src ? (
               <video
@@ -141,6 +177,7 @@ export function FilePreview({
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

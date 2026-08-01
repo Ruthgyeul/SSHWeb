@@ -6,6 +6,7 @@ import {
   audioMimeType,
   compareHostKey,
   encodeMessage,
+  filePreviewKind,
   formatSize,
   hostKeyId,
   imageMimeType,
@@ -16,11 +17,9 @@ import {
   parentPath,
   parseMessage,
   parseOctalMode,
-  previewKind,
   suggestCopyName,
   videoMimeType,
   type FileEntry,
-  type PreviewKind,
   type ServerMessage,
 } from "@/lib/sshProtocol";
 import { getThemePreset } from "@/lib/terminalTheme";
@@ -57,7 +56,7 @@ import {
 } from "./FileBrowser";
 import { FileEditor, type EditorFile } from "./FileEditor";
 import { Tunnels, type ForwardState, type NewForward } from "./Tunnels";
-import { FilePreview } from "./FilePreview";
+import { FilePreview, type PreviewMode } from "./FilePreview";
 import { PasteConfirm } from "./PasteConfirm";
 import { PromptDialog, type DialogRequest } from "./PromptDialog";
 import { MobileKeys } from "./MobileKeys";
@@ -77,10 +76,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 interface PreviewState {
   path: string;
   name: string;
-  /** Which media surface to render; `unsupported` shows a download-only card. */
-  kind: PreviewKind | "unsupported";
-  /** `blob:` URL for the media element; empty until loaded / for `unsupported`. */
+  /** Which surface to render; `unsupported` shows a download-only card. */
+  kind: PreviewMode;
+  /** `blob:` URL for the media/PDF element; empty until loaded / for markdown. */
   src: string;
+  /** Decoded text for the `markdown` kind (rendered to HTML in the modal). */
+  text?: string;
   /** True from the click until the file's bytes arrive — the modal opens
    * immediately in a loading state instead of waiting silently for transfer. */
   loading: boolean;
@@ -472,15 +473,27 @@ export function SshSession({
             // or a different file opened) so we don't build an orphan blob URL.
             if (previewPathRef.current !== msg.path) break;
             const bytes = base64ToBytes(msg.dataB64);
-            const kind = previewKind(msg.name) ?? "image";
+            const kind = filePreviewKind(msg.name) ?? "image";
+            if (kind === "markdown") {
+              // Rendered from decoded text in the modal — no blob URL needed.
+              const text = new TextDecoder().decode(bytes);
+              setPreview((prev) =>
+                prev && prev.path === msg.path
+                  ? { ...prev, kind, src: "", text, bytes, loading: false }
+                  : prev,
+              );
+              break;
+            }
             const mime =
-              (kind === "video"
-                ? videoMimeType(msg.name)
-                : kind === "audio"
-                  ? audioMimeType(msg.name)
-                  : imageMimeType(msg.name)) ?? "application/octet-stream";
-            // A blob: URL renders large images/video far faster than a giant
-            // data: URL and lets <video> seek; revoked in the effect below.
+              kind === "pdf"
+                ? "application/pdf"
+                : (kind === "video"
+                    ? videoMimeType(msg.name)
+                    : kind === "audio"
+                      ? audioMimeType(msg.name)
+                      : imageMimeType(msg.name)) ?? "application/octet-stream";
+            // A blob: URL renders large images/video/PDFs far faster than a
+            // giant data: URL and lets <video> seek; revoked in the effect below.
             const src = URL.createObjectURL(new Blob([bytes], { type: mime }));
             setPreview((prev) =>
               prev && prev.path === msg.path
@@ -1386,7 +1399,7 @@ export function SshSession({
                 setPreview({
                   path,
                   name,
-                  kind: previewKind(name) ?? "image",
+                  kind: filePreviewKind(name) ?? "image",
                   src: "",
                   loading: true,
                   placeholder: thumbnails[path],
@@ -1417,6 +1430,7 @@ export function SshSession({
                 kind={preview.kind}
                 loading={preview.loading}
                 placeholder={preview.placeholder}
+                text={preview.text}
                 onDownload={() =>
                   // Media previews already hold the bytes; the download-only
                   // fallback fetches on demand (streamed, with a progress bar).

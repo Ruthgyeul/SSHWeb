@@ -2,12 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  filePreviewKind,
   filterEntries,
   formatMode,
   formatSize,
   isProbablyAudioFile,
   isProbablyImageFile,
-  isProbablyPreviewableFile,
   isProbablyTextFile,
   isProbablyVideoFile,
   isThumbnailable,
@@ -347,7 +347,7 @@ export function FileBrowser({
   // Open a search hit by type, mirroring the listing's click-to-open behaviour.
   const openResult = (r: FindEntry) => {
     if (r.type === "dir") onNavigate(r.path);
-    else if (isProbablyPreviewableFile(r.name)) onPreview(r.path, r.name);
+    else if (filePreviewKind(r.name) !== null) onPreview(r.path, r.name);
     else if (isProbablyTextFile(r.name)) onEdit(r.path, r.name, r.size);
     else onOpenUnsupported(r.path, r.name);
   };
@@ -1024,7 +1024,7 @@ export function FileBrowser({
               const isDir = entry.type === "dir";
               const target = pathFor(entry.name);
               const editable = !isDir && isProbablyTextFile(entry.name);
-              const previewable = !isDir && isProbablyPreviewableFile(entry.name);
+              const previewable = !isDir && filePreviewKind(entry.name) !== null;
               // Click opens by type — always *viewing* the file, never
               // downloading it (download is only the explicit ↓ button): dir →
               // navigate, image/video/audio → preview, text → editor, anything
@@ -1177,7 +1177,7 @@ export function FileBrowser({
               const isDir = entry.type === "dir";
               const target = pathFor(entry.name);
               const editable = !isDir && isProbablyTextFile(entry.name);
-              const previewable = !isDir && isProbablyPreviewableFile(entry.name);
+              const previewable = !isDir && filePreviewKind(entry.name) !== null;
               // Click opens by type — always *viewing* the file, never
               // downloading it (download is only the explicit ↓ button): dir →
               // navigate, image/video/audio → preview, text → editor, anything

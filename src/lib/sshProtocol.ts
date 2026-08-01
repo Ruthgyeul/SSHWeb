@@ -852,6 +852,38 @@ export function isProbablyPreviewableFile(name: string): boolean {
   return previewKind(name) !== null;
 }
 
+/** Heuristic: is this a PDF (previewable inline via the browser's viewer)? */
+export function isProbablyPdfFile(name: string): boolean {
+  return /\.pdf$/i.test(name);
+}
+
+/** Markdown extensions we render to HTML in the preview modal. */
+const MARKDOWN_EXTENSIONS = new Set(["md", "markdown", "mdown", "mkd", "mkdn"]);
+
+/** Heuristic: is this a Markdown document (previewable as rendered HTML)? */
+export function isProbablyMarkdownFile(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return false;
+  return MARKDOWN_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
+}
+
+/** Everything the preview modal can render inline (media + PDF + Markdown). */
+export type PreviewContentKind = PreviewKind | "pdf" | "markdown";
+
+/**
+ * The preview surface for a filename, or `null` when it can't be previewed
+ * inline. Media (image/video/audio) win first, then PDF, then Markdown. A
+ * Markdown file is still editable text too (so it shows both a preview and an
+ * edit affordance); PDFs are not.
+ */
+export function filePreviewKind(name: string): PreviewContentKind | null {
+  const media = previewKind(name);
+  if (media) return media;
+  if (isProbablyPdfFile(name)) return "pdf";
+  if (isProbablyMarkdownFile(name)) return "markdown";
+  return null;
+}
+
 /**
  * Heuristic: is this filename a binary format we should download rather than try
  * to open as text? Matches by extension (case-insensitive); an extensionless
