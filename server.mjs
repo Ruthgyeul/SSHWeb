@@ -251,6 +251,18 @@ let totalConnections = 0; // SSH sessions that reached "ready"
 let rejectedConnections = 0; // connection attempts refused (any reason)
 let bytesUp = 0; // bytes relayed browser → remote (shell input + uploads)
 let bytesDown = 0; // bytes relayed remote → browser (shell output + downloads)
+// SFTP transfer counters (a subset of bytesUp/bytesDown): file-browser uploads
+// and streamed downloads only, so the health probe can report data-plane volume
+// distinct from interactive shell traffic.
+let sftpFilesUp = 0; // chunked uploads that completed
+let sftpBytesUp = 0; // bytes written by chunked uploads
+let sftpFilesDown = 0; // streamed downloads that completed
+let sftpBytesDown = 0; // bytes read by streamed downloads
+// Grid-thumbnail counters: WebP tiles actually served vs. skipped (missing
+// sharp/ffmpeg, over-cap, or undecodable), and the total thumbnail bytes sent.
+let thumbsServed = 0;
+let thumbsSkipped = 0;
+let thumbBytesOut = 0;
 // Set once a graceful shutdown starts, so new upgrades are refused.
 let shuttingDown = false;
 
@@ -491,6 +503,20 @@ const server = createServer((req, res) => {
       rejectedConnections,
       bytesUp,
       bytesDown,
+      // SFTP data-plane volume (a subset of bytesUp/bytesDown), so ops can see
+      // file-transfer throughput apart from interactive shell traffic.
+      sftp: {
+        filesUp: sftpFilesUp,
+        bytesUp: sftpBytesUp,
+        filesDown: sftpFilesDown,
+        bytesDown: sftpBytesDown,
+      },
+      // Grid-thumbnail pipeline: WebP tiles served vs. skipped and bytes sent.
+      thumbnails: {
+        served: thumbsServed,
+        skipped: thumbsSkipped,
+        bytesOut: thumbBytesOut,
+      },
       uptime: Math.floor(process.uptime()),
     });
     return;
@@ -1439,10 +1465,12 @@ wss.on("connection", (ws, req) => {
     }
     entry.written += buffer.length;
     bytesUp += buffer.length;
+    sftpBytesUp += buffer.length;
     entry.stream.write(buffer);
     if (isFinal) {
       entry.stream.end(() => {
         uploads.delete(path);
+        sftpFilesUp += 1;
         send({ t: "sftp-ok", op: "write", path });
       });
     }
@@ -1902,7 +1930,8 @@ wss.on("connection", (ws, req) => {
             // an empty payload — so the client can drop the tile back to its icon
             // and, crucially, advance its bounded request queue (no dead slot).
             if (msg.thumb === true) {
-              const skipThumb = () =>
+              const skipThumb = () => {
+                thumbsSkipped += 1;
                 send({
                   t: "sftp-read",
                   path: msg.path,
@@ -1910,6 +1939,20 @@ wss.on("connection", (ws, req) => {
                   dataB64: "",
                   thumb: true,
                 });
+              };
+              // Send a produced WebP tile, metering it for the health probe.
+              const sendThumb = (out) => {
+                thumbsServed += 1;
+                thumbBytesOut += out.length;
+                send({
+                  t: "sftp-read",
+                  path: msg.path,
+                  name,
+                  dataB64: out.toString("base64"),
+                  thumb: true,
+                  mime: "image/webp",
+                });
+              };
               // Downscale any decodable image bytes (a photo, or an ffmpeg poster
               // frame) to a small WebP; returns null if sharp can't decode them.
               const toWebpThumb = async (bytes, rotate) => {
@@ -1936,32 +1979,14 @@ wss.on("connection", (ws, req) => {
                 if (err) return skipThumb();
                 // Image: decode + downscale straight to WebP.
                 const imageThumb = await toWebpThumb(buffer, true);
-                if (imageThumb) {
-                  return send({
-                    t: "sftp-read",
-                    path: msg.path,
-                    name,
-                    dataB64: imageThumb.toString("base64"),
-                    thumb: true,
-                    mime: "image/webp",
-                  });
-                }
+                if (imageThumb) return sendThumb(imageThumb);
                 // Not a sharp-decodable image (video, or corrupt): extract a poster
                 // frame with ffmpeg and downscale that to WebP too.
                 if (ffmpegAvailable) {
                   const frame = await extractVideoFrame(buffer);
                   if (frame) {
                     const videoThumb = await toWebpThumb(frame, false);
-                    if (videoThumb) {
-                      return send({
-                        t: "sftp-read",
-                        path: msg.path,
-                        name,
-                        dataB64: videoThumb.toString("base64"),
-                        thumb: true,
-                        mime: "image/webp",
-                      });
-                    }
+                    if (videoThumb) return sendThumb(videoThumb);
                   }
                 }
                 // Couldn't produce a WebP thumbnail — keep the icon rather than
@@ -2009,6 +2034,7 @@ wss.on("connection", (ws, req) => {
             });
             stream.on("data", (chunk) => {
               bytesDown += chunk.length;
+              sftpBytesDown += chunk.length;
               send({
                 t: "sftp-download-chunk",
                 path: msg.path,
@@ -2033,6 +2059,7 @@ wss.on("connection", (ws, req) => {
             });
             stream.on("end", () => {
               downloads.delete(stream);
+              sftpFilesDown += 1;
               send({ t: "sftp-download-end", path: msg.path });
             });
           }),
