@@ -22,11 +22,19 @@ import type { TerminalPrefs } from "./useTerminalPrefs";
 export function TerminalSettings({
   prefs,
   onChange,
+  onClearThumbnailCache,
+  thumbnailCacheElevated = false,
 }: {
   prefs: TerminalPrefs;
   onChange: (patch: Partial<TerminalPrefs>) => void;
+  /** Wipe the persistent grid-thumbnail cache (IndexedDB + in-memory). */
+  onClearThumbnailCache?: () => void | Promise<void>;
+  /** Whether the session is currently elevated (sudo). Elevated thumbnails are
+   * never persisted, so the clear-cache action only makes sense off `sudo`. */
+  thumbnailCacheElevated?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [cacheCleared, setCacheCleared] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Trusted host keys (TOFU store), read from localStorage when the popover
@@ -38,12 +46,18 @@ export function TerminalSettings({
     const next = !open;
     setOpen(next);
     if (next) {
+      setCacheCleared(false);
       try {
         setHosts(parseKnownHosts(localStorage.getItem(KNOWN_HOSTS_KEY)));
       } catch {
         setHosts({});
       }
     }
+  };
+
+  const clearCache = async () => {
+    await onClearThumbnailCache?.();
+    setCacheCleared(true);
   };
 
   const forgetHost = (id: string) => {
@@ -178,6 +192,37 @@ export function TerminalSettings({
               </ul>
             )}
           </div>
+
+          {/* Grid thumbnail cache */}
+          {onClearThumbnailCache && (
+            <div className="mt-3 border-t border-term-border pt-3">
+              <span className="mb-1.5 block text-xs font-medium text-term-muted">
+                Grid thumbnail cache
+              </span>
+              {thumbnailCacheElevated ? (
+                <p className="text-xs text-term-faint">
+                  Elevated (sudo) thumbnails are never cached. Drop{" "}
+                  <span className="whitespace-nowrap">sudo</span> to clear the
+                  saved cache.
+                </p>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={clearCache}
+                    className="w-full rounded border border-term-border px-2 py-1 text-xs text-term-dim transition-colors hover:border-term-red hover:text-term-red"
+                  >
+                    Clear thumbnail cache
+                  </button>
+                  <p className="mt-1 text-[10px] text-term-faint">
+                    {cacheCleared
+                      ? "Cleared. Thumbnails will regenerate as you browse."
+                      : "Frees the saved grid thumbnails on this device."}
+                  </p>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
