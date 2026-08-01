@@ -32,7 +32,8 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
       { keys: ["+", "−"], desc: "Zoom an image in / out" },
       { keys: ["0"], desc: "Reset the image view" },
       { keys: ["R"], desc: "Rotate the image 90°" },
-      { keys: ["Esc"], desc: "Close the preview" },
+      { keys: ["Ctrl/⌘", "F"], desc: "Find in a text preview" },
+      { keys: ["Esc"], desc: "Close the find bar / the preview" },
     ],
   },
   {

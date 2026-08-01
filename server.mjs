@@ -2123,7 +2123,21 @@ wss.on("connection", (ws, req) => {
             }
 
             if (statErr) return sendError(statErr.message, "sftp");
-            if (MAX_DOWNLOAD_BYTES > 0 && stats.size > MAX_DOWNLOAD_BYTES) {
+            const isPreview = msg.preview === true;
+            // A capped preview (text head-read) transfers at most `cap` bytes, so
+            // it may peek at a file past the whole-file download cap. Clamp the
+            // client-supplied cap to the download cap so `maxBytes` can never be
+            // abused to stream more than an ordinary download would allow.
+            let cap =
+              isPreview &&
+              typeof msg.maxBytes === "number" &&
+              msg.maxBytes > 0
+                ? msg.maxBytes
+                : 0;
+            if (cap && MAX_DOWNLOAD_BYTES > 0 && cap > MAX_DOWNLOAD_BYTES) {
+              cap = MAX_DOWNLOAD_BYTES;
+            }
+            if (!cap && MAX_DOWNLOAD_BYTES > 0 && stats.size > MAX_DOWNLOAD_BYTES) {
               return sendError(
                 `File too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
                 "sftp",
@@ -2152,14 +2166,18 @@ wss.on("connection", (ws, req) => {
             // blob/text) instead of saving a file. Pause on WebSocket
             // backpressure and resume when it drains, so a big file never
             // balloons the send buffer.
-            const isPreview = msg.preview === true;
-            const stream = s.createReadStream(msg.path);
+            // A capped read only pulls the file's head (`{ start, end }`), so a
+            // huge log previews as text without transferring the whole thing.
+            const truncated = cap > 0 && stats.size > cap;
+            const stream = truncated
+              ? s.createReadStream(msg.path, { start: 0, end: cap - 1 })
+              : s.createReadStream(msg.path);
             downloads.set(msg.path, stream);
             send({
               t: "sftp-download-begin",
               path: msg.path,
               name,
-              size: stats.size,
+              size: truncated ? cap : stats.size,
               preview: isPreview,
             });
             stream.on("data", (chunk) => {
@@ -2197,7 +2215,12 @@ wss.on("connection", (ws, req) => {
             stream.on("end", () => {
               downloads.delete(msg.path);
               sftpFilesDown += 1;
-              send({ t: "sftp-download-end", path: msg.path, preview: isPreview });
+              send({
+                t: "sftp-download-end",
+                path: msg.path,
+                preview: isPreview,
+                truncated,
+              });
             });
           }),
         );

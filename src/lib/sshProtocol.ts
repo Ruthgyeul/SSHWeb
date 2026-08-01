@@ -138,6 +138,11 @@ export type ClientMessage =
       edit?: boolean;
       preview?: boolean;
       thumb?: boolean;
+      // Cap a `preview` stream at this many bytes (a text preview of a huge log
+      // reads only the head instead of the whole file, and bypasses the
+      // whole-file download cap). The reply's `sftp-download-end` carries
+      // `truncated: true` when the file was longer.
+      maxBytes?: number;
     }
   // Write a file. When `offset` is a number the write is chunked (offset 0
   // opens the stream, `final: true` closes it) — this drives upload progress;
@@ -267,7 +272,9 @@ export type ServerMessage =
       preview?: boolean;
     }
   | { t: "sftp-download-chunk"; path: string; dataB64: string; preview?: boolean }
-  | { t: "sftp-download-end"; path: string; preview?: boolean }
+  // `truncated` is set when a capped `preview` read (`maxBytes`) stopped short
+  // of the file's real end, so the modal can flag that it's showing a head slice.
+  | { t: "sftp-download-end"; path: string; preview?: boolean; truncated?: boolean }
   // Reply to `sftp-write-resume`: the destination's current on-disk size, so the
   // client resumes its chunked upload from exactly there (0 = file missing, so
   // the client restarts the upload from the beginning).
@@ -988,6 +995,16 @@ export const EDITOR_WARN_BYTES = 2 * 1024 * 1024;
 export function isLargeForEditor(size: number): boolean {
   return size > EDITOR_WARN_BYTES;
 }
+
+/**
+ * Byte cap for a read-only *text* preview stream. A huge log or data file is
+ * previewed by reading only its head (the bridge caps the stream at this via the
+ * `maxBytes` field on `sftp-read`), so the modal opens fast and stays responsive
+ * — and, because the read is bounded, a file past the whole-file download cap
+ * can still be peeked at. The modal flags the view as truncated and offers the
+ * full download. Mirrored in `server.mjs`.
+ */
+export const TEXT_PREVIEW_MAX_BYTES = 4 * 1024 * 1024;
 
 /** What kind of media the preview modal should render for a file. */
 export type PreviewKind = "image" | "video" | "audio";
