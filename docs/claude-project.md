@@ -146,15 +146,17 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   don't widen it for this feature. Ops surfaces: `server.mjs` emits structured,
   credential-free event logs (`SSH_LOG=json|off`), serves a metrics-carrying JSON
   health probe at `GET /api/health`, and shuts down gracefully (drains sessions
-  on SIGTERM/SIGINT). Grid thumbnails are downscaled in-memory with `sharp`
+  on SIGTERM/SIGINT). Grid thumbnails are **always** served as a tiny WebP and
+  nothing else: images are downscaled in-memory with `sharp`
   (`THUMBNAIL_PIXELS`, mirrored from `sshProtocol.ts`) before being sent — the
   original file is only read, never modified — and video tiles get a poster
   frame extracted by `ffmpeg` (the clip is piped to ffmpeg on stdin, nothing
-  touches disk) and downscaled the same way, so a folder of videos sends KB per
-  tile instead of whole clips. Both `sharp` and `ffmpeg` are optional (probed at
-  startup): a build without `sharp` falls back to sending full-size images, and
-  one without `ffmpeg` falls back to sending videos whole for the client to
-  poster. The client concurrency-limits thumbnail reads and caches finished
+  touches disk) and downscaled to WebP the same way, so a folder of photos or
+  videos sends KB per tile instead of whole files. A full-size original is
+  **never** sent as a thumbnail: `sharp` is therefore required for thumbnails
+  (and `ffmpeg` for video tiles) — when either is missing, or the bytes can't
+  be decoded, the bridge skips that tile (an empty `thumb` reply → the client
+  keeps its type icon) instead of falling back to the original bytes. The client concurrency-limits thumbnail reads and caches finished
   thumbnails in IndexedDB (`src/lib/thumbnailCache.ts`) so revisiting a folder
   needs no re-fetch; a "Clear thumbnail cache" action in the settings popover
   (non-elevated sessions only) wipes that store on demand.
