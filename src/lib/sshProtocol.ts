@@ -557,6 +557,52 @@ export function filterEntries(entries: FileEntry[], query: string): FileEntry[] 
   return entries.filter((e) => e.name.toLowerCase().includes(needle));
 }
 
+/** One transfer's progress, as the aggregate upload summary reads it. */
+export interface TransferProgress {
+  sent: number;
+  total: number;
+  status?: "uploading" | "interrupted" | "queued";
+}
+
+/** A rolled-up view of several in-flight uploads, for the aggregate bar. */
+export interface UploadSummary {
+  /** How many uploads are in the batch (queued + active). */
+  files: number;
+  /** Bytes sent across the batch. */
+  sent: number;
+  /** Total bytes to move across the batch. */
+  total: number;
+  /** Overall percentage, clamped to 0–100 (100 when there are no bytes to move). */
+  pct: number;
+  /** True when any upload in the batch is paused (interrupted). */
+  interrupted: boolean;
+  /** How many are still waiting behind the concurrency limit. */
+  queued: number;
+}
+
+/**
+ * Roll several in-flight uploads into one summary for the aggregate progress
+ * bar: file count, summed bytes, an overall percentage (100 when there are no
+ * bytes to move), whether any is paused (interrupted), and how many are still
+ * queued behind the concurrency limit. Kept pure so the file browser and its
+ * tests share one rule.
+ */
+export function summarizeUploads(items: TransferProgress[]): UploadSummary {
+  let sent = 0;
+  let total = 0;
+  let queued = 0;
+  let interrupted = false;
+  for (const it of items) {
+    sent += Math.max(0, it.sent);
+    total += Math.max(0, it.total);
+    if (it.status === "queued") queued += 1;
+    if (it.status === "interrupted") interrupted = true;
+  }
+  const pct =
+    total > 0 ? Math.min(100, Math.max(0, Math.round((sent / total) * 100))) : 100;
+  return { files: items.length, sent, total, pct, interrupted, queued };
+}
+
 /**
  * Join a POSIX directory path with a child segment, collapsing `.`/`..` and
  * duplicate slashes. Used to navigate the remote filesystem safely on the
