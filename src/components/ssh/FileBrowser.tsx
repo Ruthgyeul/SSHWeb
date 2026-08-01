@@ -299,7 +299,14 @@ export function FileBrowser({
   onMove: (fromPath: string, toDir: string) => void;
   onChmod: (entry: FileEntry) => void;
   onEdit: (path: string, name: string, size: number) => void;
-  onPreview: (path: string, name: string) => void;
+  /** Open the preview modal. `siblings` (in display order) is the set of other
+   * previewable files in the same view, so the modal can step ←/→ through them
+   * like a gallery; omitted for one-off opens (e.g. a search hit). */
+  onPreview: (
+    path: string,
+    name: string,
+    siblings?: { path: string; name: string }[],
+  ) => void;
   /** Open a file the browser can't render inline — a download-only modal (no
    * auto-download; the user chooses to download from there). */
   onOpenUnsupported: (path: string, name: string) => void;
@@ -358,6 +365,15 @@ export function FileBrowser({
   // kept against the full listing (below) so filtering never drops checks.
   const visible = filterEntries(sorted, filter);
   const filtering = filter.trim() !== "";
+  // Previewable files among the visible rows, in display order — handed to the
+  // preview modal so ←/→ can step through them like a photo gallery. (The React
+  // Compiler memoizes this; no manual useMemo needed.)
+  const previewSiblings = visible
+    .filter((e) => e.type !== "dir" && filePreviewKind(e.name) !== null)
+    .map((e) => ({
+      path: `${cwd.replace(/\/$/, "")}/${e.name}`,
+      name: e.name,
+    }));
   const atRoot = cwd === "/";
   const segments = pathSegments(cwd);
   const pathFor = (name: string) => `${cwd.replace(/\/$/, "")}/${name}`;
@@ -1205,7 +1221,7 @@ export function FileBrowser({
               // else → a download-only modal (the browser can't render it).
               const open = () => {
                 if (isDir) onNavigate(target);
-                else if (previewable) onPreview(target, entry.name);
+                else if (previewable) onPreview(target, entry.name, previewSiblings);
                 else if (editable) onEdit(target, entry.name, entry.size);
                 else onOpenUnsupported(target, entry.name);
               };
@@ -1279,7 +1295,7 @@ export function FileBrowser({
                     {previewable && (
                       <button
                         type="button"
-                        onClick={() => onPreview(target, entry.name)}
+                        onClick={() => onPreview(target, entry.name, previewSiblings)}
                         className={cn(actionBtn, "hover:text-term-accent")}
                         title="Preview"
                       >
@@ -1358,7 +1374,7 @@ export function FileBrowser({
               // else → a download-only modal (the browser can't render it).
               const open = () => {
                 if (isDir) onNavigate(target);
-                else if (previewable) onPreview(target, entry.name);
+                else if (previewable) onPreview(target, entry.name, previewSiblings);
                 else if (editable) onEdit(target, entry.name, entry.size);
                 else onOpenUnsupported(target, entry.name);
               };
@@ -1444,7 +1460,7 @@ export function FileBrowser({
                       {previewable && (
                         <button
                           type="button"
-                          onClick={() => onPreview(target, entry.name)}
+                          onClick={() => onPreview(target, entry.name, previewSiblings)}
                           className={cn(actionBtn, "hover:text-term-accent")}
                           title="Preview"
                         >

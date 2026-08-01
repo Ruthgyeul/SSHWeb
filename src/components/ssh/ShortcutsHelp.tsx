@@ -26,6 +26,16 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
     ],
   },
   {
+    title: "Preview",
+    items: [
+      { keys: ["←", "→"], desc: "Previous / next file (gallery)" },
+      { keys: ["+", "−"], desc: "Zoom an image in / out" },
+      { keys: ["0"], desc: "Reset the image view" },
+      { keys: ["R"], desc: "Rotate the image 90°" },
+      { keys: ["Esc"], desc: "Close the preview" },
+    ],
+  },
+  {
     title: "Editor",
     items: [
       { keys: ["Ctrl/⌘", "S"], desc: "Save the file" },
