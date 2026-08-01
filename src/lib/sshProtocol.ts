@@ -759,6 +759,20 @@ export function audioMimeType(name: string): string | null {
   return AUDIO_MIME[ext] ?? null;
 }
 
+/**
+ * Size (bytes) above which the inline editor warns before opening a file. A very
+ * large file in a `<textarea>` with live syntax highlighting can be sluggish, so
+ * the browser asks for confirmation first. This is only a heads-up — the hard
+ * ceiling is the bridge's download cap (`SSH_MAX_DOWNLOAD_MB`), which rejects an
+ * over-cap edit read outright.
+ */
+export const EDITOR_WARN_BYTES = 2 * 1024 * 1024;
+
+/** Whether opening `size` bytes in the inline editor warrants a slowness warning. */
+export function isLargeForEditor(size: number): boolean {
+  return size > EDITOR_WARN_BYTES;
+}
+
 /** What kind of media the preview modal should render for a file. */
 export type PreviewKind = "image" | "video" | "audio";
 

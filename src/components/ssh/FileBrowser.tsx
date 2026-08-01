@@ -257,7 +257,7 @@ export function FileBrowser({
   onTouch: () => void;
   onRename: (entry: FileEntry) => void;
   onChmod: (entry: FileEntry) => void;
-  onEdit: (path: string, name: string) => void;
+  onEdit: (path: string, name: string, size: number) => void;
   onPreview: (path: string, name: string) => void;
   /** Open a file the browser can't render inline — a download-only modal (no
    * auto-download; the user chooses to download from there). */
@@ -815,7 +815,7 @@ export function FileBrowser({
               const open = () => {
                 if (isDir) onNavigate(target);
                 else if (previewable) onPreview(target, entry.name);
-                else if (editable) onEdit(target, entry.name);
+                else if (editable) onEdit(target, entry.name, entry.size);
                 else onOpenUnsupported(target, entry.name);
               };
               return (
@@ -884,7 +884,7 @@ export function FileBrowser({
                     {editable && (
                       <button
                         type="button"
-                        onClick={() => onEdit(target, entry.name)}
+                        onClick={() => onEdit(target, entry.name, entry.size)}
                         className={cn(actionBtn, "hover:text-term-accent")}
                         title="Edit"
                       >
@@ -946,7 +946,7 @@ export function FileBrowser({
               const open = () => {
                 if (isDir) onNavigate(target);
                 else if (previewable) onPreview(target, entry.name);
-                else if (editable) onEdit(target, entry.name);
+                else if (editable) onEdit(target, entry.name, entry.size);
                 else onOpenUnsupported(target, entry.name);
               };
               return (
@@ -1027,7 +1027,7 @@ export function FileBrowser({
                       {editable && (
                         <button
                           type="button"
-                          onClick={() => onEdit(target, entry.name)}
+                          onClick={() => onEdit(target, entry.name, entry.size)}
                           className={cn(actionBtn, "hover:text-term-accent")}
                           title="Edit"
                         >

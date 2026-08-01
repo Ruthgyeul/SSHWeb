@@ -33,6 +33,8 @@ import {
   sortEntries,
   sortEntriesBy,
   DEFAULT_SORT_DIR,
+  isLargeForEditor,
+  EDITOR_WARN_BYTES,
   validateConnectInput,
   validateForward,
   type FileEntry,
@@ -324,6 +326,14 @@ describe("image detection", () => {
     expect(imageMimeType("a.svg")).toBe("image/svg+xml");
     expect(imageMimeType("a.txt")).toBeNull();
     expect(imageMimeType("noext")).toBeNull();
+  });
+});
+
+describe("isLargeForEditor", () => {
+  it("flags files strictly larger than the warn threshold", () => {
+    expect(isLargeForEditor(0)).toBe(false);
+    expect(isLargeForEditor(EDITOR_WARN_BYTES)).toBe(false);
+    expect(isLargeForEditor(EDITOR_WARN_BYTES + 1)).toBe(true);
   });
 });
 
