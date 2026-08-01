@@ -14,13 +14,15 @@ import {
   parentPath,
   pathSegments,
   previewKind,
-  sortEntries,
+  sortEntriesBy,
   type FileEntry,
   type PreviewKind,
+  type SortKey,
 } from "@/lib/sshProtocol";
 import { cn } from "@/lib/utils";
 import { collectDroppedFiles, droppedEntries } from "./dropUpload";
 import { useFileViewMode } from "./useFileViewMode";
+import { useFileSort } from "./useFileSort";
 
 /** One in-flight upload's progress, shown in the progress panel. */
 export interface UploadItem {
@@ -41,6 +43,69 @@ const actionBtn =
 
 /** Shared empty set for a listing with no active selection (stable identity). */
 const EMPTY_NAMES: ReadonlySet<string> = new Set();
+
+/** Short human-readable modified date for a listing row (blank for unknown). */
+function formatMtime(mtime: number): string {
+  if (!mtime) return "—";
+  const d = new Date(mtime);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+/** Grid-view sort options, in the order they appear in the sort menu. */
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: "name", label: "Name" },
+  { key: "size", label: "Size" },
+  { key: "mtime", label: "Modified" },
+];
+
+/** A clickable list-view column header that sorts on `col` (▲/▼ when active). */
+function SortHeader({
+  label,
+  col,
+  activeKey,
+  dir,
+  onSort,
+  align = "left",
+  className,
+}: {
+  label: string;
+  col: SortKey;
+  activeKey: SortKey;
+  dir: "asc" | "desc";
+  onSort: (key: SortKey) => void;
+  align?: "left" | "right";
+  className?: string;
+}) {
+  const active = activeKey === col;
+  return (
+    <th
+      className={cn(
+        "px-2 py-1.5 font-medium",
+        align === "right" ? "text-right" : "text-left",
+        className,
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(col)}
+        aria-label={`Sort by ${label.toLowerCase()}`}
+        aria-pressed={active}
+        className={cn(
+          "inline-flex items-center gap-1 transition-colors hover:text-term-text",
+          active ? "text-term-accent" : "text-term-muted",
+        )}
+      >
+        <span>{label}</span>
+        {active && <span aria-hidden>{dir === "asc" ? "▲" : "▼"}</span>}
+      </button>
+    </th>
+  );
+}
 
 /** The emoji stand-in for an entry, by type (shared by both list and grid). */
 function fileIcon(entry: FileEntry): string {
@@ -208,6 +273,9 @@ export function FileBrowser({
   const [dragging, setDragging] = useState(false);
   // List vs. grid (thumbnail) layout, persisted across sessions/tabs.
   const [viewMode, setViewMode] = useFileViewMode();
+  // Sort field + direction, persisted across sessions/tabs. `toggleSort` flips
+  // direction on the active field or switches field at its natural default.
+  const [sort, toggleSort] = useFileSort();
 
   // `webkitdirectory` isn't a typed React attribute; set it on the folder input
   // imperatively so clicking "↑ folder" opens a directory picker.
@@ -228,7 +296,8 @@ export function FileBrowser({
   const filter = filterState.cwd === cwd ? filterState.value : "";
   const setFilter = (value: string) => setFilterState({ cwd, value });
 
-  const sorted = sortEntries(entries);
+  const sorted = sortEntriesBy(entries, sort.key, sort.dir);
+  const sortArrow = sort.dir === "asc" ? "▲" : "▼";
   // The rows actually shown: `sorted` narrowed by the filter box. Selection is
   // kept against the full listing (below) so filtering never drops checks.
   const visible = filterEntries(sorted, filter);
@@ -382,6 +451,40 @@ export function FileBrowser({
             ▦
           </button>
         </div>
+        {/* Sort control — grid view has no column headers to click, so it gets a
+            compact segmented sort selector here (the list view uses its
+            clickable table headers instead). */}
+        {viewMode === "grid" && (
+          <div
+            className="flex overflow-hidden rounded border border-term-border"
+            role="group"
+            aria-label="Sort by"
+          >
+            {SORT_OPTIONS.map((opt, i) => (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => toggleSort(opt.key)}
+                aria-pressed={sort.key === opt.key}
+                className={cn(
+                  "px-2 py-1 text-xs transition-colors",
+                  i > 0 && "border-l border-term-border",
+                  sort.key === opt.key
+                    ? "bg-term-accent/15 text-term-accent"
+                    : "text-term-muted hover:text-term-text",
+                )}
+                title={`Sort by ${opt.label.toLowerCase()}`}
+              >
+                {opt.label}
+                {sort.key === opt.key && (
+                  <span className="ml-1" aria-hidden>
+                    {sortArrow}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
         {canElevate && (
           <button
             type="button"
@@ -665,6 +768,40 @@ export function FileBrowser({
         )}
         {viewMode === "list" && (
         <table className="w-full border-collapse text-sm">
+          <thead>
+            <tr className="border-b border-term-border text-xs">
+              <th className="w-8" aria-hidden />
+              <SortHeader
+                label="Name"
+                col="name"
+                activeKey={sort.key}
+                dir={sort.dir}
+                onSort={toggleSort}
+                className="pl-1"
+              />
+              <SortHeader
+                label="Size"
+                col="size"
+                activeKey={sort.key}
+                dir={sort.dir}
+                onSort={toggleSort}
+                align="right"
+                className="hidden whitespace-nowrap sm:table-cell"
+              />
+              <th className="hidden px-2 py-1.5 text-left font-medium text-term-muted md:table-cell">
+                Perms
+              </th>
+              <SortHeader
+                label="Modified"
+                col="mtime"
+                activeKey={sort.key}
+                dir={sort.dir}
+                onSort={toggleSort}
+                className="hidden whitespace-nowrap lg:table-cell"
+              />
+              <th className="py-1.5 pl-2 pr-3" aria-hidden />
+            </tr>
+          </thead>
           <tbody>
             {visible.map((entry) => {
               const isDir = entry.type === "dir";
@@ -718,6 +855,9 @@ export function FileBrowser({
                   </td>
                   <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint md:table-cell">
                     {formatMode(entry.mode, entry.type)}
+                  </td>
+                  <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint lg:table-cell">
+                    {formatMtime(entry.mtime)}
                   </td>
                   <td className="whitespace-nowrap py-1.5 pl-2 pr-3 text-right">
                     {previewable && (
