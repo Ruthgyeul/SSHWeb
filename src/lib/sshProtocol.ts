@@ -121,6 +121,10 @@ export type ClientMessage =
   | { t: "sftp-sudo"; enable: boolean; password?: string }
   | { t: "sftp-rm"; path: string; dir?: boolean }
   | { t: "sftp-rename"; from: string; to: string }
+  // Copy (duplicate) a file or directory to a new path. The bridge streams the
+  // source into the destination (recursively for a directory) — the original is
+  // only read, never modified. Move is done with `sftp-rename` instead.
+  | { t: "sftp-copy"; from: string; to: string }
   | { t: "sftp-chmod"; path: string; mode: number }
   // Download a directory as a (store-only) zip archive.
   | { t: "sftp-download-dir"; path: string }
@@ -532,6 +536,28 @@ export function joinPath(base: string, segment: string): string {
 /** The parent directory of a POSIX path (`/a/b/c` → `/a/b`, `/` → `/`). */
 export function parentPath(path: string): string {
   return joinPath(path, "..") || "/";
+}
+
+/**
+ * Suggest a non-colliding name for a duplicated file, e.g. `report.txt` →
+ * `report copy.txt`, then `report copy 2.txt` if that's taken too. A leading-dot
+ * dotfile (`.bashrc`) is treated as having no extension. Used to pre-fill the
+ * duplicate dialog; the server still enforces its own filesystem rules.
+ */
+export function suggestCopyName(
+  name: string,
+  existing: Iterable<string>,
+): string {
+  const taken = new Set(existing);
+  const dot = name.lastIndexOf(".");
+  const hasExt = dot > 0; // dot at index 0 ⇒ dotfile, not an extension split
+  const base = hasExt ? name.slice(0, dot) : name;
+  const ext = hasExt ? name.slice(dot) : "";
+  const make = (n: number) =>
+    n === 1 ? `${base} copy${ext}` : `${base} copy ${n}${ext}`;
+  let n = 1;
+  while (taken.has(make(n))) n++;
+  return make(n);
 }
 
 /** A clickable breadcrumb segment: its display `name` and the absolute `path`. */

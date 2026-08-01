@@ -35,6 +35,7 @@ import {
   DEFAULT_SORT_DIR,
   isLargeForEditor,
   EDITOR_WARN_BYTES,
+  suggestCopyName,
   validateConnectInput,
   validateForward,
   type FileEntry,
@@ -576,6 +577,23 @@ describe("filterEntries", () => {
 
   it("returns an empty list when nothing matches", () => {
     expect(filterEntries(entries, "nope")).toEqual([]);
+  });
+});
+
+describe("suggestCopyName", () => {
+  it("appends ' copy' before the extension", () => {
+    expect(suggestCopyName("report.txt", [])).toBe("report copy.txt");
+    expect(suggestCopyName("archive.tar.gz", [])).toBe("archive.tar copy.gz");
+  });
+
+  it("handles extensionless names and dotfiles", () => {
+    expect(suggestCopyName("Makefile", [])).toBe("Makefile copy");
+    expect(suggestCopyName(".bashrc", [])).toBe(".bashrc copy");
+  });
+
+  it("increments a counter until the name is free", () => {
+    const existing = ["a.txt", "a copy.txt", "a copy 2.txt"];
+    expect(suggestCopyName("a.txt", existing)).toBe("a copy 3.txt");
   });
 });
 

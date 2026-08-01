@@ -13,9 +13,11 @@ import {
   isThumbnailable,
   joinPath,
   modeToOctal,
+  parentPath,
   parseMessage,
   parseOctalMode,
   previewKind,
+  suggestCopyName,
   videoMimeType,
   type FileEntry,
   type PreviewKind,
@@ -1087,6 +1089,40 @@ export function SshSession({
       },
     });
   };
+  // Duplicate a file/directory in place: pre-fill a non-colliding "… copy" name
+  // and copy on confirm. The server streams the copy (original only read).
+  const onCopy = (entry: FileEntry) => {
+    const suggested = suggestCopyName(
+      entry.name,
+      entries.map((e) => e.name),
+    );
+    setDialog({
+      title: `Duplicate “${entry.name}”`,
+      input: { label: "New name", initialValue: suggested },
+      confirmLabel: "Duplicate",
+      validate: (v) => (v.trim() ? null : "Please enter a name."),
+      onConfirm: (v) => {
+        const next = v.trim();
+        if (next && next !== entry.name) {
+          send({
+            t: "sftp-copy",
+            from: joinPath(cwd, entry.name),
+            to: joinPath(cwd, next),
+          });
+        }
+      },
+    });
+  };
+  // Move (drag-drop onto a folder): rename the item under the target directory.
+  // Guards against no-op and moving a directory into itself or its own subtree.
+  const onMove = (fromPath: string, toDir: string) => {
+    const name = fromPath.split("/").pop() || "";
+    if (!name) return;
+    if (toDir === parentPath(fromPath)) return; // already there
+    if (toDir === fromPath || toDir.startsWith(`${fromPath}/`)) return; // into self
+    const to = joinPath(toDir, name);
+    if (to !== fromPath) send({ t: "sftp-rename", from: fromPath, to });
+  };
   const onChmod = (entry: FileEntry) => {
     setDialog({
       title: `Permissions for “${entry.name}”`,
@@ -1339,6 +1375,8 @@ export function SshSession({
               onMkdir={onMkdir}
               onTouch={onTouch}
               onRename={onRename}
+              onCopy={onCopy}
+              onMove={onMove}
               onChmod={onChmod}
               onEdit={requestEdit}
               onPreview={(path, name) => {
