@@ -445,11 +445,10 @@ export function SshSession({
             // Empty payload = server skipped it (too big / not decodable): keep
             // the generic icon. `requestedThumbsRef` already blocks a re-request.
             if (msg.dataB64) {
-              const mime =
-                msg.mime ??
-                imageMimeType(msg.name) ??
-                videoMimeType(msg.name) ??
-                "application/octet-stream";
+              // The bridge always downscales a thumbnail to WebP (image or video
+              // poster frame) — it never sends a full-size original as a thumb —
+              // so a thumb payload is always `image/webp`.
+              const mime = msg.mime ?? "image/webp";
               const dataUrl = `data:${mime};base64,${msg.dataB64}`;
               setThumbnails((prev) => ({ ...prev, [msg.path]: dataUrl }));
               // Persist so a return visit paints instantly — but never persist a

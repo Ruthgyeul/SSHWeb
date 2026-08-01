@@ -131,9 +131,10 @@ function fileIcon(entry: FileEntry): string {
 
 /**
  * A grid-tile thumbnail: shows the file-type icon until the tile scrolls into
- * view, then lazily requests the media (once) and swaps in the returned `data:`
- * URL — an `<img>` for images, a first-frame `<video>` poster for videos.
- * Non-media / oversized entries just keep showing `fallback`.
+ * view, then lazily requests the media (once) and swaps in the returned WebP
+ * `data:` URL as an `<img>` — the bridge always downscales both photos and
+ * video poster frames to WebP, so a tile is always a small image (a ▶ badge
+ * marks video tiles). Non-media / oversized entries just keep showing `fallback`.
  */
 function Thumbnail({
   path,
@@ -168,26 +169,14 @@ function Thumbnail({
     return () => io.disconnect();
   }, [path, src, thumbnailable, onRequest]);
 
-  // A video whose thumbnail is a server-extracted poster frame arrives as an
-  // image data URL — render it as an <img>. Only a raw-video fallback (no
-  // ffmpeg/sharp on the bridge) is a `data:video/…` URL that needs a <video>.
-  const isVideoData = Boolean(src) && src!.startsWith("data:video");
+  // The bridge always downscales a thumbnail — a photo or a video poster frame —
+  // to a small WebP, so a tile is always an <img> (never a full <video> clip).
   return (
     <div
       ref={ref}
       className="relative flex h-24 w-full items-center justify-center overflow-hidden rounded bg-term-panel/50 text-4xl"
     >
-      {src && isVideoData ? (
-        <video
-          // Media fragment nudges the element to paint a frame (not a blank
-          // poster) once metadata loads; muted + no controls for a still look.
-          src={`${src}#t=0.1`}
-          muted
-          playsInline
-          preload="metadata"
-          className="h-full w-full object-cover"
-        />
-      ) : src ? (
+      {src ? (
         // eslint-disable-next-line @next/next/no-img-element -- remote data: URL
         <img
           src={src}

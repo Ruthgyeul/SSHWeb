@@ -33,23 +33,25 @@ const { Client: SSHClient, utils: sshUtils } = ssh2;
 const { loadEnvConfig } = nextEnv;
 
 // `sharp` downscales grid thumbnails in-memory (originals are never modified) so
-// a directory of hundreds of photos sends KB per tile instead of MB. It's a
-// native module; if it can't load in this environment we degrade gracefully and
-// keep the old behaviour (send the original bytes whole for the client to scale).
+// a directory of hundreds of photos sends KB per tile instead of MB. Every grid
+// thumbnail is served as a tiny WebP and nothing else — so `sharp` is required
+// for thumbnails: if it can't load in this environment we simply don't render
+// grid thumbnails (tiles keep their type icon) rather than ever send a
+// full-size, non-WebP original over the wire.
 let sharp = null;
 try {
   ({ default: sharp } = await import("sharp"));
 } catch {
   console.warn(
-    "[sshweb] sharp unavailable — grid thumbnails will send full-size images.",
+    "[sshweb] sharp unavailable — grid thumbnails disabled (tiles show icons).",
   );
 }
 
 // `ffmpeg` extracts a poster frame from videos so a grid tile shows an actual
-// still (downscaled to a tiny image, like the photo thumbnails) instead of the
+// still (downscaled to a tiny WebP, like the photo thumbnails) instead of the
 // browser having to download the whole clip and paint frame 0. It's an external
-// binary probed once at startup; when it's missing we degrade gracefully and
-// keep the old behaviour (send the whole video for the client to poster).
+// binary probed once at startup; when it's missing video tiles just show their
+// icon (we never send the whole clip as a "thumbnail").
 let ffmpegAvailable = false;
 try {
   await new Promise((resolve) => {
@@ -70,7 +72,7 @@ try {
 }
 if (!ffmpegAvailable) {
   console.warn(
-    "[sshweb] ffmpeg unavailable — video grid thumbnails will send the whole clip.",
+    "[sshweb] ffmpeg unavailable — video grid thumbnails disabled (tiles show icons).",
   );
 }
 
@@ -1886,11 +1888,15 @@ wss.on("connection", (ws, req) => {
             const name = msg.path.split("/").pop() || "download";
 
             // Thumbnails feed the grid view. A grid renders many at once, so this
-            // path is optimised for volume: images are downscaled to a tiny WebP
-            // in-memory (the original is only read, never modified) so what
-            // crosses the wire is KB not MB; videos have a poster frame extracted
-            // by ffmpeg and downscaled the same way. Both fall back to sending the
-            // original bytes whole when their optimiser (sharp/ffmpeg) is absent.
+            // path is optimised for volume: what crosses the wire is ALWAYS a tiny
+            // WebP (never a full-size original), so a folder of hundreds of photos
+            // or videos sends KB per tile instead of MB. Images are decoded and
+            // downscaled to WebP in-memory (the original is only read, never
+            // modified); videos have a poster frame extracted by ffmpeg and
+            // downscaled to WebP the same way. WebP needs `sharp` (and, for a
+            // video, `ffmpeg`): if either is missing or the bytes can't be decoded
+            // we skip the tile (empty payload → client keeps its icon) rather than
+            // ever falling back to a non-WebP or full-size original.
             //
             // A `thumb` request ALWAYS gets a reply — even a skip or error sends
             // an empty payload — so the client can drop the tile back to its icon
@@ -1904,80 +1910,63 @@ wss.on("connection", (ws, req) => {
                   dataB64: "",
                   thumb: true,
                 });
-              if (statErr || stats.size > THUMBNAIL_VIDEO_MAX_BYTES) {
+              // Downscale any decodable image bytes (a photo, or an ffmpeg poster
+              // frame) to a small WebP; returns null if sharp can't decode them.
+              const toWebpThumb = async (bytes, rotate) => {
+                try {
+                  let pipe = sharp(bytes);
+                  if (rotate) pipe = pipe.rotate(); // honour EXIF orientation
+                  const out = await pipe
+                    .resize(THUMBNAIL_PIXELS, THUMBNAIL_PIXELS, {
+                      fit: "inside",
+                      withoutEnlargement: true,
+                    })
+                    .webp({ quality: 70 })
+                    .toBuffer();
+                  return out;
+                } catch {
+                  return null;
+                }
+              };
+              // No sharp = no WebP = no thumbnails at all (icons only).
+              if (statErr || stats.size > THUMBNAIL_VIDEO_MAX_BYTES || !sharp) {
                 return skipThumb();
               }
               s.readFile(msg.path, async (err, buffer) => {
                 if (err) return skipThumb();
-                if (sharp) {
-                  try {
-                    // sharp throws on non-image input (e.g. video); fall through
-                    // to the video path for those. `.rotate()` honours EXIF.
-                    const out = await sharp(buffer)
-                      .rotate()
-                      .resize(THUMBNAIL_PIXELS, THUMBNAIL_PIXELS, {
-                        fit: "inside",
-                        withoutEnlargement: true,
-                      })
-                      .webp({ quality: 70 })
-                      .toBuffer();
-                    return send({
-                      t: "sftp-read",
-                      path: msg.path,
-                      name,
-                      dataB64: out.toString("base64"),
-                      thumb: true,
-                      mime: "image/webp",
-                    });
-                  } catch {
-                    // Not a sharp-decodable image (video, or corrupt) — try ffmpeg.
-                  }
+                // Image: decode + downscale straight to WebP.
+                const imageThumb = await toWebpThumb(buffer, true);
+                if (imageThumb) {
+                  return send({
+                    t: "sftp-read",
+                    path: msg.path,
+                    name,
+                    dataB64: imageThumb.toString("base64"),
+                    thumb: true,
+                    mime: "image/webp",
+                  });
                 }
-                // Video: extract a poster frame and (if sharp is around) re-encode
-                // it to a tiny WebP; otherwise send the ffmpeg PNG frame as-is.
+                // Not a sharp-decodable image (video, or corrupt): extract a poster
+                // frame with ffmpeg and downscale that to WebP too.
                 if (ffmpegAvailable) {
                   const frame = await extractVideoFrame(buffer);
                   if (frame) {
-                    if (sharp) {
-                      try {
-                        const out = await sharp(frame)
-                          .resize(THUMBNAIL_PIXELS, THUMBNAIL_PIXELS, {
-                            fit: "inside",
-                            withoutEnlargement: true,
-                          })
-                          .webp({ quality: 70 })
-                          .toBuffer();
-                        return send({
-                          t: "sftp-read",
-                          path: msg.path,
-                          name,
-                          dataB64: out.toString("base64"),
-                          thumb: true,
-                          mime: "image/webp",
-                        });
-                      } catch {
-                        // sharp couldn't re-encode the frame — send the PNG below.
-                      }
+                    const videoThumb = await toWebpThumb(frame, false);
+                    if (videoThumb) {
+                      return send({
+                        t: "sftp-read",
+                        path: msg.path,
+                        name,
+                        dataB64: videoThumb.toString("base64"),
+                        thumb: true,
+                        mime: "image/webp",
+                      });
                     }
-                    return send({
-                      t: "sftp-read",
-                      path: msg.path,
-                      name,
-                      dataB64: frame.toString("base64"),
-                      thumb: true,
-                      mime: "image/png",
-                    });
                   }
                 }
-                // No optimiser managed it — send the original bytes whole and let
-                // the client render them (an <img>/<video> from the raw file).
-                send({
-                  t: "sftp-read",
-                  path: msg.path,
-                  name,
-                  dataB64: buffer.toString("base64"),
-                  thumb: true,
-                });
+                // Couldn't produce a WebP thumbnail — keep the icon rather than
+                // send the original bytes whole.
+                return skipThumb();
               });
               return;
             }
