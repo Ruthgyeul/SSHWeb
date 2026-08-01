@@ -36,6 +36,7 @@ import {
   serializeKnownHosts,
   type KnownHostMap,
 } from "@/lib/knownHosts";
+import { resumeUploadStart } from "@/lib/serverSecurity";
 import { SITE_NAME, SSH_WS_PATH } from "@/config/siteConfig";
 import { base64ToBytes, bytesToBase64, concatBytes } from "@/lib/bytes";
 import { cn } from "@/lib/utils";
@@ -224,6 +225,31 @@ export function SshSession({
   // Text captured at save time per path, so `sftp-ok` can reconcile the editor's
   // saved content (marking that file clean) without a re-read.
   const editorSaveTextRef = useRef<Record<string, string>>({});
+  // In-flight chunked uploads, keyed by remote path. Holds the source File and
+  // enough state to cancel or resume: `sent` tracks bytes acknowledged as sent,
+  // `cancelled` short-circuits the streaming loop, `running` guards against two
+  // loops (e.g. an auto-resume racing a manual one) driving the same upload, and
+  // `interrupted` marks an upload paused by a dropped connection (awaiting resume).
+  const uploadCtlRef = useRef<
+    Record<
+      string,
+      {
+        file: File;
+        rel: string;
+        needsDir: boolean;
+        total: number;
+        sent: number;
+        cancelled: boolean;
+        running: boolean;
+        interrupted: boolean;
+      }
+    >
+  >({});
+  // Lets the (bound-once) ws message handler drive an upload resume once the
+  // bridge reports the partial's size — `runUpload` is defined further down.
+  const runUploadRef = useRef<(path: string, startOffset: number) => void>(
+    () => {},
+  );
 
   // Round-trip latency (ms) to the SSH bridge, sampled while connected.
   const [latency, setLatency] = useState<number | null>(null);
@@ -331,6 +357,14 @@ export function SshSession({
               "\x1b[32m✓ Connected.\x1b[0m Type as you would in any shell.",
             );
             listDir(".");
+            // A reconnect that follows a mid-transfer drop leaves uploads
+            // "interrupted" — kick off a resume for each so a big upload picks
+            // up where the dropped connection left off (see `sftp-write-at`).
+            for (const [path, ctl] of Object.entries(uploadCtlRef.current)) {
+              if (ctl.interrupted && !ctl.running && !ctl.cancelled) {
+                send({ t: "sftp-write-resume", path });
+              }
+            }
           } else if (msg.state === "closed") {
             setStatusMessage(msg.message || "Connection closed.");
           } else if (msg.state === "error") {
@@ -508,7 +542,12 @@ export function SshSession({
           downloadBuffersRef.current[msg.path] = { name: msg.name, chunks: [] };
           setDownloads((d) => ({
             ...d,
-            [msg.path]: { name: msg.name, received: 0, total: msg.size },
+            [msg.path]: {
+              path: msg.path,
+              name: msg.name,
+              received: 0,
+              total: msg.size,
+            },
           }));
           break;
 
@@ -540,8 +579,30 @@ export function SshSession({
           break;
         }
 
+        case "sftp-write-at": {
+          // Resume handshake reply: the bridge told us how much of the partial it
+          // already has. Continue the upload from there (or restart at 0 when the
+          // file is gone); if it's already complete, just drop the row.
+          const ctl = uploadCtlRef.current[msg.path];
+          if (!ctl || ctl.running || ctl.cancelled) break;
+          const { offset, done } = resumeUploadStart(msg.offset, ctl.total);
+          if (done && ctl.total > 0) {
+            delete uploadCtlRef.current[msg.path];
+            setUploads((u) => {
+              const rest = { ...u };
+              delete rest[msg.path];
+              return rest;
+            });
+            listDir(cwdRef.current);
+          } else {
+            runUploadRef.current(msg.path, offset);
+          }
+          break;
+        }
+
         case "sftp-ok":
           if (msg.op === "write") {
+            delete uploadCtlRef.current[msg.path];
             setUploads((u) => {
               const rest = { ...u };
               delete rest[msg.path];
@@ -759,6 +820,7 @@ export function SshSession({
     setConnectedAt(null);
     setUploads({});
     setDownloads({});
+    uploadCtlRef.current = {};
     downloadBuffersRef.current = {};
     setHasLast(false);
     ctrlRef.current = false;
@@ -1014,57 +1076,154 @@ export function SshSession({
       },
     });
   };
-  // Chunked upload with progress: one sftp-write per chunk, throttled by the
-  // socket's buffered amount so a big file doesn't flood the connection. A
-  // `relPath` (folder upload) preserves subdirectories; the opening chunk asks
-  // the server to `mkdir -p` the parents.
-  const uploadFile = async (file: File, dir: string, relPath?: string) => {
-    const rel = relPath && relPath.trim() !== "" ? relPath : file.name;
-    const path = joinPath(dir, rel);
-    const needsDir = rel.includes("/");
-    const total = file.size;
-    const report = (sent: number) =>
-      setUploads((u) => ({ ...u, [path]: { name: rel, sent, total } }));
-    const clearUpload = () =>
-      setUploads((u) => {
-        const rest = { ...u };
+  const clearUploadRow = useCallback((path: string) => {
+    setUploads((u) => {
+      const rest = { ...u };
+      delete rest[path];
+      return rest;
+    });
+  }, []);
+
+  // Stream a chunked upload from `startOffset` to the end, one sftp-write per
+  // chunk, throttled by the socket's buffered amount so a big file doesn't flood
+  // the connection. `startOffset > 0` is a resume: the opening chunk carries
+  // `resume: true` so the bridge reopens the partial in append-at-offset mode
+  // instead of truncating. The loop stops early (marking the upload
+  // "interrupted") if the socket drops, so a resume can pick up from there; it
+  // bails silently if the upload was cancelled meanwhile.
+  const runUpload = useCallback(
+    async (path: string, startOffset: number) => {
+      const ctl = uploadCtlRef.current[path];
+      if (!ctl || ctl.running) return;
+      ctl.running = true;
+      ctl.interrupted = false;
+      const { rel, needsDir, total } = ctl;
+      const report = (sent: number) => {
+        ctl.sent = sent;
+        setUploads((u) => ({
+          ...u,
+          [path]: { path, name: rel, sent, total, status: "uploading" },
+        }));
+      };
+      const markInterrupted = () => {
+        ctl.running = false;
+        ctl.interrupted = true;
+        setUploads((u) =>
+          u[path]
+            ? { ...u, [path]: { ...u[path], status: "interrupted" } }
+            : u,
+        );
+      };
+      report(startOffset);
+      try {
+        const buf = new Uint8Array(await ctl.file.arrayBuffer());
+        let offset = startOffset;
+        let firstChunk = true;
+        // Empty file (or already fully uploaded on resume): still send a final
+        // opening chunk so the bridge closes the stream and acks with sftp-ok.
+        do {
+          if (ctl.cancelled) return;
+          const ws = wsRef.current;
+          if (!ws || ws.readyState !== WebSocket.OPEN) return markInterrupted();
+          const end = Math.min(offset + UPLOAD_CHUNK, total);
+          const opening = firstChunk && offset === startOffset;
+          send({
+            t: "sftp-write",
+            path,
+            dataB64: bytesToBase64(buf.subarray(offset, end)),
+            offset,
+            final: end >= total,
+            // Only the opening chunk carries mkdirp (the bridge opens the write
+            // stream then) and, on a resume, the resume flag.
+            mkdirp: opening && offset === 0 && needsDir ? true : undefined,
+            resume: opening && startOffset > 0 ? true : undefined,
+          });
+          firstChunk = false;
+          offset = end;
+          report(offset);
+          while (
+            wsRef.current &&
+            wsRef.current.readyState === WebSocket.OPEN &&
+            wsRef.current.bufferedAmount > 4 * 1024 * 1024
+          ) {
+            await sleep(25);
+          }
+        } while (offset < total);
+      } catch {
+        // Reading the local file failed — drop the stuck progress row and tell
+        // the user (a server-side reject arrives separately as an sftp error).
+        delete uploadCtlRef.current[path];
+        clearUploadRow(path);
+        notify("error", `Upload failed: ${rel}`);
+      }
+    },
+    [send, notify, clearUploadRow],
+  );
+
+  // Begin a fresh chunked upload. A `relPath` (folder upload) preserves
+  // subdirectories; the opening chunk asks the bridge to `mkdir -p` the parents.
+  const uploadFile = useCallback(
+    (file: File, dir: string, relPath?: string) => {
+      const rel = relPath && relPath.trim() !== "" ? relPath : file.name;
+      const path = joinPath(dir, rel);
+      uploadCtlRef.current[path] = {
+        file,
+        rel,
+        needsDir: rel.includes("/"),
+        total: file.size,
+        sent: 0,
+        cancelled: false,
+        running: false,
+        interrupted: false,
+      };
+      void runUpload(path, 0);
+    },
+    [runUpload],
+  );
+
+  // Cancel an in-flight or interrupted upload: stop the local loop, tell the
+  // bridge to tear down the stream and remove the partial, and drop the row.
+  const cancelUpload = useCallback(
+    (path: string) => {
+      const ctl = uploadCtlRef.current[path];
+      if (ctl) ctl.cancelled = true;
+      delete uploadCtlRef.current[path];
+      send({ t: "sftp-upload-cancel", path });
+      clearUploadRow(path);
+    },
+    [send, clearUploadRow],
+  );
+
+  // Resume an interrupted upload: ask the bridge how much of the partial it
+  // already has; the `sftp-write-at` reply drives the actual continue.
+  const resumeUpload = useCallback(
+    (path: string) => {
+      const ctl = uploadCtlRef.current[path];
+      if (!ctl || ctl.running || ctl.cancelled) return;
+      send({ t: "sftp-write-resume", path });
+    },
+    [send],
+  );
+
+  // Cancel an in-flight download: tell the bridge to stop streaming and discard
+  // whatever we've buffered so far.
+  const cancelDownload = useCallback(
+    (path: string) => {
+      send({ t: "sftp-download-cancel", path });
+      delete downloadBuffersRef.current[path];
+      setDownloads((d) => {
+        const rest = { ...d };
         delete rest[path];
         return rest;
       });
-    report(0);
-    try {
-      const buf = new Uint8Array(await file.arrayBuffer());
-      const ws = wsRef.current;
-      let offset = 0;
-      do {
-        const end = Math.min(offset + UPLOAD_CHUNK, total);
-        send({
-          t: "sftp-write",
-          path,
-          dataB64: bytesToBase64(buf.subarray(offset, end)),
-          offset,
-          final: end >= total,
-          // Only the opening chunk carries the mkdirp request (that's when the
-          // server opens the write stream and can create the parents first).
-          mkdirp: offset === 0 && needsDir ? true : undefined,
-        });
-        offset = end;
-        report(offset);
-        while (
-          ws &&
-          ws.readyState === WebSocket.OPEN &&
-          ws.bufferedAmount > 4 * 1024 * 1024
-        ) {
-          await sleep(25);
-        }
-      } while (offset < total);
-    } catch {
-      // Reading the local file failed — drop the stuck progress row and tell
-      // the user (a server-side reject arrives separately as an sftp error).
-      clearUpload();
-      notify("error", `Upload failed: ${rel}`);
-    }
-  };
+    },
+    [send],
+  );
+  // Keep the ref the ws message handler reads pointed at the latest runUpload,
+  // so the `sftp-write-at` resume reply can drive it despite being bound earlier.
+  useEffect(() => {
+    runUploadRef.current = runUpload;
+  }, [runUpload]);
   const onMkdir = () => {
     setDialog({
       title: "New directory",
@@ -1373,6 +1532,9 @@ export function SshSession({
               loading={filesLoading}
               uploads={Object.values(uploads)}
               downloads={Object.values(downloads)}
+              onCancelUpload={cancelUpload}
+              onResumeUpload={resumeUpload}
+              onCancelDownload={cancelDownload}
               canElevate={canElevate}
               elevated={elevated}
               elevatedPending={elevatedPending}

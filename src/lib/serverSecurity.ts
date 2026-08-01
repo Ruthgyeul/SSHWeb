@@ -172,6 +172,22 @@ export function uploadChunkInOrder(offset: number, written: number): boolean {
   return offset === written;
 }
 
+/**
+ * Where a resumed chunked upload should continue from, given the destination
+ * file's current on-disk size (`remoteSize`, authoritative — reported by the
+ * bridge after a reconnect) and the local file's `total` size. The offset is
+ * clamped into `[0, total]` so a stale/mismatched partial that is somehow larger
+ * than the source can't drive a negative or over-long remaining range; `done` is
+ * true when the remote already holds every byte (nothing left to send).
+ */
+export function resumeUploadStart(
+  remoteSize: number,
+  total: number,
+): { offset: number; done: boolean } {
+  const offset = Math.max(0, Math.min(Math.floor(remoteSize) || 0, total));
+  return { offset, done: offset >= total };
+}
+
 /* ------------------------------------------------------------------ */
 /* Idle-session expiry                                                 */
 /* ------------------------------------------------------------------ */

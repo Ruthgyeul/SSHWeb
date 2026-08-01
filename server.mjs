@@ -906,8 +906,9 @@ wss.on("connection", (ws, req) => {
   let pendingKbdFinish = null; // (responses: string[]) => void
   // In-flight chunked uploads, keyed by remote path → { stream }.
   const uploads = new Map();
-  // In-flight download read streams, so they can be torn down on cleanup.
-  const downloads = new Set();
+  // In-flight download read streams keyed by remote path, so they can be torn
+  // down on cleanup or cancelled individually (`sftp-download-cancel`).
+  const downloads = new Map();
   // Open port-forwards, keyed by client id → { kind, server, sockets:Set, … }.
   const forwards = new Map();
   // Remote (`-R`) forwards, keyed by the SSH server's listen port → routing info,
@@ -990,7 +991,7 @@ wss.on("connection", (ws, req) => {
       }
     }
     uploads.clear();
-    for (const stream of downloads) {
+    for (const stream of downloads.values()) {
       try {
         stream.destroy();
       } catch {
@@ -1476,25 +1477,34 @@ wss.on("connection", (ws, req) => {
     }
   }
 
-  // Open a fresh write stream for `path` and write the first chunk into it.
-  function openUpload(s, path, buffer, isFinal) {
-    const stream = s.createWriteStream(path);
+  // Open a write stream for `path` and write the first chunk into it. `start > 0`
+  // (a resume) reopens an existing partial in read/write mode and writes at that
+  // offset instead of truncating, so an interrupted upload continues where it
+  // left off; `start === 0` is a normal fresh upload (create/truncate).
+  function openUpload(s, path, buffer, isFinal, start = 0) {
+    const stream =
+      start > 0
+        ? s.createWriteStream(path, { flags: "r+", start })
+        : s.createWriteStream(path);
     stream.on("error", (err) => {
       uploads.delete(path);
       sendError(err.message, "sftp");
     });
-    const entry = { stream, written: 0 };
+    const entry = { stream, written: start };
     uploads.set(path, entry);
     appendUploadChunk(entry, path, buffer, isFinal);
   }
 
-  // Drive one chunk of a chunked upload. offset 0 (re)opens the stream —
-  // optionally creating parent directories first (folder uploads); later chunks
-  // must arrive in order or the transfer is aborted to avoid silent corruption.
+  // Drive one chunk of a chunked upload. The opening chunk (re)opens the stream —
+  // at offset 0 for a fresh upload (optionally creating parent directories first
+  // for folder uploads), or at `msg.offset` when `msg.resume` recovers a partial
+  // after a dropped connection; later chunks must arrive in order or the transfer
+  // is aborted to avoid silent corruption.
   function handleChunkedWrite(s, msg, buffer) {
     const path = msg.path;
     const existing = uploads.get(path);
-    if (msg.offset === 0) {
+    const opening = msg.offset === 0 || (msg.resume === true && !existing);
+    if (opening) {
       if (existing) {
         try {
           existing.stream.destroy();
@@ -1503,12 +1513,13 @@ wss.on("connection", (ws, req) => {
         }
         uploads.delete(path);
       }
+      const start = msg.resume === true ? msg.offset : 0;
       if (msg.mkdirp) {
         mkdirp(s, parentDirOf(path), () =>
-          openUpload(s, path, buffer, msg.final === true),
+          openUpload(s, path, buffer, msg.final === true, start),
         );
       } else {
-        openUpload(s, path, buffer, msg.final === true);
+        openUpload(s, path, buffer, msg.final === true, start);
       }
       return;
     }
@@ -2025,7 +2036,7 @@ wss.on("connection", (ws, req) => {
             // Pause on WebSocket backpressure and resume when it drains, so a big
             // file never balloons the send buffer.
             const stream = s.createReadStream(msg.path);
-            downloads.add(stream);
+            downloads.set(msg.path, stream);
             send({
               t: "sftp-download-begin",
               path: msg.path,
@@ -2054,11 +2065,17 @@ wss.on("connection", (ws, req) => {
               }
             });
             stream.on("error", (err) => {
-              downloads.delete(stream);
-              sendError(err.message, "sftp");
+              // A cancel (`sftp-download-cancel`) removes the map entry before
+              // destroying the stream, so a still-present entry here means a
+              // genuine read error (worth a toast); a missing one means we tore
+              // the stream down on purpose and should stay silent.
+              if (downloads.has(msg.path)) {
+                downloads.delete(msg.path);
+                sendError(err.message, "sftp");
+              }
             });
             stream.on("end", () => {
-              downloads.delete(stream);
+              downloads.delete(msg.path);
               sftpFilesDown += 1;
               send({ t: "sftp-download-end", path: msg.path });
             });
@@ -2087,6 +2104,54 @@ wss.on("connection", (ws, req) => {
             });
           }
         });
+        break;
+
+      case "sftp-write-resume":
+        // Report the partial destination's current size so a resumed upload
+        // knows where to continue. A missing file (or any stat error) yields
+        // offset 0, telling the client to restart the upload from the start.
+        withSftp((s) =>
+          s.stat(msg.path, (err, st) => {
+            const offset = err || !st ? 0 : Math.max(0, st.size || 0);
+            send({ t: "sftp-write-at", path: msg.path, offset });
+          }),
+        );
+        break;
+
+      case "sftp-upload-cancel":
+        // Abort an in-flight (or interrupted) upload and remove the partial
+        // destination file so a half-written upload never lingers. The client
+        // has already dropped its progress row.
+        {
+          const entry = uploads.get(msg.path);
+          if (entry) {
+            uploads.delete(msg.path);
+            try {
+              entry.stream.destroy();
+            } catch {
+              /* stream already gone */
+            }
+          }
+          // Best-effort: remove the partial (ignore "no such file").
+          withSftp((s) => s.unlink(msg.path, () => {}));
+        }
+        break;
+
+      case "sftp-download-cancel":
+        // Abort an in-flight streamed download. Remove the map entry first so the
+        // stream's error/close handler stays silent (see the download handler),
+        // then tear the read stream down. The source file is only read.
+        {
+          const stream = downloads.get(msg.path);
+          if (stream) {
+            downloads.delete(msg.path);
+            try {
+              stream.destroy();
+            } catch {
+              /* stream already gone */
+            }
+          }
+        }
         break;
 
       case "sftp-rename":

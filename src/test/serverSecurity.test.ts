@@ -14,6 +14,7 @@ import {
   parseCookieHeader,
   SlidingWindowRateLimiter,
   uploadChunkInOrder,
+  resumeUploadStart,
   uploadExceedsCap,
 } from "@/lib/serverSecurity";
 
@@ -192,6 +193,43 @@ describe("uploadChunkInOrder", () => {
     expect(uploadChunkInOrder(512, 256)).toBe(false); // gap
     expect(uploadChunkInOrder(0, 256)).toBe(false); // duplicate/restart mid-stream
     expect(uploadChunkInOrder(256, 512)).toBe(false); // out of order
+  });
+});
+
+describe("resumeUploadStart", () => {
+  it("continues from the remote partial's size", () => {
+    expect(resumeUploadStart(262144, 1_000_000)).toEqual({
+      offset: 262144,
+      done: false,
+    });
+  });
+
+  it("restarts from 0 when the remote file is missing", () => {
+    expect(resumeUploadStart(0, 1_000_000)).toEqual({
+      offset: 0,
+      done: false,
+    });
+  });
+
+  it("reports done when the remote already holds every byte", () => {
+    expect(resumeUploadStart(500, 500)).toEqual({ offset: 500, done: true });
+  });
+
+  it("clamps a stale partial larger than the source into range", () => {
+    // A mismatched/larger remote file can't drive an over-long remaining range.
+    expect(resumeUploadStart(999, 500)).toEqual({ offset: 500, done: true });
+  });
+
+  it("treats a zero-byte source as immediately done", () => {
+    expect(resumeUploadStart(0, 0)).toEqual({ offset: 0, done: true });
+  });
+
+  it("floors a fractional remote size and never goes negative", () => {
+    expect(resumeUploadStart(100.7, 1000)).toEqual({
+      offset: 100,
+      done: false,
+    });
+    expect(resumeUploadStart(-5, 1000)).toEqual({ offset: 0, done: false });
   });
 });
 
