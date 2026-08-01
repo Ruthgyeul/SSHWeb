@@ -133,6 +133,16 @@ const MAX_PREVIEW_CACHE_BYTES = 48 * 1024 * 1024;
  * `size:mtime` version tag. */
 const PREFETCH_MAX_BYTES = 16 * 1024 * 1024;
 
+/** Server path of the seekable media-stream endpoint (mirrors `server.mjs`). A
+ * `<video>` points here with the session's `streamToken` so playback ranges are
+ * served over HTTP instead of buffering the whole clip into a blob. */
+const PREVIEW_STREAM_PATH = "/api/preview";
+
+/** Build the `/api/preview` URL for a video path with the session's stream token. */
+function videoStreamSrc(token: string, path: string): string {
+  return `${PREVIEW_STREAM_PATH}?token=${encodeURIComponent(token)}&path=${encodeURIComponent(path)}`;
+}
+
 /** The preview surface for a filename by extension: a media/PDF/Markdown kind,
  * a read-only `text` view for anything editable-as-text, or `unsupported`. Used
  * for the modal's loading state before bytes arrive (a cache hit / stream then
@@ -285,6 +295,14 @@ export function SshSession({
   // images streamed ahead of a ←/→ step). Lets the download handlers buffer
   // their bytes without painting the modal; cleared as each stream ends.
   const prefetchPathsRef = useRef<Set<string>>(new Set());
+  // Per-session capability token for the seekable /api/preview media endpoint
+  // (from `caps`), read when building a video preview's `src`. Null when the
+  // deployment didn't mint one — video then falls back to blob streaming.
+  const streamTokenRef = useRef<string | null>(null);
+  // Last playback position (seconds) per video path, so stepping the gallery
+  // away from a clip and back resumes where you left off. In-memory only,
+  // cleared on disconnect.
+  const videoTimesRef = useRef<Map<string, number>>(new Map());
   // Cached grid-view image thumbnails, keyed by remote path → `data:` URL.
   // Populated lazily as tiles scroll into view; cleared on each directory change
   // (below) to bound memory. `requestedThumbsRef` dedupes in-flight requests so
@@ -589,6 +607,7 @@ export function SshSession({
 
         case "caps":
           setCanElevate(msg.sudo);
+          streamTokenRef.current = msg.streamToken ?? null;
           break;
 
         case "sftp-sudo":
@@ -1089,6 +1108,8 @@ export function SshSession({
     previewCacheRef.current.clear();
     previewCacheBytesRef.current = 0;
     prefetchPathsRef.current.clear();
+    streamTokenRef.current = null;
+    videoTimesRef.current.clear();
     setHasLast(false);
     ctrlRef.current = false;
     altRef.current = false;
@@ -1104,6 +1125,26 @@ export function SshSession({
   // modal step ←/→ through the other previewable files in the same view.
   const openPreviewFile = useCallback(
     (path: string, name: string, siblings?: { path: string; name: string }[]) => {
+      // A video with a stream token (non-elevated) plays over the seekable HTTP
+      // endpoint: no whole-file transfer, and the browser can seek instantly.
+      // Elevated sessions keep the blob path (the endpoint reads as the login
+      // user, so it can't reach root-only files).
+      if (
+        !elevatedRef.current &&
+        streamTokenRef.current &&
+        filePreviewKind(name) === "video"
+      ) {
+        setPreview({
+          path,
+          name,
+          kind: "video",
+          src: videoStreamSrc(streamTokenRef.current, path),
+          loading: false,
+          siblings,
+        });
+        prefetchNeighbors(path, siblings);
+        return;
+      }
       const key = previewCacheKeyFor(path);
       const hit = previewCacheRef.current.get(key);
       if (hit) {
@@ -1993,6 +2034,8 @@ export function SshSession({
                 total={preview.total}
                 truncated={preview.truncated}
                 encodingWarning={preview.encodingWarning}
+                getStartTime={() => videoTimesRef.current.get(preview.path) ?? 0}
+                onTime={(t) => videoTimesRef.current.set(preview.path, t)}
                 hasGallery={(preview.siblings?.length ?? 0) > 1}
                 index={preview.siblings?.findIndex((s) => s.path === preview.path)}
                 count={preview.siblings?.length}

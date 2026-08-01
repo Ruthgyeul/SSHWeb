@@ -22,7 +22,7 @@
 import { createServer } from "node:http";
 import net from "node:net";
 import { parse } from "node:url";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { spawn } from "node:child_process";
 import next from "next";
 import nextEnv from "@next/env";
@@ -253,6 +253,43 @@ const ACCESS_TOKEN = process.env.SSH_ACCESS_TOKEN || "";
 // Fixed path for the access-gate probe/exchange endpoint, and the cookie it sets.
 const ACCESS_PATH = "/api/access";
 const ACCESS_COOKIE = "sshweb_access";
+// Fixed path for the seekable media-streaming endpoint. A `<video>` in the
+// preview modal points its `src` here with a per-session capability token, and
+// the browser issues HTTP Range requests so a large clip plays and seeks
+// without downloading the whole file. Same-origin, gated by the access cookie
+// and an unguessable token (see the GET handler and `streamSessions`).
+const PREVIEW_STREAM_PATH = "/api/preview";
+// Cap a single Range response so one request can't be turned into an unbounded
+// pull; the browser just issues more ranges as playback advances.
+const STREAM_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
+// Content types for the streaming endpoint, by lower-case extension. Mirrors the
+// media MIME maps in `src/lib/sshProtocol.ts` (the "two synchronized places"
+// discipline) for the formats a browser can play inline.
+const STREAM_CONTENT_TYPES = {
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  mov: "video/quicktime",
+  webm: "video/webm",
+  ogv: "video/ogg",
+  mkv: "video/x-matroska",
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  wav: "audio/wav",
+  flac: "audio/flac",
+  ogg: "audio/ogg",
+  oga: "audio/ogg",
+  aac: "audio/aac",
+};
+function streamContentType(name) {
+  const dot = name.lastIndexOf(".");
+  const ext = dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+  return STREAM_CONTENT_TYPES[ext] || "application/octet-stream";
+}
+// Active per-session streaming capabilities, keyed by an unguessable token →
+// { withStreamSftp, isClosed }. A session registers on SSH-ready and removes
+// itself on cleanup, so a token only ever reaches that one session's files
+// (which its own authenticated WebSocket can already read).
+const streamSessions = new Map();
 // Allow local port-forwarding (`ssh -L`). Opening a listening TCP socket on the
 // relay host is sensitive, so it's off unless explicitly enabled.
 const ALLOW_FORWARD =
@@ -617,6 +654,91 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // Seekable media stream: `<video src="/api/preview?token=…&path=…">`. Answers
+  // HTTP Range requests from a per-session SFTP read so a large clip plays and
+  // seeks without downloading the whole file. Gated by the access cookie and an
+  // unguessable per-session token; the path can only be one the session's own
+  // WebSocket could already read.
+  if (pathname === PREVIEW_STREAM_PATH) {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.writeHead(405, { Allow: "GET, HEAD" });
+      return res.end();
+    }
+    if (!requestIsAuthorized(req)) {
+      res.writeHead(401);
+      return res.end();
+    }
+    const q = parse(req.url, true).query;
+    const token = typeof q.token === "string" ? q.token : "";
+    const filePath = typeof q.path === "string" ? q.path : "";
+    const entry = token ? streamSessions.get(token) : null;
+    if (!entry || entry.isClosed() || !filePath) {
+      res.writeHead(404);
+      return res.end();
+    }
+    entry.withStreamSftp((err, s) => {
+      if (err || !s) {
+        res.writeHead(502);
+        return res.end();
+      }
+      s.stat(filePath, (statErr, stats) => {
+        if (statErr || !stats || !stats.isFile()) {
+          res.writeHead(404);
+          return res.end();
+        }
+        const size = stats.size;
+        const type = streamContentType(filePath);
+        const rangeHeader = req.headers.range;
+        // Common headers for both full and partial responses.
+        const baseHeaders = {
+          "Content-Type": type,
+          "Accept-Ranges": "bytes",
+          "Cache-Control": "no-store",
+          // This is opaque media bytes — never let it be treated as a document.
+          "X-Content-Type-Options": "nosniff",
+          "Content-Security-Policy": "default-src 'none'; sandbox",
+        };
+        const rangeMatch = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader || "");
+        if (rangeMatch && size > 0) {
+          let start = rangeMatch[1] ? parseInt(rangeMatch[1], 10) : 0;
+          let end = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : size - 1;
+          if (!Number.isFinite(start) || start < 0) start = 0;
+          if (!Number.isFinite(end) || end > size - 1) end = size - 1;
+          if (start > end) {
+            res.writeHead(416, { "Content-Range": `bytes */${size}` });
+            return res.end();
+          }
+          // Bound a single response so one request can't pull the whole file.
+          if (end - start + 1 > STREAM_MAX_CHUNK_BYTES) {
+            end = start + STREAM_MAX_CHUNK_BYTES - 1;
+          }
+          res.writeHead(206, {
+            ...baseHeaders,
+            "Content-Range": `bytes ${start}-${end}/${size}`,
+            "Content-Length": end - start + 1,
+          });
+          if (req.method === "HEAD") return res.end();
+          const stream = s.createReadStream(filePath, { start, end });
+          stream.on("error", () => res.destroy());
+          res.on("close", () => stream.destroy());
+          stream.pipe(res);
+          return;
+        }
+        // No (valid) Range header: a plain 200 with the full length, advertising
+        // range support so a media player immediately switches to ranged reads.
+        // (A `<video>`/`<audio>` element always sends `Range: bytes=0-` first, so
+        // this whole-file path is only hit by direct navigation.)
+        res.writeHead(200, { ...baseHeaders, "Content-Length": size });
+        if (req.method === "HEAD") return res.end();
+        const stream = s.createReadStream(filePath);
+        stream.on("error", () => res.destroy());
+        res.on("close", () => stream.destroy());
+        stream.pipe(res);
+      });
+    });
+    return;
+  }
+
   handle(req, res, parse(req.url, true));
 });
 
@@ -932,6 +1054,8 @@ wss.on("connection", (ws, req) => {
   let sftp = null; // cached SFTP subsystem (runs as the login user)
   let elevatedSftp = null; // cached `sudo sftp-server` handle (runs as root)
   let elevated = false; // whether SFTP ops are currently routed through sudo
+  let streamSftp = null; // dedicated SFTP channel for the HTTP media stream
+  let streamToken = null; // capability token for /api/preview (this session)
   let counted = false; // whether this connection is included in activeSessions
   let closed = false;
   // Pending handshake callbacks that wait on a round-trip to the browser.
@@ -1050,6 +1174,17 @@ wss.on("connection", (ws, req) => {
     }
     forwards.clear();
     remoteForwards.clear();
+    // Revoke the media-stream capability so no further /api/preview requests can
+    // reach this (now closed) session, and drop its dedicated SFTP channel.
+    if (streamToken) {
+      streamSessions.delete(streamToken);
+      streamToken = null;
+    }
+    try {
+      streamSftp?.end();
+    } catch {
+      /* channel already gone */
+    }
     try {
       elevatedSftp?.end();
     } catch {
@@ -1059,6 +1194,7 @@ wss.on("connection", (ws, req) => {
     shell = null;
     sftp = null;
     elevatedSftp = null;
+    streamSftp = null;
     elevated = false;
   }
 
@@ -1093,6 +1229,27 @@ wss.on("connection", (ws, req) => {
       if (err) return sendError(`SFTP unavailable: ${err.message}`, "sftp");
       sftp = s;
       fn(s);
+    });
+  }
+
+  /**
+   * Lazily open (and cache) a dedicated SFTP channel for the HTTP media-stream
+   * endpoint, then run `fn(err, sftp)`. Kept separate from `withSftp` so the
+   * browser's Range requests never contend with the WebSocket's own SFTP stream
+   * state, and always runs as the **login user** (never the sudo channel) — the
+   * endpoint is only used for non-elevated previews. Calls back `fn(err)` on
+   * failure so the HTTP handler can respond rather than push a WebSocket error.
+   */
+  function withStreamSftp(fn) {
+    if (!ssh) return fn(new Error("not connected"));
+    if (streamSftp) return fn(null, streamSftp);
+    ssh.sftp((err, s) => {
+      if (err) return fn(err);
+      streamSftp = s;
+      s.on("close", () => {
+        streamSftp = null;
+      });
+      fn(null, s);
     });
   }
 
@@ -1433,9 +1590,19 @@ wss.on("connection", (ws, req) => {
         totalConnections += 1;
         logEvent("connect", { ip: clientIp, host, port: targetPort });
         send({ t: "status", state: "connected" });
+        // Mint a per-session capability token for the seekable media-stream
+        // endpoint and register this session's login-user SFTP accessor under
+        // it. The token is unguessable and revoked on cleanup, so it only ever
+        // reaches this session's files (which its WebSocket can already read).
+        streamToken = randomBytes(32).toString("hex");
+        streamSessions.set(streamToken, {
+          withStreamSftp,
+          isClosed: () => closed,
+        });
         // Advertise per-deployment capabilities so the UI only offers what the
         // server actually permits (e.g. the elevated/sudo file-access toggle).
-        send({ t: "caps", sudo: ALLOW_SUDO });
+        // `streamToken` lets the client build `/api/preview` URLs for video.
+        send({ t: "caps", sudo: ALLOW_SUDO, streamToken });
         ssh.shell(
           {
             term: "xterm-256color",

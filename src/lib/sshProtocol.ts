@@ -329,8 +329,10 @@ export type ServerMessage =
   // Optional per-session capability advertisement, sent once the session is
   // ready. `sudo` reflects whether the server permits elevated (root) file
   // access (`SSH_ALLOW_SUDO`), so the client only shows the sudo toggle when the
-  // deployment allows it.
-  | { t: "caps"; sudo: boolean }
+  // deployment allows it. `streamToken` is a per-session capability the client
+  // puts in `/api/preview` URLs so a `<video>` can stream+seek over HTTP Range
+  // (see `server.mjs`); absent if the deployment can't mint one.
+  | { t: "caps"; sudo: boolean; streamToken?: string }
   // Acknowledges an `sftp-sudo` request: `enabled` is the mode now in effect.
   // A failure to gain elevation is reported separately as an `error` (scope
   // `sftp`) and leaves the session unelevated.
