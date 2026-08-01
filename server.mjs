@@ -182,6 +182,39 @@ const THUMBNAIL_PIXELS = 256;
 // only, never file contents).
 const MAX_FIND_RESULTS = 500;
 const MAX_FIND_NODES = 20000;
+// Content-search (grep) limits. GREP_MAX_FILE_BYTES mirrors src/lib/sshProtocol.ts
+// (the largest file grep will open and scan — bigger files are skipped); the
+// total-bytes budget bounds how much a single search may read so grepping a huge
+// tree of text files can't tie up the session. Unlike name search, grep opens
+// file *contents* — the files are only read, never modified.
+const GREP_MAX_FILE_BYTES = 1024 * 1024;
+const GREP_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+
+// Mirror of grepFirstMatch in src/lib/sshProtocol.ts — keep the two in sync.
+// Finds the first line containing `query` (case-insensitive), returning its
+// 1-based number and a trimmed/clamped preview, or null when there's no match.
+function grepFirstMatch(text, query, maxPreview = 160) {
+  const needle = String(query).toLowerCase();
+  if (needle === "") return null;
+  const lines = text.split(/\r\n|\r|\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].toLowerCase().includes(needle)) {
+      let preview = lines[i].replace(/^\s+/, "");
+      if (preview.length > maxPreview) preview = `${preview.slice(0, maxPreview)}…`;
+      return { line: i + 1, preview };
+    }
+  }
+  return null;
+}
+
+// Heuristic: does a buffer look like binary (not text to grep)? A NUL byte in
+// the first few KB is the classic "this is binary" signal (what grep -I uses),
+// so we skip such files instead of scanning mojibake.
+function looksBinary(buffer) {
+  const n = Math.min(buffer.length, 8000);
+  for (let i = 0; i < n; i++) if (buffer[i] === 0) return true;
+  return false;
+}
 // Cap a single SFTP upload so an unbounded stream can't fill the target disk
 // (symmetric with the download cap). Configured in whole megabytes; 0 (or less)
 // disables the limit.
@@ -1256,6 +1289,88 @@ wss.on("connection", (ws, req) => {
     });
   }
 
+  // Recursive content search (grep): walk the tree like handleFind, but open each
+  // candidate file and scan its contents for `query`. Files are only read, never
+  // modified. Binaries and files over GREP_MAX_FILE_BYTES are skipped, and the
+  // whole search is bounded by node, result, and total-bytes budgets.
+  function handleGrep(msg) {
+    withSftp((s) => {
+      const root = String(msg.path || ".");
+      const query = String(msg.query || "").trim();
+      const reply = (entries, truncated) =>
+        send({
+          t: "sftp-grep-result",
+          path: root,
+          query: String(msg.query || ""),
+          entries,
+          truncated,
+        });
+      if (query === "") return reply([], false);
+
+      const results = [];
+      let visited = 0;
+      let bytesRead = 0;
+      let truncated = false;
+      const join = (dir, name) =>
+        (dir.endsWith("/") ? dir : `${dir}/`) + name;
+
+      const walk = (dir, cb) => {
+        if (truncated) return cb();
+        s.readdir(dir, (err, list) => {
+          if (err) return cb(); // unreadable directory — skip it, keep going
+          let i = 0;
+          const nextEntry = () => {
+            if (truncated || i >= list.length) return cb();
+            const item = list[i++];
+            if (++visited > MAX_FIND_NODES) {
+              truncated = true;
+              return cb();
+            }
+            const name = item.filename;
+            const type = toEntryType(item.attrs);
+            const childPath = join(dir, name);
+            if (type === "dir") return walk(childPath, nextEntry); // descend
+            // Only scan regular files within the per-file and total read caps.
+            const size = item.attrs.size || 0;
+            if (type !== "file" || size === 0 || size > GREP_MAX_FILE_BYTES) {
+              return nextEntry();
+            }
+            if (bytesRead + size > GREP_MAX_TOTAL_BYTES) {
+              truncated = true;
+              return cb();
+            }
+            s.readFile(childPath, (readErr, buffer) => {
+              if (!readErr && buffer && !looksBinary(buffer)) {
+                bytesRead += buffer.length;
+                const hit = grepFirstMatch(buffer.toString("utf8"), query);
+                if (hit) {
+                  results.push({
+                    name,
+                    path: childPath,
+                    type,
+                    size,
+                    mtime: (item.attrs.mtime || 0) * 1000,
+                    mode: (item.attrs.mode || 0) & 0o777,
+                    line: hit.line,
+                    preview: hit.preview,
+                  });
+                  if (results.length >= MAX_FIND_RESULTS) {
+                    truncated = true;
+                    return cb();
+                  }
+                }
+              }
+              nextEntry();
+            });
+          };
+          nextEntry();
+        });
+      };
+
+      walk(root, () => reply(results, truncated));
+    });
+  }
+
   /** Copy (duplicate) a file or directory to a new path over SFTP. */
   function handleCopy(msg) {
     withSftp((s) => {
@@ -2225,6 +2340,10 @@ wss.on("connection", (ws, req) => {
 
       case "sftp-find":
         handleFind(msg);
+        break;
+
+      case "sftp-grep":
+        handleGrep(msg);
         break;
 
       case "sftp-copy":

@@ -54,6 +54,7 @@ import {
   type UploadItem,
   type DownloadItem,
   type SearchState,
+  type SearchMode,
 } from "./FileBrowser";
 import { FileEditor, type EditorFile } from "./FileEditor";
 import { Tunnels, type ForwardState, type NewForward } from "./Tunnels";
@@ -458,10 +459,25 @@ export function SshSession({
           break;
 
         case "sftp-find-result":
-          // Apply only if it answers the query we're still showing (a stale
-          // reply for an earlier query is dropped).
+          // Apply only if it answers the name search we're still showing (a
+          // stale reply for an earlier query, or a find reply arriving after the
+          // user switched to a content search, is dropped).
           setSearch((prev) =>
-            prev && prev.query === msg.query
+            prev && prev.mode === "name" && prev.query === msg.query
+              ? {
+                  ...prev,
+                  loading: false,
+                  results: msg.entries,
+                  truncated: msg.truncated,
+                }
+              : prev,
+          );
+          break;
+
+        case "sftp-grep-result":
+          // Same reconciliation as find, but for the content (grep) axis.
+          setSearch((prev) =>
+            prev && prev.mode === "content" && prev.query === msg.query
               ? {
                   ...prev,
                   loading: false,
@@ -1409,16 +1425,18 @@ export function SshSession({
     });
   };
   // Recursive subtree search: send the query for the current directory and show
-  // a loading state until the bridge replies with `sftp-find-result`. Trimmed to
-  // match the server (which trims too), so `prev.query === msg.query` reconciles.
-  const onSearch = (query: string) => {
+  // a loading state until the bridge replies. `mode` selects the axis — file
+  // names (`sftp-find`, listings/metadata only) or file contents (`sftp-grep`,
+  // which opens each file, size-capped). Trimmed to match the server (which
+  // trims too), so `prev.query === msg.query` reconciles.
+  const onSearch = (query: string, mode: SearchMode) => {
     const q = query.trim();
     if (!q) {
       setSearch(null);
       return;
     }
-    setSearch({ query: q, loading: true, results: [], truncated: false });
-    send({ t: "sftp-find", path: cwd, query: q });
+    setSearch({ query: q, mode, loading: true, results: [], truncated: false });
+    send({ t: mode === "content" ? "sftp-grep" : "sftp-find", path: cwd, query: q });
   };
   const onClearSearch = () => setSearch(null);
 
