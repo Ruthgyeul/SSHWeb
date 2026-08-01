@@ -112,6 +112,37 @@ interface PreviewState {
  * hundreds of images; the rest queue and drain as replies arrive. */
 const MAX_INFLIGHT_THUMBS = 6;
 
+/** In-memory budget for the recently-viewed preview cache (raw file bytes). A
+ * revisited file re-opens instantly with no re-transfer; the LRU evicts the
+ * oldest entries once the total exceeds this. Bytes (not blob URLs) are cached
+ * so each open builds a fresh, independently-revoked `blob:` URL. */
+const MAX_PREVIEW_CACHE_BYTES = 48 * 1024 * 1024;
+
+/** Fields the preview modal needs to render a fully-loaded file, built from its
+ * raw bytes. Markdown decodes to text (rendered in the modal); everything else
+ * gets a `blob:` URL. Shared by the streamed-in path and a preview-cache hit. */
+function previewFieldsFromBytes(
+  name: string,
+  bytes: Uint8Array<ArrayBuffer>,
+): Pick<PreviewState, "kind" | "src" | "text" | "bytes"> {
+  const kind = filePreviewKind(name) ?? "image";
+  if (kind === "markdown") {
+    return { kind, src: "", text: new TextDecoder().decode(bytes), bytes };
+  }
+  const mime =
+    kind === "pdf"
+      ? "application/pdf"
+      : (kind === "video"
+          ? videoMimeType(name)
+          : kind === "audio"
+            ? audioMimeType(name)
+            : imageMimeType(name)) ?? "application/octet-stream";
+  // A blob: URL renders large images/video/PDFs far faster than a giant data:
+  // URL and lets <video> seek; revoked by the effect that watches preview.src.
+  const src = URL.createObjectURL(new Blob([bytes], { type: mime }));
+  return { kind, src, bytes };
+}
+
 /** Only persist small thumbnails (the server-resized WebP images, a few KB). This
  * skips raw video clips and full images sent when server-side resizing is
  * unavailable, so the on-disk cache never balloons with multi-MB payloads. Length
@@ -248,6 +279,14 @@ export function SshSession({
   // over the same `sftp-download-*` frames (tagged `preview`), but land in the
   // modal (as a blob/text) instead of a saved file — so they buffer here.
   const previewBuffersRef = useRef<Record<string, Uint8Array[]>>({});
+  // LRU cache of recently-viewed preview file bytes, keyed by path + version
+  // (size:mtime) so an edited file re-fetches. A `Map` keeps insertion order for
+  // eviction; `previewCacheBytesRef` tracks the running total against the budget.
+  // Elevated (root) reads are never cached — they must not linger after de-elevate.
+  const previewCacheRef = useRef<Map<string, { name: string; bytes: Uint8Array<ArrayBuffer> }>>(
+    new Map(),
+  );
+  const previewCacheBytesRef = useRef(0);
   // Text captured at save time per path, so `sftp-ok` can reconcile the editor's
   // saved content (marking that file clean) without a re-read.
   const editorSaveTextRef = useRef<Record<string, string>>({});
@@ -374,6 +413,43 @@ export function SshSession({
     setThumbnails({});
   }, []);
 
+  // Cache key for a path: path + its version tag (size:mtime) so an edited file
+  // misses and re-fetches. Falls back to the bare path when the version is
+  // unknown (e.g. a search hit not in the current listing).
+  const previewCacheKeyFor = useCallback((path: string) => {
+    const version = entryVersionRef.current.get(path);
+    return version ? `${path} ${version}` : path;
+  }, []);
+
+  // Store a fully-loaded preview's bytes in the LRU (unless elevated, or bigger
+  // than the whole budget), evicting the oldest entries once over budget.
+  const cachePreview = useCallback(
+    (path: string, name: string, bytes: Uint8Array<ArrayBuffer>) => {
+      if (elevatedRef.current || bytes.length > MAX_PREVIEW_CACHE_BYTES) return;
+      const key = previewCacheKeyFor(path);
+      const cache = previewCacheRef.current;
+      const existing = cache.get(key);
+      if (existing) previewCacheBytesRef.current -= existing.bytes.length;
+      cache.delete(key);
+      cache.set(key, { name, bytes });
+      previewCacheBytesRef.current += bytes.length;
+      // Evict oldest (front of the Map) until back within budget.
+      while (previewCacheBytesRef.current > MAX_PREVIEW_CACHE_BYTES) {
+        const oldest = cache.keys().next().value;
+        if (oldest === undefined) break;
+        const dropped = cache.get(oldest);
+        cache.delete(oldest);
+        if (dropped) previewCacheBytesRef.current -= dropped.bytes.length;
+      }
+    },
+    [previewCacheKeyFor],
+  );
+
+  const clearPreviewCache = useCallback(() => {
+    previewCacheRef.current.clear();
+    previewCacheBytesRef.current = 0;
+  }, []);
+
   const handleServerMessage = useCallback(
     (msg: ServerMessage) => {
       switch (msg.t) {
@@ -457,6 +533,10 @@ export function SshSession({
           thumbQueueRef.current = [];
           thumbInFlightRef.current = 0;
           setThumbnails({});
+          // Drop cached preview bytes too: content only root could read must not
+          // linger after de-elevate (and a user-visible file shouldn't be assumed
+          // still readable as root).
+          clearPreviewCache();
           // Re-list the current directory so the view reflects root's access.
           listDir(cwdRef.current);
           break;
@@ -613,35 +693,23 @@ export function SshSession({
           if (msg.preview) {
             const chunks = previewBuffersRef.current[msg.path];
             delete previewBuffersRef.current[msg.path];
-            // Ignore if the user closed the modal or opened another file.
-            if (!chunks || previewPathRef.current !== msg.path) break;
+            if (!chunks) break;
             const bytes = concatBytes(chunks);
             const name = msg.path.split("/").pop() || "file";
-            const kind = filePreviewKind(name) ?? "image";
-            if (kind === "markdown") {
-              // Rendered from decoded text in the modal — no blob URL needed.
-              const text = new TextDecoder().decode(bytes);
-              setPreview((prev) =>
-                prev && prev.path === msg.path
-                  ? { ...prev, kind, src: "", text, bytes, loading: false }
-                  : prev,
-              );
-              break;
-            }
-            const mime =
-              kind === "pdf"
-                ? "application/pdf"
-                : (kind === "video"
-                    ? videoMimeType(name)
-                    : kind === "audio"
-                      ? audioMimeType(name)
-                      : imageMimeType(name)) ?? "application/octet-stream";
-            // A blob: URL renders large images/video/PDFs far faster than a
-            // giant data: URL and lets <video> seek; revoked in the effect below.
-            const src = URL.createObjectURL(new Blob([bytes], { type: mime }));
+            // Cache the fully-received bytes even if the user has since stepped
+            // away — the next visit reuses them without re-transfer.
+            cachePreview(msg.path, name, bytes);
+            // Only paint if still viewing this file (modal open, same path).
+            if (previewPathRef.current !== msg.path) break;
             setPreview((prev) =>
               prev && prev.path === msg.path
-                ? { ...prev, kind, src, bytes, loading: false }
+                ? {
+                    ...prev,
+                    ...previewFieldsFromBytes(name, bytes),
+                    loading: false,
+                    received: undefined,
+                    total: undefined,
+                  }
                 : prev,
             );
             break;
@@ -782,7 +850,7 @@ export function SshSession({
           break;
       }
     },
-    [listDir, send, notify, pumpThumbs],
+    [listDir, send, notify, pumpThumbs, cachePreview, clearPreviewCache],
   );
 
   // openSocket and scheduleReconnect reference each other; a ref breaks the
@@ -921,6 +989,8 @@ export function SshSession({
     uploadInFlightRef.current = 0;
     downloadBuffersRef.current = {};
     previewBuffersRef.current = {};
+    previewCacheRef.current.clear();
+    previewCacheBytesRef.current = 0;
     setHasLast(false);
     ctrlRef.current = false;
     altRef.current = false;
@@ -929,12 +999,29 @@ export function SshSession({
     xtermRef.current?.clear();
   }, [send]);
 
-  // Open a file in the preview modal: paint it immediately in a loading state
-  // (with the cached grid thumbnail as an instant placeholder, if any) so the
-  // click feels responsive, then stream the bytes in. `siblings` lets the modal
-  // step ←/→ through the other previewable files in the same view.
+  // Open a file in the preview modal. On a cache hit (a recently-viewed file)
+  // it paints instantly from the cached bytes with no re-transfer; otherwise it
+  // opens immediately in a loading state (with the cached grid thumbnail as an
+  // instant placeholder, if any) and streams the bytes in. `siblings` lets the
+  // modal step ←/→ through the other previewable files in the same view.
   const openPreviewFile = useCallback(
     (path: string, name: string, siblings?: { path: string; name: string }[]) => {
+      const key = previewCacheKeyFor(path);
+      const hit = previewCacheRef.current.get(key);
+      if (hit) {
+        // LRU touch: re-insert at the back so it counts as most-recently used.
+        previewCacheRef.current.delete(key);
+        previewCacheRef.current.set(key, hit);
+        setPreview({
+          path,
+          name,
+          loading: false,
+          placeholder: thumbnailsRef.current[path],
+          siblings,
+          ...previewFieldsFromBytes(name, hit.bytes),
+        });
+        return;
+      }
       setPreview({
         path,
         name,
@@ -946,7 +1033,7 @@ export function SshSession({
       });
       send({ t: "sftp-read", path, preview: true });
     },
-    [send],
+    [send, previewCacheKeyFor],
   );
 
   const decideHostKey = useCallback(
