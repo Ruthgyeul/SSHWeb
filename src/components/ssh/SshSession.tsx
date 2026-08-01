@@ -1142,16 +1142,16 @@ export function SshSession({
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-term-border bg-term-card">
       {/* Session header */}
-      <div className="flex items-center gap-3 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
         <StatusDot status={status} />
-        <span className="truncate text-xs text-term-dim">
+        <span className="min-w-0 truncate text-xs text-term-dim">
           {target ? `${target.user}@${target.host}` : "Not connected"}
         </span>
         {connected && connectedAt !== null && <Uptime since={connectedAt} />}
         {connected && latency !== null && <LatencyChip ms={latency} />}
 
         {connected && (
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
             <button
               type="button"
               onClick={() => setShowShortcuts(true)}
