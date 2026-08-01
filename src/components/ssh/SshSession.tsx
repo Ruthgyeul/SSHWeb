@@ -11,12 +11,14 @@ import {
   hostKeyId,
   imageMimeType,
   isLargeForEditor,
+  isProbablyTextFile,
   isThumbnailable,
   joinPath,
   modeToOctal,
   parentPath,
   parseMessage,
   parseOctalMode,
+  sniffMediaKind,
   suggestCopyName,
   videoMimeType,
   type FileEntry,
@@ -118,16 +120,37 @@ const MAX_INFLIGHT_THUMBS = 6;
  * so each open builds a fresh, independently-revoked `blob:` URL. */
 const MAX_PREVIEW_CACHE_BYTES = 48 * 1024 * 1024;
 
+/** The preview surface for a filename by extension: a media/PDF/Markdown kind,
+ * a read-only `text` view for anything editable-as-text, or `unsupported`. Used
+ * for the modal's loading state before bytes arrive (a cache hit / stream then
+ * refines it, including magic-byte sniffing for mis-named media). */
+function previewRenderKind(name: string): PreviewMode {
+  return (
+    filePreviewKind(name) ?? (isProbablyTextFile(name) ? "text" : "unsupported")
+  );
+}
+
 /** Fields the preview modal needs to render a fully-loaded file, built from its
- * raw bytes. Markdown decodes to text (rendered in the modal); everything else
- * gets a `blob:` URL. Shared by the streamed-in path and a preview-cache hit. */
+ * raw bytes. The kind is resolved by extension, then — for a `text`/`unsupported`
+ * name — upgraded by sniffing the bytes' magic number, so a mis-named or
+ * extensionless media file (a JPEG called `photo`) still previews as media.
+ * Markdown/text decode to text (rendered in the modal); media/PDF get a `blob:`
+ * URL. Shared by the streamed-in path and a preview-cache hit. */
 function previewFieldsFromBytes(
   name: string,
   bytes: Uint8Array<ArrayBuffer>,
 ): Pick<PreviewState, "kind" | "src" | "text" | "bytes"> {
-  const kind = filePreviewKind(name) ?? "image";
-  if (kind === "markdown") {
+  let kind = previewRenderKind(name);
+  if (kind === "text" || kind === "unsupported") {
+    const sniffed = sniffMediaKind(bytes);
+    if (sniffed) kind = sniffed;
+  }
+  if (kind === "markdown" || kind === "text") {
     return { kind, src: "", text: new TextDecoder().decode(bytes), bytes };
+  }
+  if (kind === "unsupported") {
+    // Not decodable as media and not text — offer download only, no blob.
+    return { kind, src: "", bytes };
   }
   const mime =
     kind === "pdf"
@@ -1025,7 +1048,7 @@ export function SshSession({
       setPreview({
         path,
         name,
-        kind: filePreviewKind(name) ?? "image",
+        kind: previewRenderKind(name),
         src: "",
         loading: true,
         placeholder: thumbnailsRef.current[path],

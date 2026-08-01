@@ -23,6 +23,7 @@ import {
   joinPath,
   forwardLabel,
   previewKind,
+  sniffMediaKind,
   videoMimeType,
   modeToOctal,
   parentPath,
@@ -503,6 +504,48 @@ describe("previewKind / isProbablyPreviewableFile", () => {
     expect(isProbablyPreviewableFile("clip.mov")).toBe(true);
     expect(isProbablyPreviewableFile("song.mp3")).toBe(true);
     expect(isProbablyPreviewableFile("notes.md")).toBe(false);
+  });
+});
+
+describe("sniffMediaKind", () => {
+  /** Build a byte array from a signature prefix, padded to at least 12 bytes. */
+  const sig = (...bytes: number[]) => {
+    const out = new Uint8Array(Math.max(12, bytes.length));
+    out.set(bytes);
+    return out;
+  };
+  const ascii = (s: string, offset = 0) => {
+    const out = new Uint8Array(Math.max(12, offset + s.length));
+    for (let i = 0; i < s.length; i++) out[offset + i] = s.charCodeAt(i);
+    return out;
+  };
+
+  it("detects images by magic number", () => {
+    expect(sniffMediaKind(sig(0x89, 0x50, 0x4e, 0x47))).toBe("image"); // PNG
+    expect(sniffMediaKind(sig(0xff, 0xd8, 0xff))).toBe("image"); // JPEG
+    expect(sniffMediaKind(ascii("GIF89a"))).toBe("image"); // GIF
+    expect(sniffMediaKind(sig(0x42, 0x4d))).toBe("image"); // BMP
+    const webp = ascii("RIFF");
+    webp.set([0x57, 0x45, 0x42, 0x50], 8); // "WEBP"
+    expect(sniffMediaKind(webp)).toBe("image");
+  });
+
+  it("detects PDF, video and audio signatures", () => {
+    expect(sniffMediaKind(ascii("%PDF-1.7"))).toBe("pdf");
+    expect(sniffMediaKind(ascii("ftyp", 4))).toBe("video"); // MP4/MOV
+    expect(sniffMediaKind(sig(0x1a, 0x45, 0xdf, 0xa3))).toBe("video"); // WebM
+    expect(sniffMediaKind(ascii("OggS"))).toBe("audio");
+    expect(sniffMediaKind(ascii("fLaC"))).toBe("audio");
+    expect(sniffMediaKind(ascii("ID3"))).toBe("audio"); // MP3
+    const wav = ascii("RIFF");
+    wav.set([0x57, 0x41, 0x56, 0x45], 8); // "WAVE"
+    expect(sniffMediaKind(wav)).toBe("audio");
+  });
+
+  it("returns null for text and unknown bytes", () => {
+    expect(sniffMediaKind(ascii("#!/bin/sh\necho hi\n"))).toBeNull();
+    expect(sniffMediaKind(ascii("{ \"json\": true }"))).toBeNull();
+    expect(sniffMediaKind(new Uint8Array(4))).toBeNull(); // too short
   });
 });
 

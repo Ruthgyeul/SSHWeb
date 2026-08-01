@@ -1047,6 +1047,43 @@ export function filePreviewKind(name: string): PreviewContentKind | null {
 }
 
 /**
+ * Sniff a file's leading bytes for a well-known media/PDF magic number, so a
+ * mis-named or extensionless file (e.g. a JPEG called `photo` or `image.dat`)
+ * can still be previewed as what it actually is. Returns the media kind, or
+ * `null` when the signature isn't recognised. Only checks unambiguous magic
+ * numbers — never text — so it's safe to fall back to a text/unsupported view.
+ */
+export function sniffMediaKind(
+  bytes: Uint8Array,
+): Exclude<PreviewContentKind, "markdown"> | null {
+  if (bytes.length < 12) return null;
+  const b = bytes;
+  const ascii = (start: number, s: string) => {
+    for (let i = 0; i < s.length; i++) {
+      if (b[start + i] !== s.charCodeAt(i)) return false;
+    }
+    return true;
+  };
+  // Images.
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image"; // PNG
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image"; // JPEG
+  if (ascii(0, "GIF8")) return "image"; // GIF87a / GIF89a
+  if (b[0] === 0x42 && b[1] === 0x4d) return "image"; // BMP
+  if (ascii(0, "RIFF") && ascii(8, "WEBP")) return "image"; // WEBP
+  // PDF.
+  if (ascii(0, "%PDF")) return "pdf";
+  // Video.
+  if (ascii(4, "ftyp")) return "video"; // MP4 / MOV / M4V (ISO base media)
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return "video"; // Matroska/WebM
+  // Audio.
+  if (ascii(0, "OggS")) return "audio"; // Ogg
+  if (ascii(0, "fLaC")) return "audio"; // FLAC
+  if (ascii(0, "ID3") || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) return "audio"; // MP3
+  if (ascii(0, "RIFF") && ascii(8, "WAVE")) return "audio"; // WAV
+  return null;
+}
+
+/**
  * Heuristic: is this filename a binary format we should download rather than try
  * to open as text? Matches by extension (case-insensitive); an extensionless
  * name is not considered binary (a plain `README`/`hosts`-style file).
