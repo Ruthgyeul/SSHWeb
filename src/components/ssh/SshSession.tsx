@@ -97,6 +97,11 @@ interface PreviewState {
   /** Raw bytes, kept so "Download" doesn't need a second round-trip. Absent for
    * `unsupported` previews, which stream the file only if the user downloads. */
   bytes?: Uint8Array<ArrayBuffer>;
+  /** Bytes received so far while the preview streams in — drives the modal's
+   * progress bar. Set once the `sftp-download-begin` for this preview arrives. */
+  received?: number;
+  /** Total size announced by `sftp-download-begin`, for the progress bar. */
+  total?: number;
 }
 
 /** Max concurrent grid-thumbnail reads. Enough to fill a visible screen of tiles
@@ -227,6 +232,10 @@ export function SshSession({
   const downloadBuffersRef = useRef<
     Record<string, { name: string; chunks: Uint8Array[] }>
   >({});
+  // Accumulated preview chunks (bytes), keyed by remote path. Previews stream in
+  // over the same `sftp-download-*` frames (tagged `preview`), but land in the
+  // modal (as a blob/text) instead of a saved file — so they buffer here.
+  const previewBuffersRef = useRef<Record<string, Uint8Array[]>>({});
   // Text captured at save time per path, so `sftp-ok` can reconcile the editor's
   // saved content (marking that file clean) without a re-read.
   const editorSaveTextRef = useRef<Record<string, string>>({});
@@ -527,44 +536,27 @@ export function SshSession({
                 }
               }
             }
-          } else if (msg.preview) {
-            // Ignore a reply the user already navigated away from (modal closed
-            // or a different file opened) so we don't build an orphan blob URL.
-            if (previewPathRef.current !== msg.path) break;
-            const bytes = base64ToBytes(msg.dataB64);
-            const kind = filePreviewKind(msg.name) ?? "image";
-            if (kind === "markdown") {
-              // Rendered from decoded text in the modal — no blob URL needed.
-              const text = new TextDecoder().decode(bytes);
-              setPreview((prev) =>
-                prev && prev.path === msg.path
-                  ? { ...prev, kind, src: "", text, bytes, loading: false }
-                  : prev,
-              );
-              break;
-            }
-            const mime =
-              kind === "pdf"
-                ? "application/pdf"
-                : (kind === "video"
-                    ? videoMimeType(msg.name)
-                    : kind === "audio"
-                      ? audioMimeType(msg.name)
-                      : imageMimeType(msg.name)) ?? "application/octet-stream";
-            // A blob: URL renders large images/video/PDFs far faster than a
-            // giant data: URL and lets <video> seek; revoked in the effect below.
-            const src = URL.createObjectURL(new Blob([bytes], { type: mime }));
-            setPreview((prev) =>
-              prev && prev.path === msg.path
-                ? { ...prev, kind, src, bytes, loading: false }
-                : prev,
-            );
           } else {
+            // Plain one-shot read (zip of a folder / multi-select). Previews now
+            // stream in via the `sftp-download-*` frames below, not here.
             triggerDownload(msg.name, base64ToBytes(msg.dataB64));
           }
           break;
 
         case "sftp-download-begin":
+          if (msg.preview) {
+            // A preview stream: buffer chunks and drive the modal's progress bar
+            // instead of registering a download row. Ignore a stale begin the
+            // user already navigated away from.
+            if (previewPathRef.current !== msg.path) break;
+            previewBuffersRef.current[msg.path] = [];
+            setPreview((prev) =>
+              prev && prev.path === msg.path
+                ? { ...prev, received: 0, total: msg.size }
+                : prev,
+            );
+            break;
+          }
           downloadBuffersRef.current[msg.path] = { name: msg.name, chunks: [] };
           setDownloads((d) => ({
             ...d,
@@ -578,6 +570,18 @@ export function SshSession({
           break;
 
         case "sftp-download-chunk": {
+          if (msg.preview) {
+            const chunks = previewBuffersRef.current[msg.path];
+            if (!chunks) break;
+            const bytes = base64ToBytes(msg.dataB64);
+            chunks.push(bytes);
+            setPreview((prev) =>
+              prev && prev.path === msg.path
+                ? { ...prev, received: (prev.received ?? 0) + bytes.length }
+                : prev,
+            );
+            break;
+          }
           const buf = downloadBuffersRef.current[msg.path];
           if (!buf) break;
           const bytes = base64ToBytes(msg.dataB64);
@@ -594,6 +598,42 @@ export function SshSession({
         }
 
         case "sftp-download-end": {
+          if (msg.preview) {
+            const chunks = previewBuffersRef.current[msg.path];
+            delete previewBuffersRef.current[msg.path];
+            // Ignore if the user closed the modal or opened another file.
+            if (!chunks || previewPathRef.current !== msg.path) break;
+            const bytes = concatBytes(chunks);
+            const name = msg.path.split("/").pop() || "file";
+            const kind = filePreviewKind(name) ?? "image";
+            if (kind === "markdown") {
+              // Rendered from decoded text in the modal — no blob URL needed.
+              const text = new TextDecoder().decode(bytes);
+              setPreview((prev) =>
+                prev && prev.path === msg.path
+                  ? { ...prev, kind, src: "", text, bytes, loading: false }
+                  : prev,
+              );
+              break;
+            }
+            const mime =
+              kind === "pdf"
+                ? "application/pdf"
+                : (kind === "video"
+                    ? videoMimeType(name)
+                    : kind === "audio"
+                      ? audioMimeType(name)
+                      : imageMimeType(name)) ?? "application/octet-stream";
+            // A blob: URL renders large images/video/PDFs far faster than a
+            // giant data: URL and lets <video> seek; revoked in the effect below.
+            const src = URL.createObjectURL(new Blob([bytes], { type: mime }));
+            setPreview((prev) =>
+              prev && prev.path === msg.path
+                ? { ...prev, kind, src, bytes, loading: false }
+                : prev,
+            );
+            break;
+          }
           const buf = downloadBuffersRef.current[msg.path];
           delete downloadBuffersRef.current[msg.path];
           setDownloads((d) => {
@@ -704,6 +744,20 @@ export function SshSession({
             setFilesLoading(false);
             setSavingPath(null);
             setElevatedPending(false);
+            // A preview read that fails (e.g. over the download cap, or a read
+            // error) must not leave the modal spinning forever: drop it to the
+            // download-only card so the user still has a way to fetch the file.
+            setPreview((prev) =>
+              prev && prev.loading
+                ? {
+                    ...prev,
+                    loading: false,
+                    kind: "unsupported",
+                    received: undefined,
+                    total: undefined,
+                  }
+                : prev,
+            );
             notify("error", msg.message);
           } else {
             // Shell/auth errors: echo into the terminal, and while connected
@@ -854,6 +908,7 @@ export function SshSession({
     uploadQueueRef.current = [];
     uploadInFlightRef.current = 0;
     downloadBuffersRef.current = {};
+    previewBuffersRef.current = {};
     setHasLast(false);
     ctrlRef.current = false;
     altRef.current = false;
@@ -1689,6 +1744,8 @@ export function SshSession({
                 loading={preview.loading}
                 placeholder={preview.placeholder}
                 text={preview.text}
+                received={preview.received}
+                total={preview.total}
                 onDownload={() =>
                   // Media previews already hold the bytes; the download-only
                   // fallback fetches on demand (streamed, with a progress bar).
@@ -1696,7 +1753,21 @@ export function SshSession({
                     ? triggerDownload(preview.name, preview.bytes)
                     : send({ t: "sftp-read", path: preview.path })
                 }
-                onClose={() => setPreview(null)}
+                onCancel={() => {
+                  // Abort the in-flight preview stream and close the modal.
+                  send({ t: "sftp-download-cancel", path: preview.path });
+                  delete previewBuffersRef.current[preview.path];
+                  setPreview(null);
+                }}
+                onClose={() => {
+                  // Closing mid-transfer stops the stream so we don't keep
+                  // pulling a large file the user no longer wants.
+                  if (preview.loading) {
+                    send({ t: "sftp-download-cancel", path: preview.path });
+                    delete previewBuffersRef.current[preview.path];
+                  }
+                  setPreview(null);
+                }}
               />
             )}
           </div>

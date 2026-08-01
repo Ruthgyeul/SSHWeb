@@ -128,7 +128,10 @@ export type ClientMessage =
   // image for the file-browser grid's thumbnail (like `preview`, but the reply
   // is cached into a tile instead of a modal); without any of these the read
   // triggers a download. The server echoes whichever flag was set back to the
-  // client.
+  // client. A `preview` read is streamed back via the chunked
+  // `sftp-download-*` frames (tagged `preview: true`) so the modal can show a
+  // progress bar and be cancelled; `edit` reads still arrive whole in one
+  // `sftp-read`.
   | {
       t: "sftp-read";
       path: string;
@@ -249,13 +252,22 @@ export type ServerMessage =
   // Reply to a `ping`, carrying the original `ts` so the client can compute the
   // round-trip time.
   | { t: "pong"; ts: number }
-  // Streamed download (plain download only — edit/preview reads still arrive as a
-  // single `sftp-read`). `begin` announces the total size, `chunk`s carry the
+  // Streamed transfer. `begin` announces the total size, `chunk`s carry the
   // base64 bytes in order, and `end` closes the stream so the client assembles
-  // and saves the file. This is what drives the download progress bar.
-  | { t: "sftp-download-begin"; path: string; name: string; size: number }
-  | { t: "sftp-download-chunk"; path: string; dataB64: string }
-  | { t: "sftp-download-end"; path: string }
+  // the file. This drives both the download progress bar and — when the frames
+  // are tagged `preview: true` (a `preview` read) — the preview modal's progress
+  // bar, letting the client accumulate the bytes into a blob/text and paint
+  // progress instead of waiting silently. `edit` reads still arrive whole in a
+  // single `sftp-read`.
+  | {
+      t: "sftp-download-begin";
+      path: string;
+      name: string;
+      size: number;
+      preview?: boolean;
+    }
+  | { t: "sftp-download-chunk"; path: string; dataB64: string; preview?: boolean }
+  | { t: "sftp-download-end"; path: string; preview?: boolean }
   // Reply to `sftp-write-resume`: the destination's current on-disk size, so the
   // client resumes its chunked upload from exactly there (0 = file missing, so
   // the client restarts the upload from the beginning).

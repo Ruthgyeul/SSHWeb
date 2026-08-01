@@ -2130,9 +2130,9 @@ wss.on("connection", (ws, req) => {
               );
             }
 
-            // Edit/preview need the whole file in one message (they build an
-            // editor buffer or a data: URL); they're already size-capped above.
-            if (msg.edit === true || msg.preview === true) {
+            // Edit reads need the whole file in one message (they build an editor
+            // buffer); it's already size-capped above.
+            if (msg.edit === true) {
               s.readFile(msg.path, (err, buffer) => {
                 if (err) return sendError(err.message, "sftp");
                 send({
@@ -2140,16 +2140,19 @@ wss.on("connection", (ws, req) => {
                   path: msg.path,
                   name,
                   dataB64: buffer.toString("base64"),
-                  edit: msg.edit === true,
-                  preview: msg.preview === true,
+                  edit: true,
                 });
               });
               return;
             }
 
-            // Plain download: stream in chunks so the browser can show progress.
-            // Pause on WebSocket backpressure and resume when it drains, so a big
-            // file never balloons the send buffer.
+            // Plain downloads AND previews stream in chunks so the browser can
+            // show a progress bar (and cancel). Preview frames are tagged
+            // `preview: true` so the client routes the bytes into the modal (as a
+            // blob/text) instead of saving a file. Pause on WebSocket
+            // backpressure and resume when it drains, so a big file never
+            // balloons the send buffer.
+            const isPreview = msg.preview === true;
             const stream = s.createReadStream(msg.path);
             downloads.set(msg.path, stream);
             send({
@@ -2157,6 +2160,7 @@ wss.on("connection", (ws, req) => {
               path: msg.path,
               name,
               size: stats.size,
+              preview: isPreview,
             });
             stream.on("data", (chunk) => {
               bytesDown += chunk.length;
@@ -2165,6 +2169,7 @@ wss.on("connection", (ws, req) => {
                 t: "sftp-download-chunk",
                 path: msg.path,
                 dataB64: chunk.toString("base64"),
+                preview: isPreview,
               });
               if (ws.bufferedAmount > 8 * 1024 * 1024) {
                 stream.pause();
@@ -2192,7 +2197,7 @@ wss.on("connection", (ws, req) => {
             stream.on("end", () => {
               downloads.delete(msg.path);
               sftpFilesDown += 1;
-              send({ t: "sftp-download-end", path: msg.path });
+              send({ t: "sftp-download-end", path: msg.path, preview: isPreview });
             });
           }),
         );
