@@ -567,6 +567,7 @@ export function SshSession({
             ...f,
             [msg.id]: {
               id: msg.id,
+              kind: msg.kind,
               bindHost: msg.bindHost,
               bindPort: msg.bindPort,
               destHost: msg.destHost,
