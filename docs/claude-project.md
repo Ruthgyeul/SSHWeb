@@ -145,8 +145,10 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   CSP's `connect-src 'self'` already authorizes the same-origin WebSocket —
   don't widen it for this feature. Ops surfaces: `server.mjs` emits structured,
   credential-free event logs (`SSH_LOG=json|off`), serves a metrics-carrying JSON
-  health probe at `GET /api/health`, and shuts down gracefully (drains sessions
-  on SIGTERM/SIGINT). Grid thumbnails are **always** served as a tiny WebP and
+  health probe at `GET /api/health` (session counts, cumulative shell bytes, an
+  `sftp` block of file-transfer volume — completed uploads/downloads + bytes —
+  and a `thumbnails` block of WebP tiles served/skipped + bytes), and shuts down
+  gracefully (drains sessions on SIGTERM/SIGINT). Grid thumbnails are **always** served as a tiny WebP and
   nothing else: images are downscaled in-memory with `sharp`
   (`THUMBNAIL_PIXELS`, mirrored from `sshProtocol.ts`) before being sent — the
   original file is only read, never modified — and video tiles get a poster
