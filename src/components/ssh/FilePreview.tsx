@@ -25,6 +25,11 @@ const MIN_ZOOM = 1;
 const MAX_ZOOM = 8;
 const ZOOM_STEP = 1.4;
 
+/** Pixel count (W×H) above which an image is flagged as very large — decoding
+ * one this big can spike memory, so we surface a ⚠ hint next to its dimensions
+ * rather than silently risk a tab crash. 60 MP ≈ a 8000×7500 photo. */
+const LARGE_IMAGE_PIXELS = 60_000_000;
+
 /**
  * A read-only media preview modal for a remote file. The parent streams the file
  * over SFTP, builds a `blob:` URL from the bytes, and hands it in as `src`; this
@@ -115,6 +120,9 @@ export function FilePreview({
   // Mirror of "is a pan drag active" for render (the ref itself can't be read
   // during render) — used to drop the CSS transition so panning tracks 1:1.
   const [dragging, setDragging] = useState(false);
+  // Natural pixel dimensions of the loaded image (from `<img onLoad>`), shown as
+  // a WxH chip in the toolbar; also drives the very-large-image ⚠ hint.
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
 
   const isImage = kind === "image";
   const zoomBy = useCallback((factor: number) => {
@@ -261,6 +269,24 @@ export function FilePreview({
         </span>
         {isImage && !loading && src && (
           <div className="flex items-center gap-1">
+            {dims && (
+              <span
+                className={cn(
+                  "mr-1 text-[11px] tabular-nums",
+                  dims.w * dims.h > LARGE_IMAGE_PIXELS
+                    ? "text-term-yellow"
+                    : "text-term-faint",
+                )}
+                title={
+                  dims.w * dims.h > LARGE_IMAGE_PIXELS
+                    ? "Very large image — may be slow to render"
+                    : undefined
+                }
+              >
+                {dims.w * dims.h > LARGE_IMAGE_PIXELS && "⚠ "}
+                {dims.w}×{dims.h}
+              </span>
+            )}
             <button
               type="button"
               onClick={() => zoomBy(1 / ZOOM_STEP)}
@@ -390,6 +416,15 @@ export function FilePreview({
                 src={src || placeholder}
                 alt={name}
                 draggable={false}
+                onLoad={(e) => {
+                  // Only record real dimensions from the full image, not the
+                  // low-res placeholder painted while loading.
+                  if (!src) return;
+                  const el = e.currentTarget;
+                  if (el.naturalWidth && el.naturalHeight) {
+                    setDims({ w: el.naturalWidth, h: el.naturalHeight });
+                  }
+                }}
                 onDoubleClick={() => (zoom > 1 ? resetView() : zoomBy(ZOOM_STEP * 1.5))}
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
@@ -405,6 +440,9 @@ export function FilePreview({
                   transform: `translate(${offset.x}px, ${offset.y}px) scale(${
                     loading && !src ? 0.95 : zoom
                   }) rotate(${rotation}deg)`,
+                  // Honour the JPEG's embedded EXIF orientation so phone photos
+                  // that record a rotation flag show upright, not sideways.
+                  imageOrientation: "from-image",
                   // Checkerboard so transparent PNGs stay legible.
                   backgroundImage:
                     "conic-gradient(#ffffff10 25%, transparent 0 50%, #ffffff10 0 75%, transparent 0)",
