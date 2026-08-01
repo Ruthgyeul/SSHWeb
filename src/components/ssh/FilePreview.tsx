@@ -40,7 +40,10 @@ export function FilePreview({
   loading = false,
   placeholder,
   text,
+  received,
+  total,
   onDownload,
+  onCancel,
   onClose,
 }: {
   name: string;
@@ -54,7 +57,13 @@ export function FilePreview({
   placeholder?: string;
   /** Decoded file text — only used for the `markdown` kind (rendered to HTML). */
   text?: string;
+  /** Bytes received so far while streaming — turns the spinner into a % bar. */
+  received?: number;
+  /** Total transfer size, once the stream has begun. */
+  total?: number;
   onDownload: () => void;
+  /** Abort the in-flight preview transfer (only shown while loading). */
+  onCancel?: () => void;
   onClose: () => void;
 }) {
   // Markdown is rendered (and sanitised) from the decoded text; skipped for
@@ -63,13 +72,37 @@ export function FilePreview({
     () => (kind === "markdown" ? renderMarkdown(text ?? "") : ""),
     [kind, text],
   );
+  const pct =
+    total && total > 0
+      ? Math.min(100, Math.round(((received ?? 0) / total) * 100))
+      : null;
   const spinner = (
-    <div className="absolute inset-0 z-10 flex items-center justify-center">
+    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3">
       <span
         className="h-9 w-9 animate-spin rounded-full border-2 border-term-border border-t-term-accent"
         role="status"
         aria-label="Loading preview"
       />
+      {pct !== null && (
+        <div className="flex w-44 flex-col items-center gap-1.5">
+          <div className="h-1 w-full overflow-hidden rounded-full bg-term-border">
+            <div
+              className="h-full rounded-full bg-term-accent transition-[width]"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <span className="text-[11px] tabular-nums text-term-muted">{pct}%</span>
+        </div>
+      )}
+      {onCancel && (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded border border-term-border px-2.5 py-1 text-[11px] text-term-muted hover:text-term-text"
+        >
+          Cancel
+        </button>
+      )}
     </div>
   );
   return (
