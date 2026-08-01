@@ -2,11 +2,16 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { forwardLabel, validateForward } from "@/lib/sshProtocol";
+import {
+  forwardLabel,
+  validateForward,
+  type ForwardKind,
+} from "@/lib/sshProtocol";
 
-/** A local port-forward as tracked by the session (mirrors the wire messages). */
+/** A port-forward as tracked by the session (mirrors the wire messages). */
 export interface ForwardState {
   id: string;
+  kind: ForwardKind;
   bindHost: string;
   bindPort: number;
   destHost: string;
@@ -19,11 +24,37 @@ export interface ForwardState {
 
 /** What the add-form hands back when the user opens a new forward. */
 export interface NewForward {
+  kind: ForwardKind;
   bindHost: string;
   bindPort: number;
   destHost: string;
   destPort: number;
 }
+
+/** Per-kind copy for the tunnels form. */
+const KIND_META: Record<
+  ForwardKind,
+  { label: string; blurb: string; portLabel: string }
+> = {
+  local: {
+    label: "Local",
+    blurb:
+      "Forward a local port to a host reachable from the SSH server (ssh -L).",
+    portLabel: "Local port",
+  },
+  remote: {
+    label: "Remote",
+    blurb:
+      "Expose a local-reachable host on a port of the SSH server (ssh -R).",
+    portLabel: "Remote port",
+  },
+  dynamic: {
+    label: "Dynamic",
+    blurb:
+      "Run a SOCKS5 proxy on a local port, routed through the SSH server (ssh -D).",
+    portLabel: "Local port",
+  },
+};
 
 /**
  * The "tunnels" tab: open and manage local port-forwards (`ssh -L`). The bridge
@@ -44,6 +75,7 @@ export function Tunnels({
   onOpen: (f: NewForward) => void;
   onClose: (id: string) => void;
 }) {
+  const [kind, setKind] = useState<ForwardKind>("local");
   const [bindPort, setBindPort] = useState("");
   const [destHost, setDestHost] = useState("");
   const [destPort, setDestPort] = useState("");
@@ -51,17 +83,21 @@ export function Tunnels({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
 
+  const meta = KIND_META[kind];
+  const needsDest = kind !== "dynamic";
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    const input = { bindHost, bindPort, destHost, destPort };
+    const input = { kind, bindHost, bindPort, destHost, destPort };
     const errs = validateForward(input);
     setErrors(errs);
     if (errs.length > 0) return;
     onOpen({
+      kind,
       bindHost: bindHost.trim() || "127.0.0.1",
       bindPort: Number(bindPort),
-      destHost: destHost.trim(),
-      destPort: Number(destPort),
+      destHost: needsDest ? destHost.trim() : "",
+      destPort: needsDest ? Number(destPort) : 0,
     });
     setBindPort("");
     setDestHost("");
@@ -74,43 +110,70 @@ export function Tunnels({
         onSubmit={submit}
         className="rounded-lg border border-term-border bg-term-panel/60 p-4"
       >
-        <p className="mb-3 text-xs text-term-muted">
-          Forward a local port to a host reachable from the SSH server
-          (<span className="font-mono">ssh -L</span>).
-        </p>
+        {/* Direction selector */}
+        <div
+          className="mb-3 inline-flex overflow-hidden rounded-md border border-term-border"
+          role="group"
+          aria-label="Forward type"
+        >
+          {(["local", "remote", "dynamic"] as const).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => {
+                setKind(k);
+                setErrors([]);
+              }}
+              aria-pressed={kind === k}
+              className={cn(
+                "border-l border-term-border px-3 py-1 text-xs transition-colors first:border-l-0",
+                kind === k
+                  ? "bg-term-accent/15 text-term-accent"
+                  : "text-term-muted hover:bg-term-card hover:text-term-text",
+              )}
+            >
+              {KIND_META[k].label}
+            </button>
+          ))}
+        </div>
+        <p className="mb-3 text-xs text-term-muted">{meta.blurb}</p>
         <div className="flex flex-wrap items-end gap-3">
-          <Field label="Local port">
+          <Field label={meta.portLabel}>
             <input
               value={bindPort}
               onChange={(e) => setBindPort(e.target.value)}
               inputMode="numeric"
-              placeholder="8080"
+              placeholder={kind === "dynamic" ? "1080" : "8080"}
               className={inputCls}
             />
           </Field>
-          <span className="pb-2 text-term-faint" aria-hidden>
-            →
-          </span>
-          <Field label="Destination host" grow>
-            <input
-              value={destHost}
-              onChange={(e) => setDestHost(e.target.value)}
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              placeholder="db.internal or 127.0.0.1"
-              className={inputCls}
-            />
-          </Field>
-          <Field label="Dest port">
-            <input
-              value={destPort}
-              onChange={(e) => setDestPort(e.target.value)}
-              inputMode="numeric"
-              placeholder="5432"
-              className={inputCls}
-            />
-          </Field>
+          {needsDest && (
+            <>
+              <span className="pb-2 text-term-faint" aria-hidden>
+                →
+              </span>
+              <Field label="Destination host" grow>
+                <input
+                  value={destHost}
+                  onChange={(e) => setDestHost(e.target.value)}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  placeholder="db.internal or 127.0.0.1"
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="Dest port">
+                <input
+                  value={destPort}
+                  onChange={(e) => setDestPort(e.target.value)}
+                  inputMode="numeric"
+                  placeholder="5432"
+                  className={inputCls}
+                />
+              </Field>
+            </>
+          )}
           <button
             type="submit"
             className="rounded-md border border-term-accent/40 bg-term-accent/15 px-4 py-2 text-xs font-medium text-term-accent hover:bg-term-accent/25"

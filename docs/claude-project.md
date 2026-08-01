@@ -124,9 +124,10 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   optional `SSH_ACCESS_TOKEN` gates the whole relay: when set, the browser must
   exchange it for an HttpOnly cookie at `POST /api/access` (the raw token is
   never stored in the cookie — a SHA-256 digest is — nor logged) before a
-  WebSocket upgrade is accepted. Local port-forwarding (`ssh -L`) is opt-in via
-  `SSH_ALLOW_PORT_FORWARD` and binds loopback-only unless
-  `SSH_FORWARD_ALLOW_PUBLIC_BIND` is set. Elevated (sudo) file access is opt-in
+  WebSocket upgrade is accepted. Port-forwarding (`ssh -L` local, `ssh -R` remote, and `ssh -D`
+  dynamic/SOCKS5) is opt-in via `SSH_ALLOW_PORT_FORWARD` and binds
+  loopback-only unless `SSH_FORWARD_ALLOW_PUBLIC_BIND` is set (the remote-bind
+  side of `-R` is additionally governed by the target's own GatewayPorts). Elevated (sudo) file access is opt-in
   via `SSH_ALLOW_SUDO`: when enabled, the file browser's `sudo` toggle routes
   SFTP through an `sftp-server` launched under `sudo` over an exec channel (the
   SFTP counterpart to `sudo su`), so file ops run as root — the target's sudoers
