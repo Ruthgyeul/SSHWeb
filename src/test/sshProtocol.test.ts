@@ -32,6 +32,7 @@ import {
   parseOctalMode,
   sortEntries,
   sortEntriesBy,
+  summarizeUploads,
   DEFAULT_SORT_DIR,
   isLargeForEditor,
   EDITOR_WARN_BYTES,
@@ -685,5 +686,58 @@ describe("pathSegments", () => {
       { name: "a", path: "/a" },
       { name: "b", path: "/a/b" },
     ]);
+  });
+});
+
+describe("summarizeUploads", () => {
+  it("returns a complete, 100% summary for an empty batch", () => {
+    expect(summarizeUploads([])).toEqual({
+      files: 0,
+      sent: 0,
+      total: 0,
+      pct: 100,
+      interrupted: false,
+      queued: 0,
+    });
+  });
+
+  it("sums bytes and rounds the overall percentage", () => {
+    const s = summarizeUploads([
+      { sent: 50, total: 100, status: "uploading" },
+      { sent: 25, total: 100, status: "uploading" },
+    ]);
+    expect(s.files).toBe(2);
+    expect(s.sent).toBe(75);
+    expect(s.total).toBe(200);
+    expect(s.pct).toBe(38); // 75/200 = 37.5 → 38
+  });
+
+  it("counts queued items and flags any interruption", () => {
+    const s = summarizeUploads([
+      { sent: 10, total: 100, status: "uploading" },
+      { sent: 0, total: 100, status: "queued" },
+      { sent: 0, total: 100, status: "queued" },
+      { sent: 40, total: 100, status: "interrupted" },
+    ]);
+    expect(s.files).toBe(4);
+    expect(s.queued).toBe(2);
+    expect(s.interrupted).toBe(true);
+  });
+
+  it("reports 100% when there are no bytes to move (all empty files)", () => {
+    const s = summarizeUploads([
+      { sent: 0, total: 0, status: "uploading" },
+      { sent: 0, total: 0, status: "queued" },
+    ]);
+    expect(s.pct).toBe(100);
+    expect(s.queued).toBe(1);
+  });
+
+  it("clamps the percentage to 0–100 and ignores negative inputs", () => {
+    expect(summarizeUploads([{ sent: 150, total: 100 }]).pct).toBe(100);
+    const s = summarizeUploads([{ sent: -10, total: -5 }]);
+    expect(s.sent).toBe(0);
+    expect(s.total).toBe(0);
+    expect(s.pct).toBe(100);
   });
 });
