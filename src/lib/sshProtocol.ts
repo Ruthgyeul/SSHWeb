@@ -32,6 +32,19 @@ export interface FileEntry {
   target?: string;
 }
 
+/** A recursive-search hit: a matched entry plus its absolute remote path. */
+export interface FindEntry extends FileEntry {
+  /** Absolute path of the match on the remote host. */
+  path: string;
+}
+
+/**
+ * Max recursive-search hits the bridge returns before it stops and flags the
+ * result truncated. Bounds the reply size and the walk cost. Mirrored in
+ * `server.mjs`, which also caps the number of filesystem nodes it visits.
+ */
+export const MAX_FIND_RESULTS = 500;
+
 /* ------------------------------------------------------------------ */
 /* Client → server messages                                            */
 /* ------------------------------------------------------------------ */
@@ -93,6 +106,11 @@ export type ClientMessage =
       mkdirp?: boolean;
     }
   | { t: "sftp-mkdir"; path: string }
+  // Recursively search `path` (and its subdirectories) for entries whose name
+  // contains `query` (case-insensitive). The bridge walks the tree reading only
+  // directory listings/metadata — never file contents — and replies with a
+  // single `sftp-find-result`. Symlinked directories are not descended.
+  | { t: "sftp-find"; path: string; query: string }
   // Turn the file browser's elevated (sudo) mode on or off. When enabled the
   // bridge routes every SFTP operation through an `sftp-server` running as root
   // (`sudo sftp-server` over an exec channel), so files the login user can't
@@ -171,6 +189,16 @@ export type ServerMessage =
       prompts: KbdPrompt[];
     }
   | { t: "sftp-list"; path: string; entries: FileEntry[] }
+  // Result of a recursive `sftp-find`: matches under `path` for `query`, each
+  // carrying its absolute path. `truncated` is true when the walk hit the
+  // result/node budget before finishing (see MAX_FIND_RESULTS).
+  | {
+      t: "sftp-find-result";
+      path: string;
+      query: string;
+      entries: FindEntry[];
+      truncated: boolean;
+    }
   // File contents. `edit`/`preview`/`thumb` echo the request flags: `edit` opens
   // the editor, `preview` opens the image preview modal, `thumb` feeds a grid
   // thumbnail; none of them triggers a download.

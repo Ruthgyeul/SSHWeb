@@ -16,6 +16,7 @@ import {
   previewKind,
   sortEntriesBy,
   type FileEntry,
+  type FindEntry,
   type PreviewKind,
   type SortKey,
 } from "@/lib/sshProtocol";
@@ -36,6 +37,14 @@ export interface DownloadItem {
   name: string;
   received: number;
   total: number;
+}
+
+/** An active recursive-search: the query, its in-flight/result state, and hits. */
+export interface SearchState {
+  query: string;
+  loading: boolean;
+  results: FindEntry[];
+  truncated: boolean;
 }
 
 const actionBtn =
@@ -233,6 +242,9 @@ export function FileBrowser({
   onRefresh,
   thumbnails,
   onRequestThumbnail,
+  search,
+  onSearch,
+  onClearSearch,
 }: {
   cwd: string;
   entries: FileEntry[];
@@ -267,10 +279,20 @@ export function FileBrowser({
   thumbnails: Record<string, string>;
   /** Ask the parent to fetch a thumbnail for `path` (deduped upstream). */
   onRequestThumbnail: (path: string) => void;
+  /** Active recursive search, or null when browsing the normal listing. */
+  search: SearchState | null;
+  /** Run a recursive search of the current directory for `query`. */
+  onSearch: (query: string) => void;
+  /** Exit search mode and return to the normal listing. */
+  onClearSearch: () => void;
 }) {
   const uploadRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  // Recursive-search bar: local input text + whether the bar is shown. Results
+  // (and the loading state) come from the `search` prop, driven by the bridge.
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
   // List vs. grid (thumbnail) layout, persisted across sessions/tabs.
   const [viewMode, setViewMode] = useFileViewMode();
   // Sort field + direction, persisted across sessions/tabs. `toggleSort` flips
@@ -305,6 +327,28 @@ export function FileBrowser({
   const atRoot = cwd === "/";
   const segments = pathSegments(cwd);
   const pathFor = (name: string) => `${cwd.replace(/\/$/, "")}/${name}`;
+  // Display an absolute search-hit path relative to the search root (cwd).
+  const relTo = (path: string) => {
+    const b = cwd.replace(/\/$/, "");
+    if (path === b) return path;
+    return path.startsWith(`${b}/`) ? path.slice(b.length + 1) : path;
+  };
+  // Open a search hit by type, mirroring the listing's click-to-open behaviour.
+  const openResult = (r: FindEntry) => {
+    if (r.type === "dir") onNavigate(r.path);
+    else if (isProbablyPreviewableFile(r.name)) onPreview(r.path, r.name);
+    else if (isProbablyTextFile(r.name)) onEdit(r.path, r.name, r.size);
+    else onOpenUnsupported(r.path, r.name);
+  };
+  const submitSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSearch(searchInput);
+  };
+  const closeSearch = () => {
+    setShowSearch(false);
+    setSearchInput("");
+    onClearSearch();
+  };
 
   const selNames = selection.cwd === cwd ? selection.names : EMPTY_NAMES;
   const isSelected = (name: string) => selNames.has(name);
@@ -415,6 +459,20 @@ export function FileBrowser({
           title="Refresh"
         >
           ⟳
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowSearch((v) => !v)}
+          aria-pressed={showSearch}
+          className={cn(
+            "rounded border px-2 py-1 text-xs transition-colors",
+            showSearch
+              ? "border-term-accent/50 bg-term-accent/15 text-term-accent"
+              : "border-term-border text-term-muted hover:text-term-text",
+          )}
+          title="Search this folder and its subfolders"
+        >
+          🔎
         </button>
         {/* List / grid layout toggle */}
         <div
@@ -579,8 +637,50 @@ export function FileBrowser({
         </div>
       )}
 
+      {/* Recursive subtree search bar */}
+      {showSearch && (
+        <form
+          onSubmit={submitSearch}
+          className="flex items-center gap-2 border-b border-term-border bg-term-panel/30 px-3 py-1.5"
+        >
+          <span className="text-xs text-term-faint" aria-hidden>
+            🔎
+          </span>
+          <input
+            type="text"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") closeSearch();
+            }}
+            placeholder="Search this folder and subfolders…"
+            autoFocus
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="min-w-0 flex-1 bg-transparent font-mono text-xs text-term-text outline-none placeholder:text-term-faint"
+            aria-label="Search files recursively"
+          />
+          <button
+            type="submit"
+            className="rounded border border-term-accent/40 bg-term-accent/10 px-2 py-0.5 text-xs text-term-accent hover:bg-term-accent/20"
+          >
+            Search
+          </button>
+          <button
+            type="button"
+            onClick={closeSearch}
+            className="rounded px-1 text-xs text-term-muted hover:text-term-text"
+            aria-label="Close search"
+            title="Close search (Esc)"
+          >
+            ✕
+          </button>
+        </form>
+      )}
+
       {/* In-CWD name filter */}
-      {sorted.length > 0 && (
+      {!search && sorted.length > 0 && (
         <div className="flex items-center gap-2 border-b border-term-border bg-term-panel/30 px-3 py-1.5">
           <span className="text-xs text-term-faint" aria-hidden>
             🔍
@@ -666,7 +766,7 @@ export function FileBrowser({
       )}
 
       {/* Selection bar: select-all + bulk actions on the checked entries */}
-      {sorted.length > 0 && (
+      {!search && sorted.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 border-b border-term-border bg-term-panel/40 px-3 py-1.5 text-xs">
           <label className="flex items-center gap-2 text-term-muted">
             <input
@@ -739,6 +839,79 @@ export function FileBrowser({
             </code>
           </div>
         )}
+        {search ? (
+          <div className="flex h-full flex-col">
+            <div className="flex items-center gap-2 border-b border-term-border bg-term-panel/40 px-3 py-1.5 text-xs">
+              <span className="min-w-0 truncate text-term-muted">
+                {search.loading
+                  ? `Searching for “${search.query}”…`
+                  : `${search.results.length}${search.truncated ? "+" : ""} result${
+                      search.results.length === 1 ? "" : "s"
+                    } for “${search.query}”`}
+              </span>
+              {search.truncated && !search.loading && (
+                <span className="flex-none text-term-faint">
+                  (first {search.results.length})
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={onClearSearch}
+                className="ml-auto flex-none rounded px-2 py-0.5 text-term-muted hover:text-term-text"
+              >
+                Clear
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto">
+              {search.loading ? (
+                <div className="flex items-center justify-center py-12">
+                  <span
+                    className="h-7 w-7 animate-spin rounded-full border-2 border-term-border border-t-term-accent"
+                    role="status"
+                    aria-label="Searching"
+                  />
+                </div>
+              ) : search.results.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
+                  <span className="text-3xl opacity-60" aria-hidden>
+                    🔎
+                  </span>
+                  <p className="text-sm">No matches for “{search.query}”</p>
+                  <p className="text-xs text-term-faint">
+                    Searched {cwd} and its subfolders.
+                  </p>
+                </div>
+              ) : (
+                <ul>
+                  {search.results.map((r) => (
+                    <li key={r.path}>
+                      <button
+                        type="button"
+                        onClick={() => openResult(r)}
+                        title={r.path}
+                        className="flex w-full items-center gap-2 border-b border-term-border/50 px-3 py-1.5 text-left text-sm hover:bg-term-panel/60"
+                      >
+                        <span aria-hidden>{fileIcon(r)}</span>
+                        <span
+                          className={cn(
+                            "min-w-0 flex-1 truncate",
+                            r.type === "dir" ? "text-term-accent" : "text-term-dim",
+                          )}
+                        >
+                          {relTo(r.path)}
+                        </span>
+                        <span className="flex-none font-mono text-xs text-term-faint">
+                          {formatSize(r.size, r.type)}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
         {loading && <p className="px-3 py-4 text-xs text-term-muted">Loading…</p>}
         {!loading && sorted.length === 0 && (
           <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
@@ -1066,6 +1239,8 @@ export function FileBrowser({
               );
             })}
           </div>
+        )}
+          </>
         )}
       </div>
     </div>
