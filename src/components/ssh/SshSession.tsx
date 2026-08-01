@@ -21,6 +21,7 @@ import {
 } from "@/lib/sshProtocol";
 import { getThemePreset } from "@/lib/terminalTheme";
 import {
+  clearThumbnailCache,
   fileVersionTag,
   getCachedThumbnails,
   putCachedThumbnail,
@@ -290,6 +291,17 @@ export function SshSession({
     },
     [pumpThumbs],
   );
+
+  // "Clear thumbnail cache" (settings): wipe the persistent IndexedDB store and
+  // the in-memory cache, then let the visible tiles re-request from the bridge
+  // (clearing `requestedThumbsRef` un-blocks their intersection observers).
+  const clearThumbnails = useCallback(async () => {
+    await clearThumbnailCache();
+    requestedThumbsRef.current = new Set();
+    thumbQueueRef.current = [];
+    thumbInFlightRef.current = 0;
+    setThumbnails({});
+  }, []);
 
   const handleServerMessage = useCallback(
     (msg: ServerMessage) => {
@@ -1163,7 +1175,12 @@ export function SshSession({
                 🔍
               </button>
             )}
-            <TerminalSettings prefs={termPrefs} onChange={updateTermPrefs} />
+            <TerminalSettings
+              prefs={termPrefs}
+              onChange={updateTermPrefs}
+              onClearThumbnailCache={clearThumbnails}
+              thumbnailCacheElevated={elevated}
+            />
             {(["terminal", "files", "tunnels"] as const).map((t) => (
               <button
                 key={t}

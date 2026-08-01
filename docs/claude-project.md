@@ -147,10 +147,16 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   health probe at `GET /api/health`, and shuts down gracefully (drains sessions
   on SIGTERM/SIGINT). Grid thumbnails are downscaled in-memory with `sharp`
   (`THUMBNAIL_PIXELS`, mirrored from `sshProtocol.ts`) before being sent — the
-  original file is only read, never modified — and `sharp` is loaded optionally,
-  so a build without it just falls back to sending full-size images. The client
-  concurrency-limits thumbnail reads and caches finished thumbnails in IndexedDB
-  (`src/lib/thumbnailCache.ts`) so revisiting a folder needs no re-fetch.
+  original file is only read, never modified — and video tiles get a poster
+  frame extracted by `ffmpeg` (the clip is piped to ffmpeg on stdin, nothing
+  touches disk) and downscaled the same way, so a folder of videos sends KB per
+  tile instead of whole clips. Both `sharp` and `ffmpeg` are optional (probed at
+  startup): a build without `sharp` falls back to sending full-size images, and
+  one without `ffmpeg` falls back to sending videos whole for the client to
+  poster. The client concurrency-limits thumbnail reads and caches finished
+  thumbnails in IndexedDB (`src/lib/thumbnailCache.ts`) so revisiting a folder
+  needs no re-fetch; a "Clear thumbnail cache" action in the settings popover
+  (non-elevated sessions only) wipes that store on demand.
 
 ## Assets
 

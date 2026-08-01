@@ -23,6 +23,7 @@ import { createServer } from "node:http";
 import net from "node:net";
 import { parse } from "node:url";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { spawn } from "node:child_process";
 import next from "next";
 import nextEnv from "@next/env";
 import { WebSocketServer } from "ws";
@@ -42,6 +43,97 @@ try {
   console.warn(
     "[sshweb] sharp unavailable — grid thumbnails will send full-size images.",
   );
+}
+
+// `ffmpeg` extracts a poster frame from videos so a grid tile shows an actual
+// still (downscaled to a tiny image, like the photo thumbnails) instead of the
+// browser having to download the whole clip and paint frame 0. It's an external
+// binary probed once at startup; when it's missing we degrade gracefully and
+// keep the old behaviour (send the whole video for the client to poster).
+let ffmpegAvailable = false;
+try {
+  await new Promise((resolve) => {
+    let proc;
+    try {
+      proc = spawn("ffmpeg", ["-version"], { stdio: "ignore" });
+    } catch {
+      return resolve();
+    }
+    proc.on("error", () => resolve());
+    proc.on("close", (code) => {
+      ffmpegAvailable = code === 0;
+      resolve();
+    });
+  });
+} catch {
+  /* probe failed — treat ffmpeg as unavailable */
+}
+if (!ffmpegAvailable) {
+  console.warn(
+    "[sshweb] ffmpeg unavailable — video grid thumbnails will send the whole clip.",
+  );
+}
+
+/**
+ * Extract a representative poster frame from a video buffer via ffmpeg, scaled
+ * to fit the thumbnail box and returned as PNG bytes (or `null` on any failure).
+ * The video is fed on stdin and the frame collected from stdout, so nothing
+ * touches disk and the original file is never modified. ffmpeg exits after one
+ * frame, so a broken-pipe error on the stdin write is expected and ignored.
+ */
+function extractVideoFrame(buffer) {
+  return new Promise((resolve) => {
+    let proc;
+    try {
+      proc = spawn("ffmpeg", [
+        "-loglevel",
+        "error",
+        "-i",
+        "pipe:0",
+        // `thumbnail` picks a representative frame from the opening of the clip
+        // rather than a possibly-black frame 0; then fit it into the box.
+        "-vf",
+        `thumbnail,scale=w=${THUMBNAIL_PIXELS}:h=${THUMBNAIL_PIXELS}:force_original_aspect_ratio=decrease`,
+        "-frames:v",
+        "1",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "png",
+        "pipe:1",
+      ]);
+    } catch {
+      return resolve(null);
+    }
+    const chunks = [];
+    let settled = false;
+    const done = (val) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(val);
+    };
+    // Guard against a hung/very slow decode holding the concurrency slot.
+    const timer = setTimeout(() => {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+      done(null);
+    }, 15000);
+    proc.stdout.on("data", (c) => chunks.push(c));
+    proc.stdout.on("error", () => {});
+    // ffmpeg stops reading once it has its frame → EPIPE on the write is normal.
+    proc.stdin.on("error", () => {});
+    proc.on("error", () => done(null));
+    proc.on("close", (code) => {
+      const out = Buffer.concat(chunks);
+      done(code === 0 && out.length > 0 ? out : null);
+    });
+    proc.stdin.write(buffer);
+    proc.stdin.end();
+  });
 }
 
 const dev = process.env.NODE_ENV !== "production";
@@ -1364,8 +1456,9 @@ wss.on("connection", (ws, req) => {
             // Thumbnails feed the grid view. A grid renders many at once, so this
             // path is optimised for volume: images are downscaled to a tiny WebP
             // in-memory (the original is only read, never modified) so what
-            // crosses the wire is KB not MB; videos are still sent whole (no
-            // server-side frame extractor) and let a <video> paint frame 0.
+            // crosses the wire is KB not MB; videos have a poster frame extracted
+            // by ffmpeg and downscaled the same way. Both fall back to sending the
+            // original bytes whole when their optimiser (sharp/ffmpeg) is absent.
             //
             // A `thumb` request ALWAYS gets a reply — even a skip or error sends
             // an empty payload — so the client can drop the tile back to its icon
@@ -1387,7 +1480,7 @@ wss.on("connection", (ws, req) => {
                 if (sharp) {
                   try {
                     // sharp throws on non-image input (e.g. video); fall through
-                    // to the raw bytes for those. `.rotate()` honours EXIF.
+                    // to the video path for those. `.rotate()` honours EXIF.
                     const out = await sharp(buffer)
                       .rotate()
                       .resize(THUMBNAIL_PIXELS, THUMBNAIL_PIXELS, {
@@ -1405,9 +1498,47 @@ wss.on("connection", (ws, req) => {
                       mime: "image/webp",
                     });
                   } catch {
-                    // Not a sharp-decodable image (video, or corrupt) — send raw.
+                    // Not a sharp-decodable image (video, or corrupt) — try ffmpeg.
                   }
                 }
+                // Video: extract a poster frame and (if sharp is around) re-encode
+                // it to a tiny WebP; otherwise send the ffmpeg PNG frame as-is.
+                if (ffmpegAvailable) {
+                  const frame = await extractVideoFrame(buffer);
+                  if (frame) {
+                    if (sharp) {
+                      try {
+                        const out = await sharp(frame)
+                          .resize(THUMBNAIL_PIXELS, THUMBNAIL_PIXELS, {
+                            fit: "inside",
+                            withoutEnlargement: true,
+                          })
+                          .webp({ quality: 70 })
+                          .toBuffer();
+                        return send({
+                          t: "sftp-read",
+                          path: msg.path,
+                          name,
+                          dataB64: out.toString("base64"),
+                          thumb: true,
+                          mime: "image/webp",
+                        });
+                      } catch {
+                        // sharp couldn't re-encode the frame — send the PNG below.
+                      }
+                    }
+                    return send({
+                      t: "sftp-read",
+                      path: msg.path,
+                      name,
+                      dataB64: frame.toString("base64"),
+                      thumb: true,
+                      mime: "image/png",
+                    });
+                  }
+                }
+                // No optimiser managed it — send the original bytes whole and let
+                // the client render them (an <img>/<video> from the raw file).
                 send({
                   t: "sftp-read",
                   path: msg.path,

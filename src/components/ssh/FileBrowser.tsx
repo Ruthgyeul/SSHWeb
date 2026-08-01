@@ -91,29 +91,25 @@ function Thumbnail({
     return () => io.disconnect();
   }, [path, src, thumbnailable, onRequest]);
 
+  // A video whose thumbnail is a server-extracted poster frame arrives as an
+  // image data URL — render it as an <img>. Only a raw-video fallback (no
+  // ffmpeg/sharp on the bridge) is a `data:video/…` URL that needs a <video>.
+  const isVideoData = Boolean(src) && src!.startsWith("data:video");
   return (
     <div
       ref={ref}
       className="relative flex h-24 w-full items-center justify-center overflow-hidden rounded bg-term-panel/50 text-4xl"
     >
-      {src && kind === "video" ? (
-        <>
-          <video
-            // Media fragment nudges the element to paint a frame (not a blank
-            // poster) once metadata loads; muted + no controls for a still look.
-            src={`${src}#t=0.1`}
-            muted
-            playsInline
-            preload="metadata"
-            className="h-full w-full object-cover"
-          />
-          <span
-            className="pointer-events-none absolute text-2xl drop-shadow"
-            aria-hidden
-          >
-            ▶
-          </span>
-        </>
+      {src && isVideoData ? (
+        <video
+          // Media fragment nudges the element to paint a frame (not a blank
+          // poster) once metadata loads; muted + no controls for a still look.
+          src={`${src}#t=0.1`}
+          muted
+          playsInline
+          preload="metadata"
+          className="h-full w-full object-cover"
+        />
       ) : src ? (
         // eslint-disable-next-line @next/next/no-img-element -- remote data: URL
         <img
@@ -125,6 +121,14 @@ function Thumbnail({
         />
       ) : (
         <span aria-hidden>{fallback}</span>
+      )}
+      {src && kind === "video" && (
+        <span
+          className="pointer-events-none absolute text-2xl drop-shadow"
+          aria-hidden
+        >
+          ▶
+        </span>
       )}
     </div>
   );
