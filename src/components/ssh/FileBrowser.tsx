@@ -18,6 +18,7 @@ import {
   summarizeUploads,
   type FileEntry,
   type FindEntry,
+  type GrepEntry,
   type PreviewKind,
   type SortKey,
 } from "@/lib/sshProtocol";
@@ -47,12 +48,22 @@ export interface DownloadItem {
   total: number;
 }
 
-/** An active recursive-search: the query, its in-flight/result state, and hits. */
+/** Which axis a recursive search runs on: file *names* or file *contents*. */
+export type SearchMode = "name" | "content";
+
+/** An active recursive-search: the query, its axis, in-flight/result state, and
+ * hits. Content-mode hits are `GrepEntry` (they carry a line + preview). */
 export interface SearchState {
   query: string;
+  mode: SearchMode;
   loading: boolean;
-  results: FindEntry[];
+  results: (FindEntry | GrepEntry)[];
   truncated: boolean;
+}
+
+/** Type guard: a content-search hit (carries a matching line + preview). */
+function isGrepHit(entry: FindEntry | GrepEntry): entry is GrepEntry {
+  return "preview" in entry;
 }
 
 const actionBtn =
@@ -299,8 +310,9 @@ export function FileBrowser({
   onRequestThumbnail: (path: string) => void;
   /** Active recursive search, or null when browsing the normal listing. */
   search: SearchState | null;
-  /** Run a recursive search of the current directory for `query`. */
-  onSearch: (query: string) => void;
+  /** Run a recursive search of the current directory for `query` — by file name
+   * or by file contents (grep), per `mode`. */
+  onSearch: (query: string, mode: SearchMode) => void;
   /** Exit search mode and return to the normal listing. */
   onClearSearch: () => void;
 }) {
@@ -313,6 +325,8 @@ export function FileBrowser({
   // (and the loading state) come from the `search` prop, driven by the bridge.
   const [showSearch, setShowSearch] = useState(false);
   const [searchInput, setSearchInput] = useState("");
+  // Search axis: match file names, or grep file contents.
+  const [searchMode, setSearchMode] = useState<SearchMode>("name");
   // List vs. grid (thumbnail) layout, persisted across sessions/tabs.
   const [viewMode, setViewMode] = useFileViewMode();
   // Sort field + direction, persisted across sessions/tabs. `toggleSort` flips
@@ -362,7 +376,7 @@ export function FileBrowser({
   };
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    onSearch(searchInput);
+    onSearch(searchInput, searchMode);
   };
   const closeSearch = () => {
     setShowSearch(false);
@@ -704,7 +718,11 @@ export function FileBrowser({
             onKeyDown={(e) => {
               if (e.key === "Escape") closeSearch();
             }}
-            placeholder="Search this folder and subfolders…"
+            placeholder={
+              searchMode === "content"
+                ? "Search file contents in this folder and subfolders…"
+                : "Search file names in this folder and subfolders…"
+            }
             autoFocus
             autoCapitalize="off"
             autoCorrect="off"
@@ -712,6 +730,37 @@ export function FileBrowser({
             className="min-w-0 flex-1 bg-transparent font-mono text-xs text-term-text outline-none placeholder:text-term-faint"
             aria-label="Search files recursively"
           />
+          {/* Name vs. content (grep) axis. Content search opens each file and
+              scans its text on the bridge (size-capped); name search reads only
+              listings/metadata. */}
+          <div
+            className="flex flex-none overflow-hidden rounded border border-term-border"
+            role="group"
+            aria-label="Search by"
+          >
+            {(["name", "content"] as const).map((m, i) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setSearchMode(m)}
+                aria-pressed={searchMode === m}
+                className={cn(
+                  "px-2 py-0.5 text-xs capitalize transition-colors",
+                  i > 0 && "border-l border-term-border",
+                  searchMode === m
+                    ? "bg-term-accent/15 text-term-accent"
+                    : "text-term-muted hover:text-term-text",
+                )}
+                title={
+                  m === "content"
+                    ? "Search inside file contents (grep)"
+                    : "Search file names"
+                }
+              >
+                {m}
+              </button>
+            ))}
+          </div>
           <button
             type="submit"
             className="rounded border border-term-accent/40 bg-term-accent/10 px-2 py-0.5 text-xs text-term-accent hover:bg-term-accent/20"
@@ -990,10 +1039,14 @@ export function FileBrowser({
             <div className="flex items-center gap-2 border-b border-term-border bg-term-panel/40 px-3 py-1.5 text-xs">
               <span className="min-w-0 truncate text-term-muted">
                 {search.loading
-                  ? `Searching for “${search.query}”…`
+                  ? `Searching ${
+                      search.mode === "content" ? "file contents" : "names"
+                    } for “${search.query}”…`
                   : `${search.results.length}${search.truncated ? "+" : ""} result${
                       search.results.length === 1 ? "" : "s"
-                    } for “${search.query}”`}
+                    } for “${search.query}”${
+                      search.mode === "content" ? " in file contents" : ""
+                    }`}
               </span>
               {search.truncated && !search.loading && (
                 <span className="flex-none text-term-faint">
@@ -1022,36 +1075,55 @@ export function FileBrowser({
                   <span className="text-3xl opacity-60" aria-hidden>
                     🔎
                   </span>
-                  <p className="text-sm">No matches for “{search.query}”</p>
+                  <p className="text-sm">
+                    {search.mode === "content"
+                      ? `No file contents matched “${search.query}”`
+                      : `No matches for “${search.query}”`}
+                  </p>
                   <p className="text-xs text-term-faint">
                     Searched {cwd} and its subfolders.
                   </p>
                 </div>
               ) : (
                 <ul>
-                  {search.results.map((r) => (
-                    <li key={r.path}>
-                      <button
-                        type="button"
-                        onClick={() => openResult(r)}
-                        title={r.path}
-                        className="flex w-full items-center gap-2 border-b border-term-border/50 px-3 py-1.5 text-left text-sm hover:bg-term-panel/60"
-                      >
-                        <span aria-hidden>{fileIcon(r)}</span>
-                        <span
-                          className={cn(
-                            "min-w-0 flex-1 truncate",
-                            r.type === "dir" ? "text-term-accent" : "text-term-dim",
-                          )}
+                  {search.results.map((r) => {
+                    const grep = isGrepHit(r);
+                    return (
+                      <li key={r.path}>
+                        <button
+                          type="button"
+                          onClick={() => openResult(r)}
+                          title={r.path}
+                          className="flex w-full flex-col gap-0.5 border-b border-term-border/50 px-3 py-1.5 text-left text-sm hover:bg-term-panel/60"
                         >
-                          {relTo(r.path)}
-                        </span>
-                        <span className="flex-none font-mono text-xs text-term-faint">
-                          {formatSize(r.size, r.type)}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
+                          <span className="flex w-full items-center gap-2">
+                            <span aria-hidden>{fileIcon(r)}</span>
+                            <span
+                              className={cn(
+                                "min-w-0 flex-1 truncate",
+                                r.type === "dir"
+                                  ? "text-term-accent"
+                                  : "text-term-dim",
+                              )}
+                            >
+                              {relTo(r.path)}
+                            </span>
+                            <span className="flex-none font-mono text-xs text-term-faint">
+                              {formatSize(r.size, r.type)}
+                            </span>
+                          </span>
+                          {grep && (
+                            <span className="flex min-w-0 items-baseline gap-2 pl-6 font-mono text-xs text-term-faint">
+                              <span className="flex-none text-term-accent/70">
+                                :{r.line}
+                              </span>
+                              <span className="min-w-0 truncate">{r.preview}</span>
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>

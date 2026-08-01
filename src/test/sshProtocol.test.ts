@@ -33,6 +33,7 @@ import {
   sortEntries,
   sortEntriesBy,
   summarizeUploads,
+  grepFirstMatch,
   DEFAULT_SORT_DIR,
   isLargeForEditor,
   EDITOR_WARN_BYTES,
@@ -739,5 +740,43 @@ describe("summarizeUploads", () => {
     expect(s.sent).toBe(0);
     expect(s.total).toBe(0);
     expect(s.pct).toBe(100);
+  });
+});
+
+describe("grepFirstMatch", () => {
+  const text = "first line\n  const secret = 42;\nlast line\n";
+
+  it("returns the 1-based line number and a trimmed preview of the first hit", () => {
+    expect(grepFirstMatch(text, "secret")).toEqual({
+      line: 2,
+      preview: "const secret = 42;",
+    });
+  });
+
+  it("matches case-insensitively", () => {
+    expect(grepFirstMatch(text, "SECRET")?.line).toBe(2);
+    expect(grepFirstMatch("Hello World", "hello")?.line).toBe(1);
+  });
+
+  it("returns null when nothing matches or the query is empty", () => {
+    expect(grepFirstMatch(text, "nope")).toBeNull();
+    expect(grepFirstMatch(text, "")).toBeNull();
+  });
+
+  it("reports only the first matching line", () => {
+    expect(grepFirstMatch("a\nfoo\nbar\nfoo", "foo")?.line).toBe(2);
+  });
+
+  it("handles CRLF and lone-CR line endings", () => {
+    expect(grepFirstMatch("one\r\ntwo\r\nthree", "two")?.line).toBe(2);
+    expect(grepFirstMatch("one\rtwo\rthree", "three")?.line).toBe(3);
+  });
+
+  it("clamps a long preview to maxPreview and appends an ellipsis", () => {
+    const long = `x${"a".repeat(500)}`;
+    const hit = grepFirstMatch(long, "x", 10);
+    expect(hit).not.toBeNull();
+    expect(hit!.preview.endsWith("…")).toBe(true);
+    expect(hit!.preview.length).toBe(11); // 10 chars + ellipsis
   });
 });

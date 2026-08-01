@@ -38,12 +38,56 @@ export interface FindEntry extends FileEntry {
   path: string;
 }
 
+/** A content-search (grep) hit: a file whose *contents* matched, with the first
+ * matching line's number and a short preview of that line. */
+export interface GrepEntry extends FindEntry {
+  /** 1-based line number of the first match within the file. */
+  line: number;
+  /** The matching line, leading-whitespace-trimmed and clamped for display. */
+  preview: string;
+}
+
 /**
  * Max recursive-search hits the bridge returns before it stops and flags the
  * result truncated. Bounds the reply size and the walk cost. Mirrored in
  * `server.mjs`, which also caps the number of filesystem nodes it visits.
  */
 export const MAX_FIND_RESULTS = 500;
+
+/**
+ * Largest file (bytes) the content search (grep) will read and scan. Unlike the
+ * name search — which reads only listings/metadata — grep must open file
+ * contents, so this caps the per-file read; larger files are skipped. Mirrored
+ * in `server.mjs`, which also enforces a total-bytes budget for one search.
+ */
+export const GREP_MAX_FILE_BYTES = 1024 * 1024;
+
+/**
+ * Find the first line of `text` containing `query` (case-insensitive), returning
+ * its 1-based line number and a display-ready preview (leading whitespace
+ * trimmed, clamped to `maxPreview` chars with an ellipsis), or `null` when there
+ * is no match. Pure so the file browser and the bridge (which mirrors it) share
+ * one rule; unit-tested.
+ */
+export function grepFirstMatch(
+  text: string,
+  query: string,
+  maxPreview = 160,
+): { line: number; preview: string } | null {
+  const needle = query.toLowerCase();
+  if (needle === "") return null;
+  const lines = text.split(/\r\n|\r|\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].toLowerCase().includes(needle)) {
+      let preview = lines[i].replace(/^\s+/, "");
+      if (preview.length > maxPreview) {
+        preview = `${preview.slice(0, maxPreview)}…`;
+      }
+      return { line: i + 1, preview };
+    }
+  }
+  return null;
+}
 
 /* ------------------------------------------------------------------ */
 /* Client → server messages                                            */
@@ -125,6 +169,12 @@ export type ClientMessage =
   // directory listings/metadata — never file contents — and replies with a
   // single `sftp-find-result`. Symlinked directories are not descended.
   | { t: "sftp-find"; path: string; query: string }
+  // Recursively search file *contents* under `path` for lines containing `query`
+  // (case-insensitive). Unlike `sftp-find`, the bridge opens each candidate file
+  // and scans it (skipping binaries and files over `GREP_MAX_FILE_BYTES`, and
+  // bounded by a total-bytes budget) — the files are only read, never modified —
+  // and replies with a single `sftp-grep-result`.
+  | { t: "sftp-grep"; path: string; query: string }
   // Turn the file browser's elevated (sudo) mode on or off. When enabled the
   // bridge routes every SFTP operation through an `sftp-server` running as root
   // (`sudo sftp-server` over an exec channel), so files the login user can't
@@ -227,6 +277,16 @@ export type ServerMessage =
       path: string;
       query: string;
       entries: FindEntry[];
+      truncated: boolean;
+    }
+  // Result of a recursive content search (`sftp-grep`): files under `path` whose
+  // contents matched `query`, each with the first matching line + preview.
+  // `truncated` is true when the hit/node/byte budget was reached first.
+  | {
+      t: "sftp-grep-result";
+      path: string;
+      query: string;
+      entries: GrepEntry[];
       truncated: boolean;
     }
   // File contents. `edit`/`preview`/`thumb` echo the request flags: `edit` opens
