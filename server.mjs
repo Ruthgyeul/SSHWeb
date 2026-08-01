@@ -636,6 +636,74 @@ function parentDirOf(p) {
   return idx <= 0 ? "/" : p.slice(0, idx);
 }
 
+/** Join a remote directory path with a child name (single-slash separator). */
+function joinRemote(dir, name) {
+  return (dir.endsWith("/") ? dir : `${dir}/`) + name;
+}
+
+/**
+ * Copy one file over SFTP by streaming the source into the destination. The
+ * source is only read (never modified); the destination is a new file. Bytes
+ * pass through the bridge in a streamed pipe, so memory stays bounded.
+ */
+function copyFile(s, from, to, done) {
+  let settled = false;
+  const finish = (err) => {
+    if (settled) return;
+    settled = true;
+    done(err || null);
+  };
+  const rs = s.createReadStream(from);
+  const ws = s.createWriteStream(to);
+  rs.on("error", (e) => {
+    try {
+      ws.destroy();
+    } catch {
+      /* stream already gone */
+    }
+    finish(e);
+  });
+  ws.on("error", (e) => {
+    try {
+      rs.destroy();
+    } catch {
+      /* stream already gone */
+    }
+    finish(e);
+  });
+  ws.on("close", () => finish(null));
+  rs.pipe(ws);
+}
+
+/**
+ * Recursively copy a directory over SFTP: create `to`, then copy each child
+ * (files streamed via {@link copyFile}, subdirectories recursively). Symlinks
+ * and special files are skipped. Originals are only read, never modified.
+ */
+function copyDir(s, from, to, done) {
+  s.mkdir(to, () => {
+    // An existing destination directory is fine — merge into it.
+    s.readdir(from, (err, list) => {
+      if (err) return done(err);
+      let i = 0;
+      const next = () => {
+        if (i >= list.length) return done(null);
+        const item = list[i++];
+        const childFrom = joinRemote(from, item.filename);
+        const childTo = joinRemote(to, item.filename);
+        if (item.attrs.isDirectory?.()) {
+          copyDir(s, childFrom, childTo, (e) => (e ? done(e) : next()));
+        } else if (item.attrs.isFile?.()) {
+          copyFile(s, childFrom, childTo, (e) => (e ? done(e) : next()));
+        } else {
+          next(); // skip symlinks / specials
+        }
+      };
+      next();
+    });
+  });
+}
+
 /**
  * Recursively create `dir` over SFTP (like `mkdir -p`), then call `done`. An
  * already-existing directory is not an error here: the final `mkdir`'s error is
@@ -1138,6 +1206,28 @@ wss.on("connection", (ws, req) => {
       };
 
       walk(root, () => reply(results, truncated));
+    });
+  }
+
+  /** Copy (duplicate) a file or directory to a new path over SFTP. */
+  function handleCopy(msg) {
+    withSftp((s) => {
+      const from = String(msg.from || "");
+      const to = String(msg.to || "");
+      if (!from || !to) {
+        return sendError("Copy needs a source and destination.", "sftp");
+      }
+      if (to === from) return sendError("Cannot copy onto itself.", "sftp");
+      s.stat(from, (err, stats) => {
+        if (err) return sendError(err.message, "sftp");
+        const done = (e) => {
+          if (e) return sendError(e.message, "sftp");
+          send({ t: "sftp-ok", op: "copy", path: to });
+        };
+        if (stats.isDirectory?.()) copyDir(s, from, to, done);
+        else if (stats.isFile?.()) copyFile(s, from, to, done);
+        else sendError("Can only copy files and directories.", "sftp");
+      });
     });
   }
 
@@ -1803,6 +1893,10 @@ wss.on("connection", (ws, req) => {
 
       case "sftp-find":
         handleFind(msg);
+        break;
+
+      case "sftp-copy":
+        handleCopy(msg);
         break;
 
       case "sftp-mkdir":

@@ -50,6 +50,9 @@ export interface SearchState {
 const actionBtn =
   "rounded px-1.5 py-0.5 text-xs text-term-muted transition-colors";
 
+/** DataTransfer type carrying an in-app dragged entry's absolute path (move). */
+const DRAG_TYPE = "application/x-sshweb-path";
+
 /** Shared empty set for a listing with no active selection (stable identity). */
 const EMPTY_NAMES: ReadonlySet<string> = new Set();
 
@@ -235,6 +238,8 @@ export function FileBrowser({
   onMkdir,
   onTouch,
   onRename,
+  onCopy,
+  onMove,
   onChmod,
   onEdit,
   onPreview,
@@ -268,6 +273,10 @@ export function FileBrowser({
   onMkdir: () => void;
   onTouch: () => void;
   onRename: (entry: FileEntry) => void;
+  /** Duplicate an entry in the current directory (copy with a new name). */
+  onCopy: (entry: FileEntry) => void;
+  /** Move an entry (absolute `fromPath`) into directory `toDir` (drag-drop). */
+  onMove: (fromPath: string, toDir: string) => void;
   onChmod: (entry: FileEntry) => void;
   onEdit: (path: string, name: string, size: number) => void;
   onPreview: (path: string, name: string) => void;
@@ -289,6 +298,8 @@ export function FileBrowser({
   const uploadRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  // Absolute path of the folder currently under an in-app move drag (highlight).
+  const [dropDir, setDropDir] = useState<string | null>(null);
   // Recursive-search bar: local input text + whether the bar is shown. Results
   // (and the loading state) come from the `search` prop, driven by the bridge.
   const [showSearch, setShowSearch] = useState(false);
@@ -350,6 +361,29 @@ export function FileBrowser({
     onClearSearch();
   };
 
+  // --- In-app drag-to-move (drag a row/tile onto a folder) ---
+  const isInternalDrag = (e: React.DragEvent) =>
+    e.dataTransfer.types.includes(DRAG_TYPE);
+  const onEntryDragStart = (e: React.DragEvent, path: string) => {
+    e.dataTransfer.setData(DRAG_TYPE, path);
+    e.dataTransfer.effectAllowed = "move";
+  };
+  const onFolderDragOver = (e: React.DragEvent, folderPath: string) => {
+    if (!isInternalDrag(e)) return; // OS file drag → let the container upload it
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    if (dropDir !== folderPath) setDropDir(folderPath);
+  };
+  const onFolderDrop = (e: React.DragEvent, folderPath: string) => {
+    if (!isInternalDrag(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDropDir(null);
+    const from = e.dataTransfer.getData(DRAG_TYPE);
+    if (from) onMove(from, folderPath);
+  };
+
   const selNames = selection.cwd === cwd ? selection.names : EMPTY_NAMES;
   const isSelected = (name: string) => selNames.has(name);
   const selectedEntries = sorted.filter((e) => selNames.has(e.name));
@@ -378,6 +412,14 @@ export function FileBrowser({
   const clearSelection = () => setSelection({ cwd, names: new Set() });
 
   async function handleDrop(e: React.DragEvent) {
+    // An in-app move drop that missed a folder target lands here — ignore it
+    // (nothing to upload); a folder's own handler does the actual move.
+    if (e.dataTransfer.types.includes(DRAG_TYPE)) {
+      e.preventDefault();
+      setDragging(false);
+      setDropDir(null);
+      return;
+    }
     e.preventDefault();
     setDragging(false);
     // Capture entries synchronously — the DataTransferItemList is emptied once
@@ -820,6 +862,8 @@ export function FileBrowser({
           dragging && "outline outline-2 -outline-offset-2 outline-term-accent",
         )}
         onDragOver={(e) => {
+          // In-app move drags are handled by folder rows, not the upload zone.
+          if (e.dataTransfer.types.includes(DRAG_TYPE)) return;
           e.preventDefault();
           if (!dragging) setDragging(true);
         }}
@@ -994,9 +1038,23 @@ export function FileBrowser({
               return (
                 <tr
                   key={entry.name}
+                  draggable
+                  onDragStart={(e) => onEntryDragStart(e, target)}
+                  onDragOver={
+                    isDir ? (e) => onFolderDragOver(e, target) : undefined
+                  }
+                  onDragLeave={
+                    isDir
+                      ? () => setDropDir((d) => (d === target ? null : d))
+                      : undefined
+                  }
+                  onDrop={isDir ? (e) => onFolderDrop(e, target) : undefined}
                   className={cn(
                     "border-b border-term-border/50 hover:bg-term-panel/60",
                     isSelected(entry.name) && "bg-term-accent/5",
+                    isDir &&
+                      dropDir === target &&
+                      "bg-term-accent/10 outline outline-2 -outline-offset-2 outline-term-accent",
                   )}
                 >
                   <td className="w-8 py-1.5 pl-3 pr-0 align-middle">
@@ -1084,6 +1142,14 @@ export function FileBrowser({
                     </button>
                     <button
                       type="button"
+                      onClick={() => onCopy(entry)}
+                      className={cn(actionBtn, "hover:text-term-text")}
+                      title="Duplicate"
+                    >
+                      cp
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => onChmod(entry)}
                       className={cn(actionBtn, "hover:text-term-text")}
                       title="Change permissions"
@@ -1125,11 +1191,25 @@ export function FileBrowser({
               return (
                 <div
                   key={entry.name}
+                  draggable
+                  onDragStart={(e) => onEntryDragStart(e, target)}
+                  onDragOver={
+                    isDir ? (e) => onFolderDragOver(e, target) : undefined
+                  }
+                  onDragLeave={
+                    isDir
+                      ? () => setDropDir((d) => (d === target ? null : d))
+                      : undefined
+                  }
+                  onDrop={isDir ? (e) => onFolderDrop(e, target) : undefined}
                   className={cn(
                     "group relative flex flex-col gap-1.5 rounded border p-2 transition-colors hover:bg-term-panel/60",
                     isSelected(entry.name)
                       ? "border-term-accent/50 bg-term-accent/5"
                       : "border-term-border/50",
+                    isDir &&
+                      dropDir === target &&
+                      "border-term-accent bg-term-accent/10 outline outline-2 -outline-offset-2 outline-term-accent",
                   )}
                 >
                   <input
@@ -1224,6 +1304,14 @@ export function FileBrowser({
                         title="Rename"
                       >
                         mv
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onCopy(entry)}
+                        className={cn(actionBtn, "hover:text-term-text")}
+                        title="Duplicate"
+                      >
+                        cp
                       </button>
                       <button
                         type="button"
