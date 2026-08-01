@@ -47,7 +47,12 @@ import {
 } from "./SessionStatus";
 import { XtermView, type XtermHandle } from "./XtermView";
 import { ConnectForm, type ConnectDetails } from "./ConnectForm";
-import { FileBrowser, type UploadItem, type DownloadItem } from "./FileBrowser";
+import {
+  FileBrowser,
+  type UploadItem,
+  type DownloadItem,
+  type SearchState,
+} from "./FileBrowser";
 import { FileEditor, type EditorFile } from "./FileEditor";
 import { Tunnels, type ForwardState, type NewForward } from "./Tunnels";
 import { FilePreview } from "./FilePreview";
@@ -166,6 +171,9 @@ export function SshSession({
   const cwdRef = useRef("~");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
+  // Active recursive subtree search (null = browsing the normal listing). The
+  // query is kept so a late `sftp-find-result` for a stale query is ignored.
+  const [search, setSearch] = useState<SearchState | null>(null);
   // Whether this deployment permits elevated (sudo) file access, learned from
   // the server's `caps` message once connected.
   const [canElevate, setCanElevate] = useState(false);
@@ -398,6 +406,23 @@ export function SshSession({
           setCwd(msg.path);
           setEntries(msg.entries);
           setFilesLoading(false);
+          // A fresh listing (navigation or refresh) exits search mode.
+          setSearch(null);
+          break;
+
+        case "sftp-find-result":
+          // Apply only if it answers the query we're still showing (a stale
+          // reply for an earlier query is dropped).
+          setSearch((prev) =>
+            prev && prev.query === msg.query
+              ? {
+                  ...prev,
+                  loading: false,
+                  results: msg.entries,
+                  truncated: msg.truncated,
+                }
+              : prev,
+          );
           break;
 
         case "sftp-read":
@@ -700,6 +725,7 @@ export function SshSession({
     setStatus("idle");
     setTarget(null);
     setEntries([]);
+    setSearch(null);
     setCanElevate(false);
     setElevated(false);
     setElevatedPending(false);
@@ -1097,6 +1123,20 @@ export function SshSession({
       },
     });
   };
+  // Recursive subtree search: send the query for the current directory and show
+  // a loading state until the bridge replies with `sftp-find-result`. Trimmed to
+  // match the server (which trims too), so `prev.query === msg.query` reconciles.
+  const onSearch = (query: string) => {
+    const q = query.trim();
+    if (!q) {
+      setSearch(null);
+      return;
+    }
+    setSearch({ query: q, loading: true, results: [], truncated: false });
+    send({ t: "sftp-find", path: cwd, query: q });
+  };
+  const onClearSearch = () => setSearch(null);
+
   // Open a file in the inline editor. A very large file in a textarea with live
   // highlighting can be sluggish, so warn (and let the user back out) before
   // requesting one past the editor size threshold; already-open files reopen
@@ -1326,6 +1366,9 @@ export function SshSession({
               }
               thumbnails={thumbnails}
               onRequestThumbnail={requestThumbnail}
+              search={search}
+              onSearch={onSearch}
+              onClearSearch={onClearSearch}
             />
             {preview && (
               <FilePreview

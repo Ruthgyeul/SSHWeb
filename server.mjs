@@ -174,6 +174,12 @@ const THUMBNAIL_VIDEO_MAX_BYTES = 8 * 1024 * 1024;
 // src/lib/sshProtocol.ts. Images are downscaled to fit this box and re-encoded
 // as WebP before being sent to the grid.
 const THUMBNAIL_PIXELS = 256;
+// Recursive-search limits. MAX_FIND_RESULTS mirrors src/lib/sshProtocol.ts; the
+// node budget bounds how many filesystem entries a single search may visit so a
+// deep/large tree can't tie up the session (the walk reads listings/metadata
+// only, never file contents).
+const MAX_FIND_RESULTS = 500;
+const MAX_FIND_NODES = 20000;
 // Cap a single SFTP upload so an unbounded stream can't fill the target disk
 // (symmetric with the download cap). Configured in whole megabytes; 0 (or less)
 // disables the limit.
@@ -1067,6 +1073,74 @@ wss.on("connection", (ws, req) => {
     });
   }
 
+  /**
+   * Recursively search `msg.path` for entries whose name contains `msg.query`
+   * (case-insensitive). Walks the tree over SFTP reading only directory
+   * listings and metadata — never file contents, so originals are untouched —
+   * and stops at the result / node budget, flagging `truncated`. Symlinked
+   * directories are not descended (they show as `link`, so loops are avoided).
+   */
+  function handleFind(msg) {
+    withSftp((s) => {
+      const root = String(msg.path || ".");
+      const query = String(msg.query || "").trim().toLowerCase();
+      const reply = (entries, truncated) =>
+        send({
+          t: "sftp-find-result",
+          path: root,
+          query: String(msg.query || ""),
+          entries,
+          truncated,
+        });
+      if (query === "") return reply([], false);
+
+      const results = [];
+      let visited = 0;
+      let truncated = false;
+      const join = (dir, name) =>
+        (dir.endsWith("/") ? dir : `${dir}/`) + name;
+
+      const walk = (dir, cb) => {
+        if (truncated) return cb();
+        s.readdir(dir, (err, list) => {
+          if (err) return cb(); // unreadable directory — skip it, keep going
+          let i = 0;
+          const nextEntry = () => {
+            if (truncated || i >= list.length) return cb();
+            const item = list[i++];
+            if (++visited > MAX_FIND_NODES) {
+              truncated = true;
+              return cb();
+            }
+            const name = item.filename;
+            const type = toEntryType(item.attrs);
+            const childPath = join(dir, name);
+            if (name.toLowerCase().includes(query)) {
+              results.push({
+                name,
+                path: childPath,
+                type,
+                size: item.attrs.size || 0,
+                mtime: (item.attrs.mtime || 0) * 1000,
+                mode: (item.attrs.mode || 0) & 0o777,
+              });
+              if (results.length >= MAX_FIND_RESULTS) {
+                truncated = true;
+                return cb();
+              }
+            }
+            // Descend real directories only (never symlinks → no cycles).
+            if (type === "dir") walk(childPath, nextEntry);
+            else nextEntry();
+          };
+          nextEntry();
+        });
+      };
+
+      walk(root, () => reply(results, truncated));
+    });
+  }
+
   function handleConnect(msg) {
     if (ssh) return; // already connecting/connected — ignore duplicates
     const host = String(msg.host || "").trim();
@@ -1725,6 +1799,10 @@ wss.on("connection", (ws, req) => {
 
       case "sftp-sudo":
         handleSudo(msg);
+        break;
+
+      case "sftp-find":
+        handleFind(msg);
         break;
 
       case "sftp-mkdir":
