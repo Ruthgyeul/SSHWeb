@@ -6,8 +6,10 @@ import {
   audioMimeType,
   compareHostKey,
   encodeMessage,
+  formatSize,
   hostKeyId,
   imageMimeType,
+  isLargeForEditor,
   isThumbnailable,
   joinPath,
   modeToOctal,
@@ -1095,6 +1097,24 @@ export function SshSession({
       },
     });
   };
+  // Open a file in the inline editor. A very large file in a textarea with live
+  // highlighting can be sluggish, so warn (and let the user back out) before
+  // requesting one past the editor size threshold; already-open files reopen
+  // without a prompt (the read reply just refocuses the existing tab).
+  const requestEdit = (path: string, name: string, size: number) => {
+    const openEditor = () => send({ t: "sftp-read", path, edit: true });
+    const alreadyOpen = editors.some((e) => e.path === path);
+    if (!alreadyOpen && isLargeForEditor(size)) {
+      setDialog({
+        title: "Open a large file?",
+        message: `“${name}” is ${formatSize(size, "file")}. Editing a file this large in the browser can be slow. Open it anyway?`,
+        confirmLabel: "Open",
+        onConfirm: openEditor,
+      });
+      return;
+    }
+    openEditor();
+  };
   const onSaveEdit = (path: string, text: string) => {
     editorSaveTextRef.current[path] = text;
     setSavingPath(path);
@@ -1280,7 +1300,7 @@ export function SshSession({
               onTouch={onTouch}
               onRename={onRename}
               onChmod={onChmod}
-              onEdit={(path) => send({ t: "sftp-read", path, edit: true })}
+              onEdit={requestEdit}
               onPreview={(path, name) => {
                 // Open the modal immediately in a loading state (with the cached
                 // grid thumbnail as an instant placeholder, if any) so the click
