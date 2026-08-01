@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PreviewContentKind } from "@/lib/sshProtocol";
 import { renderMarkdown } from "@/lib/markdown";
+import { highlightToHtml } from "@/lib/syntaxHighlight";
 import { cn } from "@/lib/utils";
 
-/** What the preview modal can show: a content kind, or a download-only fallback. */
-export type PreviewMode = PreviewContentKind | "unsupported";
+/** What the preview modal can show: a content kind, a read-only `text` view
+ * (syntax-highlighted, non-editable), or a download-only fallback. */
+export type PreviewMode = PreviewContentKind | "text" | "unsupported";
 
 /** Header icon per preview mode. */
 const MODE_ICON: Record<PreviewMode, string> = {
@@ -15,6 +17,7 @@ const MODE_ICON: Record<PreviewMode, string> = {
   audio: "🎵",
   pdf: "📕",
   markdown: "📝",
+  text: "🗒",
   unsupported: "📄",
 };
 
@@ -87,6 +90,16 @@ export function FilePreview({
   // every other kind so this stays cheap.
   const markdownHtml = useMemo(
     () => (kind === "markdown" ? renderMarkdown(text ?? "") : ""),
+    [kind, text],
+  );
+  // Read-only syntax-highlighted HTML for the `text` kind (a quick, non-editing
+  // look at code/config/logs). Escaped in `highlightToHtml`, so safe to inject.
+  const codeHtml = useMemo(
+    () => (kind === "text" ? highlightToHtml(text ?? "") : ""),
+    [kind, text],
+  );
+  const lineCount = useMemo(
+    () => (kind === "text" ? (text ?? "").split("\n").length : 0),
     [kind, text],
   );
 
@@ -324,6 +337,25 @@ export function FilePreview({
               className="md-preview mx-auto max-w-3xl px-6 py-5"
               dangerouslySetInnerHTML={{ __html: markdownHtml }}
             />
+          )}
+        </div>
+      ) : kind === "text" ? (
+        <div className="relative min-h-0 flex-1 overflow-auto bg-term-bg">
+          {loading && spinner}
+          {galleryArrows}
+          {!loading && (
+            <div className="flex min-h-full font-mono text-xs leading-5">
+              <pre
+                aria-hidden
+                className="select-none border-r border-term-border px-3 py-3 text-right text-term-faint"
+              >
+                {Array.from({ length: lineCount }, (_, i) => i + 1).join("\n")}
+              </pre>
+              <pre
+                className="flex-1 overflow-x-auto whitespace-pre px-4 py-3 text-term-text"
+                dangerouslySetInnerHTML={{ __html: codeHtml }}
+              />
+            </div>
           )}
         </div>
       ) : (

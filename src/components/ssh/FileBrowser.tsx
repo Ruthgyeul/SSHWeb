@@ -365,11 +365,16 @@ export function FileBrowser({
   // kept against the full listing (below) so filtering never drops checks.
   const visible = filterEntries(sorted, filter);
   const filtering = filter.trim() !== "";
-  // Previewable files among the visible rows, in display order — handed to the
-  // preview modal so ←/→ can step through them like a photo gallery. (The React
-  // Compiler memoizes this; no manual useMemo needed.)
+  // Files openable in the preview modal among the visible rows, in display order
+  // — handed to the modal so ←/→ can step through them like a gallery. Includes
+  // media/PDF/Markdown and read-only text files. (The React Compiler memoizes
+  // this; no manual useMemo needed.)
   const previewSiblings = visible
-    .filter((e) => e.type !== "dir" && filePreviewKind(e.name) !== null)
+    .filter(
+      (e) =>
+        e.type !== "dir" &&
+        (filePreviewKind(e.name) !== null || isProbablyTextFile(e.name)),
+    )
     .map((e) => ({
       path: `${cwd.replace(/\/$/, "")}/${e.name}`,
       name: e.name,
@@ -1303,14 +1308,26 @@ export function FileBrowser({
                       </button>
                     )}
                     {editable && (
-                      <button
-                        type="button"
-                        onClick={() => onEdit(target, entry.name, entry.size)}
-                        className={cn(actionBtn, "hover:text-term-accent")}
-                        title="Edit"
-                      >
-                        ✎
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onPreview(target, entry.name, previewSiblings)
+                          }
+                          className={cn(actionBtn, "hover:text-term-accent")}
+                          title="Preview (read-only)"
+                        >
+                          👁
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onEdit(target, entry.name, entry.size)}
+                          className={cn(actionBtn, "hover:text-term-accent")}
+                          title="Edit"
+                        >
+                          ✎
+                        </button>
+                      </>
                     )}
                     <button
                       type="button"
@@ -1468,14 +1485,26 @@ export function FileBrowser({
                         </button>
                       )}
                       {editable && (
-                        <button
-                          type="button"
-                          onClick={() => onEdit(target, entry.name, entry.size)}
-                          className={cn(actionBtn, "hover:text-term-accent")}
-                          title="Edit"
-                        >
-                          ✎
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onPreview(target, entry.name, previewSiblings)
+                            }
+                            className={cn(actionBtn, "hover:text-term-accent")}
+                            title="Preview (read-only)"
+                          >
+                            👁
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onEdit(target, entry.name, entry.size)}
+                            className={cn(actionBtn, "hover:text-term-accent")}
+                            title="Edit"
+                          >
+                            ✎
+                          </button>
+                        </>
                       )}
                       <button
                         type="button"
