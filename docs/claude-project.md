@@ -143,7 +143,15 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   `src/lib/serverSecurity.ts` (unit-tested) and is hand-mirrored in `server.mjs`
   — the same "two synchronized places" discipline as the wire protocol. The
   CSP's `connect-src 'self'` already authorizes the same-origin WebSocket —
-  don't widen it for this feature. Ops surfaces: `server.mjs` emits structured,
+  don't widen it for this feature. Video previews stream over a same-origin
+  **HTTP Range endpoint** (`GET /api/preview`) so a `<video>` seeks without
+  buffering the whole clip: it's gated by the same access cookie as the upgrade
+  **and** an unguessable per-session capability token (minted on SSH-ready, sent
+  in `caps.streamToken`, revoked on cleanup) that scopes a request to that one
+  session's login-user SFTP — files its own WebSocket could already read — with
+  a single response bounded by `STREAM_MAX_CHUNK_BYTES` and a hardened
+  `default-src 'none'; sandbox` CSP on the media bytes; the existing
+  `media-src 'self'` already authorizes it, so don't widen the CSP. Ops surfaces: `server.mjs` emits structured,
   credential-free event logs (`SSH_LOG=json|off`), serves a metrics-carrying JSON
   health probe at `GET /api/health` (session counts, cumulative shell bytes, an
   `sftp` block of file-transfer volume — completed uploads/downloads + bytes —

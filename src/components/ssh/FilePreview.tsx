@@ -92,6 +92,8 @@ export function FilePreview({
   total,
   truncated = false,
   encodingWarning = false,
+  getStartTime,
+  onTime,
   hasGallery = false,
   index,
   count,
@@ -122,6 +124,11 @@ export function FilePreview({
   truncated?: boolean;
   /** True when the decoded text looks like it isn't valid UTF-8. */
   encodingWarning?: boolean;
+  /** Get the playback position (seconds) to resume a video from when it opens.
+   * A getter (not a value) so the parent's ref isn't read during render. */
+  getStartTime?: () => number;
+  /** Report the video's current playback position so the gallery can resume it. */
+  onTime?: (seconds: number) => void;
   /** True when there is more than one previewable file to step through (←/→). */
   hasGallery?: boolean;
   /** 0-based position of the current file among its gallery siblings. */
@@ -173,6 +180,8 @@ export function FilePreview({
   // Natural pixel dimensions of the loaded image (from `<img onLoad>`), shown as
   // a WxH chip in the toolbar; also drives the very-large-image ⚠ hint.
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  // The <video> element, for keyboard transport controls & resume position.
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   // The active filmstrip tile, scrolled into view when the gallery steps.
   const activeThumbRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
@@ -276,6 +285,51 @@ export function FilePreview({
         e.preventDefault();
         (e.key === "ArrowLeft" ? onPrev : onNext)?.();
         return;
+      }
+      // Video transport controls (Space/k play-pause, ←/→ or j/l seek ±5s,
+      // ↑/↓ volume, m mute, f fullscreen). Gallery stepping for video is on the
+      // ‹ › buttons instead, so the arrows are free to seek here.
+      if (kind === "video" && videoRef.current) {
+        const v = videoRef.current;
+        switch (e.key) {
+          case " ":
+          case "k":
+            e.preventDefault();
+            if (v.paused) void v.play();
+            else v.pause();
+            return;
+          case "ArrowLeft":
+          case "j":
+            e.preventDefault();
+            v.currentTime = Math.max(0, v.currentTime - 5);
+            return;
+          case "ArrowRight":
+          case "l":
+            e.preventDefault();
+            v.currentTime = Math.min(v.duration || Infinity, v.currentTime + 5);
+            return;
+          case "ArrowUp":
+            e.preventDefault();
+            v.volume = Math.min(1, v.volume + 0.1);
+            return;
+          case "ArrowDown":
+            e.preventDefault();
+            v.volume = Math.max(0, v.volume - 0.1);
+            return;
+          case "m":
+          case "M":
+            e.preventDefault();
+            v.muted = !v.muted;
+            return;
+          case "f":
+          case "F":
+            e.preventDefault();
+            if (document.fullscreenElement) void document.exitFullscreen();
+            else void v.requestFullscreen?.();
+            return;
+          default:
+            return;
+        }
       }
       if (!isImage) return;
       if (e.key === "+" || e.key === "=") {
@@ -642,9 +696,19 @@ export function FilePreview({
           {kind === "video" ? (
             src ? (
               <video
+                ref={videoRef}
                 src={src}
                 controls
                 playsInline
+                onLoadedMetadata={(e) => {
+                  const v = e.currentTarget;
+                  // Resume from the last position (if within the clip).
+                  const start = getStartTime?.() ?? 0;
+                  if (start > 0 && start < v.duration) {
+                    v.currentTime = start;
+                  }
+                }}
+                onTimeUpdate={(e) => onTime?.(e.currentTarget.currentTime)}
                 className="max-h-full max-w-full"
               >
                 Your browser cannot play this video.
