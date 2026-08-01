@@ -840,14 +840,25 @@ export function FileBrowser({
                     <button
                       type="button"
                       onClick={open}
-                      title={isDir ? undefined : "Click to open"}
+                      title={
+                        entry.type === "link" && entry.target
+                          ? `${entry.name} → ${entry.target}`
+                          : isDir
+                            ? undefined
+                            : "Click to open"
+                      }
                       className={cn(
-                        "flex items-center gap-2 text-left",
+                        "flex max-w-full items-center gap-2 text-left",
                         isDir ? "text-term-accent" : "text-term-dim",
                       )}
                     >
                       <span aria-hidden>{fileIcon(entry)}</span>
                       <span className="truncate">{entry.name}</span>
+                      {entry.type === "link" && entry.target && (
+                        <span className="truncate text-xs text-term-faint">
+                          → {entry.target}
+                        </span>
+                      )}
                     </button>
                   </td>
                   <td className="hidden whitespace-nowrap px-2 py-1.5 text-right font-mono text-xs text-term-faint sm:table-cell">
@@ -981,13 +992,22 @@ export function FileBrowser({
                   <button
                     type="button"
                     onClick={open}
-                    title={isDir ? entry.name : "Click to open"}
+                    title={
+                      entry.type === "link" && entry.target
+                        ? `${entry.name} → ${entry.target}`
+                        : isDir
+                          ? entry.name
+                          : "Click to open"
+                    }
                     className={cn(
                       "truncate text-left text-xs",
                       isDir ? "text-term-accent" : "text-term-dim",
                     )}
                   >
                     {entry.name}
+                    {entry.type === "link" && entry.target && (
+                      <span className="text-term-faint"> → {entry.target}</span>
+                    )}
                   </button>
                   <div className="flex items-center justify-between gap-1">
                     <span className="truncate font-mono text-[10px] text-term-faint">

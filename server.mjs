@@ -1442,7 +1442,24 @@ wss.on("connection", (ws, req) => {
                 mtime: (item.attrs.mtime || 0) * 1000,
                 mode: (item.attrs.mode || 0) & 0o777,
               }));
-              send({ t: "sftp-list", path: dir, entries });
+              // Resolve each symlink's target with `readlink` (no follow — this
+              // only reads link metadata, never the pointed-at file) so the UI
+              // can show `name → target`. Non-links need no extra round-trip.
+              const links = entries.filter((e) => e.type === "link");
+              if (links.length === 0) {
+                return send({ t: "sftp-list", path: dir, entries });
+              }
+              const join = (name) =>
+                (dir.endsWith("/") ? dir : `${dir}/`) + name;
+              let pending = links.length;
+              for (const entry of links) {
+                s.readlink(join(entry.name), (lErr, target) => {
+                  if (!lErr && typeof target === "string") entry.target = target;
+                  if (--pending === 0) {
+                    send({ t: "sftp-list", path: dir, entries });
+                  }
+                });
+              }
             });
           });
         });

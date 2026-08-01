@@ -27,6 +27,9 @@ export interface FileEntry {
   mtime: number;
   /** Raw POSIX mode bits, for rendering an `ls -l`-style permission string. */
   mode: number;
+  /** For a `link` entry: the raw (unfollowed) symlink target path, when the
+   * bridge could read it (`readlink`). Absent for non-links or on error. */
+  target?: string;
 }
 
 /* ------------------------------------------------------------------ */
