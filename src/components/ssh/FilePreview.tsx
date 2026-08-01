@@ -59,6 +59,10 @@ export function FilePreview({
   received,
   total,
   hasGallery = false,
+  index,
+  count,
+  filmstrip,
+  onJump,
   onPrev,
   onNext,
   onDownload,
@@ -82,6 +86,14 @@ export function FilePreview({
   total?: number;
   /** True when there is more than one previewable file to step through (←/→). */
   hasGallery?: boolean;
+  /** 0-based position of the current file among its gallery siblings. */
+  index?: number;
+  /** Total number of previewable siblings (for the "n / N" counter). */
+  count?: number;
+  /** Sibling files (display order) for the bottom thumbnail filmstrip. */
+  filmstrip?: { path: string; name: string; thumb?: string }[];
+  /** Jump straight to a sibling by path (filmstrip tile click). */
+  onJump?: (path: string) => void;
   /** Step to the previous previewable file in the view. */
   onPrev?: () => void;
   /** Step to the next previewable file in the view. */
@@ -123,6 +135,11 @@ export function FilePreview({
   // Natural pixel dimensions of the loaded image (from `<img onLoad>`), shown as
   // a WxH chip in the toolbar; also drives the very-large-image ⚠ hint.
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  // The active filmstrip tile, scrolled into view when the gallery steps.
+  const activeThumbRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    activeThumbRef.current?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [path]);
 
   const isImage = kind === "image";
   const zoomBy = useCallback((factor: number) => {
@@ -267,6 +284,11 @@ export function FilePreview({
         >
           {name}
         </span>
+        {count !== undefined && count > 1 && (
+          <span className="shrink-0 text-[11px] tabular-nums text-term-faint">
+            {(index ?? 0) + 1} / {count}
+          </span>
+        )}
         {isImage && !loading && src && (
           <div className="flex items-center gap-1">
             {dims && (
@@ -467,6 +489,42 @@ export function FilePreview({
           )}
         </div>
       </div>
+      )}
+      {filmstrip && filmstrip.length > 1 && (
+        <div className="flex shrink-0 gap-1.5 overflow-x-auto border-t border-term-border bg-term-panel/90 px-3 py-2">
+          {filmstrip.map((f) => {
+            const activeTile = f.path === path;
+            return (
+              <button
+                key={f.path}
+                ref={activeTile ? activeThumbRef : undefined}
+                type="button"
+                onClick={() => onJump?.(f.path)}
+                title={f.name}
+                aria-current={activeTile}
+                className={cn(
+                  "h-12 w-12 shrink-0 overflow-hidden rounded border",
+                  activeTile
+                    ? "border-term-accent"
+                    : "border-term-border opacity-60 hover:opacity-100",
+                )}
+              >
+                {f.thumb ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={f.thumb}
+                    alt={f.name}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <span className="flex h-full w-full items-center justify-center text-sm text-term-muted">
+                    📄
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       )}
     </div>
   );

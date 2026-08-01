@@ -120,6 +120,12 @@ const MAX_INFLIGHT_THUMBS = 6;
  * so each open builds a fresh, independently-revoked `blob:` URL. */
 const MAX_PREVIEW_CACHE_BYTES = 48 * 1024 * 1024;
 
+/** Don't prefetch a gallery neighbour bigger than this — prefetching is a
+ * latency nicety for the common case (folders of photos), not a reason to pull
+ * a huge file the user may never step to. Bytes read from the entry's
+ * `size:mtime` version tag. */
+const PREFETCH_MAX_BYTES = 16 * 1024 * 1024;
+
 /** The preview surface for a filename by extension: a media/PDF/Markdown kind,
  * a read-only `text` view for anything editable-as-text, or `unsupported`. Used
  * for the modal's loading state before bytes arrive (a cache hit / stream then
@@ -265,6 +271,10 @@ export function SshSession({
   // Mirrors the full open-preview state so `stepPreview` (gallery ←/→) can read
   // the latest siblings/loading without being torn down and rebuilt each render.
   const previewRef = useRef<PreviewState | null>(null);
+  // Paths currently being *prefetched* into the preview cache (adjacent gallery
+  // images streamed ahead of a ←/→ step). Lets the download handlers buffer
+  // their bytes without painting the modal; cleared as each stream ends.
+  const prefetchPathsRef = useRef<Set<string>>(new Set());
   // Cached grid-view image thumbnails, keyed by remote path → `data:` URL.
   // Populated lazily as tiles scroll into view; cleared on each directory change
   // (below) to bound memory. `requestedThumbsRef` dedupes in-flight requests so
@@ -471,7 +481,36 @@ export function SshSession({
   const clearPreviewCache = useCallback(() => {
     previewCacheRef.current.clear();
     previewCacheBytesRef.current = 0;
+    prefetchPathsRef.current.clear();
   }, []);
+
+  // Stream the gallery neighbours of `path` (the previous & next image) into the
+  // preview cache ahead of a ←/→ step, so paging through a folder of photos is
+  // instant. Only images (the common case), never elevated (never cached), and
+  // never a neighbour already cached, in flight, or bigger than
+  // `PREFETCH_MAX_BYTES`. The download handlers recognise these paths via
+  // `prefetchPathsRef` and buffer their bytes without painting the modal.
+  const prefetchNeighbors = useCallback(
+    (path: string, siblings?: { path: string; name: string }[]) => {
+      if (elevatedRef.current || !siblings || siblings.length < 2) return;
+      const idx = siblings.findIndex((s) => s.path === path);
+      if (idx < 0) return;
+      const n = siblings.length;
+      for (const delta of [1, -1]) {
+        const nb = siblings[(idx + delta + n) % n];
+        if (!nb || nb.path === path) continue;
+        if (filePreviewKind(nb.name) !== "image") continue;
+        if (previewCacheRef.current.has(previewCacheKeyFor(nb.path))) continue;
+        if (prefetchPathsRef.current.has(nb.path)) continue;
+        const version = entryVersionRef.current.get(nb.path);
+        const size = version ? parseInt(version.split(":")[0], 10) : 0;
+        if (size > PREFETCH_MAX_BYTES) continue;
+        prefetchPathsRef.current.add(nb.path);
+        send({ t: "sftp-read", path: nb.path, preview: true });
+      }
+    },
+    [send, previewCacheKeyFor],
+  );
 
   const handleServerMessage = useCallback(
     (msg: ServerMessage) => {
@@ -661,9 +700,11 @@ export function SshSession({
         case "sftp-download-begin":
           if (msg.preview) {
             // A preview stream: buffer chunks and drive the modal's progress bar
-            // instead of registering a download row. Ignore a stale begin the
-            // user already navigated away from.
-            if (previewPathRef.current !== msg.path) break;
+            // instead of registering a download row. A prefetch (adjacent gallery
+            // image) buffers silently; otherwise ignore a stale begin the user
+            // already navigated away from.
+            const isPrefetch = prefetchPathsRef.current.has(msg.path);
+            if (previewPathRef.current !== msg.path && !isPrefetch) break;
             previewBuffersRef.current[msg.path] = [];
             setPreview((prev) =>
               prev && prev.path === msg.path
@@ -716,13 +757,15 @@ export function SshSession({
           if (msg.preview) {
             const chunks = previewBuffersRef.current[msg.path];
             delete previewBuffersRef.current[msg.path];
+            const wasPrefetch = prefetchPathsRef.current.delete(msg.path);
             if (!chunks) break;
             const bytes = concatBytes(chunks);
             const name = msg.path.split("/").pop() || "file";
             // Cache the fully-received bytes even if the user has since stepped
             // away — the next visit reuses them without re-transfer.
             cachePreview(msg.path, name, bytes);
-            // Only paint if still viewing this file (modal open, same path).
+            // Only paint if still viewing this file (modal open, same path). A
+            // prefetch that finished in the background just stays cached.
             if (previewPathRef.current !== msg.path) break;
             setPreview((prev) =>
               prev && prev.path === msg.path
@@ -735,6 +778,9 @@ export function SshSession({
                   }
                 : prev,
             );
+            // With the viewed file painted, warm its neighbours for the next
+            // ←/→ step (unless this stream was itself a promoted prefetch).
+            if (!wasPrefetch) prefetchNeighbors(msg.path, previewRef.current?.siblings);
             break;
           }
           const buf = downloadBuffersRef.current[msg.path];
@@ -873,7 +919,7 @@ export function SshSession({
           break;
       }
     },
-    [listDir, send, notify, pumpThumbs, cachePreview, clearPreviewCache],
+    [listDir, send, notify, pumpThumbs, cachePreview, clearPreviewCache, prefetchNeighbors],
   );
 
   // openSocket and scheduleReconnect reference each other; a ref breaks the
@@ -1014,6 +1060,7 @@ export function SshSession({
     previewBuffersRef.current = {};
     previewCacheRef.current.clear();
     previewCacheBytesRef.current = 0;
+    prefetchPathsRef.current.clear();
     setHasLast(false);
     ctrlRef.current = false;
     altRef.current = false;
@@ -1043,8 +1090,14 @@ export function SshSession({
           siblings,
           ...previewFieldsFromBytes(name, hit.bytes),
         });
+        prefetchNeighbors(path, siblings);
         return;
       }
+      // If a prefetch for this file is already in flight, promote it rather than
+      // starting a second read: show the spinner and let the in-flight stream
+      // paint it once `previewPathRef` matches (below). A duplicate `sftp-read`
+      // would clobber the bridge's per-path stream and the chunk buffer.
+      const prefetching = prefetchPathsRef.current.delete(path);
       setPreview({
         path,
         name,
@@ -1054,9 +1107,11 @@ export function SshSession({
         placeholder: thumbnailsRef.current[path],
         siblings,
       });
-      send({ t: "sftp-read", path, preview: true });
+      if (!prefetching && !previewBuffersRef.current[path]) {
+        send({ t: "sftp-read", path, preview: true });
+      }
     },
-    [send, previewCacheKeyFor],
+    [send, previewCacheKeyFor, prefetchNeighbors],
   );
 
   const decideHostKey = useCallback(
@@ -1902,6 +1957,23 @@ export function SshSession({
                 received={preview.received}
                 total={preview.total}
                 hasGallery={(preview.siblings?.length ?? 0) > 1}
+                index={preview.siblings?.findIndex((s) => s.path === preview.path)}
+                count={preview.siblings?.length}
+                filmstrip={preview.siblings?.map((s) => ({
+                  path: s.path,
+                  name: s.name,
+                  thumb: thumbnails[s.path],
+                }))}
+                onJump={(path) => {
+                  const target = preview.siblings?.find((s) => s.path === path);
+                  if (target && target.path !== preview.path) {
+                    if (preview.loading) {
+                      send({ t: "sftp-download-cancel", path: preview.path });
+                      delete previewBuffersRef.current[preview.path];
+                    }
+                    openPreviewFile(target.path, target.name, preview.siblings);
+                  }
+                }}
                 onPrev={() => stepPreview(-1)}
                 onNext={() => stepPreview(1)}
                 onDownload={() =>
