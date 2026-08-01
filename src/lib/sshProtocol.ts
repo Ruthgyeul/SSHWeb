@@ -97,6 +97,9 @@ export type ClientMessage =
   // without `offset` the whole `dataB64` is written at once (inline-edit save).
   // `mkdirp` (honored on the opening chunk) recursively creates the target's
   // parent directories first — set by folder uploads whose path has subdirs.
+  // `resume` (honored on the opening chunk, whose `offset` may be > 0) reopens
+  // an existing partial in append-at-offset mode instead of truncating, so an
+  // upload interrupted by a dropped connection can continue where it left off.
   | {
       t: "sftp-write";
       path: string;
@@ -104,7 +107,18 @@ export type ClientMessage =
       offset?: number;
       final?: boolean;
       mkdirp?: boolean;
+      resume?: boolean;
     }
+  // Ask the bridge for a partial upload's current on-disk size so a resumed
+  // upload knows where to continue. The bridge replies with `sftp-write-at`
+  // (offset 0 when the file is missing → the client restarts from scratch).
+  | { t: "sftp-write-resume"; path: string }
+  // Abort an in-flight (or interrupted) upload: the bridge tears the write
+  // stream down and removes the partial destination file.
+  | { t: "sftp-upload-cancel"; path: string }
+  // Abort an in-flight streamed download: the bridge tears that read stream down
+  // (the source file is only read, so nothing on the remote is changed).
+  | { t: "sftp-download-cancel"; path: string }
   | { t: "sftp-mkdir"; path: string }
   // Recursively search `path` (and its subdirectories) for entries whose name
   // contains `query` (case-insensitive). The bridge walks the tree reading only
@@ -192,6 +206,10 @@ export type ServerMessage =
   | { t: "sftp-download-begin"; path: string; name: string; size: number }
   | { t: "sftp-download-chunk"; path: string; dataB64: string }
   | { t: "sftp-download-end"; path: string }
+  // Reply to `sftp-write-resume`: the destination's current on-disk size, so the
+  // client resumes its chunked upload from exactly there (0 = file missing, so
+  // the client restarts the upload from the beginning).
+  | { t: "sftp-write-at"; path: string; offset: number }
   // A keyboard-interactive challenge (used for OTP / 2FA and some password
   // flows). The client collects answers and replies with `kbd-response`.
   | {

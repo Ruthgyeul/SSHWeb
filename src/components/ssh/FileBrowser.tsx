@@ -27,13 +27,19 @@ import { useFileSort } from "./useFileSort";
 
 /** One in-flight upload's progress, shown in the progress panel. */
 export interface UploadItem {
+  /** Remote destination path — the handle for cancel/resume. */
+  path: string;
   name: string;
   sent: number;
   total: number;
+  /** "interrupted" when a dropped connection paused it (offers a Resume). */
+  status?: "uploading" | "interrupted";
 }
 
 /** One in-flight download's progress, shown in the progress panel. */
 export interface DownloadItem {
+  /** Remote source path — the handle for cancel. */
+  path: string;
   name: string;
   received: number;
   total: number;
@@ -213,6 +219,9 @@ export function FileBrowser({
   loading,
   uploads,
   downloads,
+  onCancelUpload,
+  onResumeUpload,
+  onCancelDownload,
   canElevate,
   elevated,
   elevatedPending,
@@ -245,6 +254,12 @@ export function FileBrowser({
   loading: boolean;
   uploads: UploadItem[];
   downloads: DownloadItem[];
+  /** Abort an in-flight or interrupted upload (removes its partial remotely). */
+  onCancelUpload: (path: string) => void;
+  /** Resume an upload paused by a dropped connection. */
+  onResumeUpload: (path: string) => void;
+  /** Abort an in-flight download. */
+  onCancelDownload: (path: string) => void;
   /** Whether the server permits elevated (sudo) file access at all. */
   canElevate: boolean;
   /** Whether elevated (root) mode is currently active. */
@@ -754,15 +769,44 @@ export function FileBrowser({
         <div className="flex flex-col gap-1.5 border-b border-term-border bg-term-panel/50 px-3 py-2">
           {uploads.map((u) => {
             const pct = u.total > 0 ? Math.round((u.sent / u.total) * 100) : 100;
+            const interrupted = u.status === "interrupted";
             return (
-              <div key={u.name} className="text-xs">
-                <div className="flex justify-between text-term-muted">
+              <div key={u.path} className="text-xs">
+                <div className="flex items-center justify-between gap-2 text-term-muted">
                   <span className="truncate">↑ {u.name}</span>
-                  <span className="ml-2 tabular-nums text-term-faint">{pct}%</span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    {interrupted ? (
+                      <>
+                        <span className="text-term-yellow">interrupted</span>
+                        <button
+                          type="button"
+                          onClick={() => onResumeUpload(u.path)}
+                          className="rounded px-1 text-term-accent hover:bg-term-border"
+                          title="Resume upload"
+                        >
+                          Resume
+                        </button>
+                      </>
+                    ) : (
+                      <span className="tabular-nums text-term-faint">{pct}%</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onCancelUpload(u.path)}
+                      className="rounded px-1 text-term-faint hover:bg-term-border hover:text-term-red"
+                      title="Cancel upload"
+                      aria-label={`Cancel upload ${u.name}`}
+                    >
+                      ✕
+                    </button>
+                  </span>
                 </div>
                 <div className="mt-1 h-1 overflow-hidden rounded bg-term-border">
                   <div
-                    className="h-full bg-term-accent transition-all"
+                    className={cn(
+                      "h-full transition-all",
+                      interrupted ? "bg-term-yellow" : "bg-term-accent",
+                    )}
                     style={{ width: `${pct}%` }}
                   />
                 </div>
@@ -779,10 +823,21 @@ export function FileBrowser({
             const pct =
               d.total > 0 ? Math.round((d.received / d.total) * 100) : 100;
             return (
-              <div key={d.name} className="text-xs">
-                <div className="flex justify-between text-term-muted">
+              <div key={d.path} className="text-xs">
+                <div className="flex items-center justify-between gap-2 text-term-muted">
                   <span className="truncate">↓ {d.name}</span>
-                  <span className="ml-2 tabular-nums text-term-faint">{pct}%</span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <span className="tabular-nums text-term-faint">{pct}%</span>
+                    <button
+                      type="button"
+                      onClick={() => onCancelDownload(d.path)}
+                      className="rounded px-1 text-term-faint hover:bg-term-border hover:text-term-red"
+                      title="Cancel download"
+                      aria-label={`Cancel download ${d.name}`}
+                    >
+                      ✕
+                    </button>
+                  </span>
                 </div>
                 <div className="mt-1 h-1 overflow-hidden rounded bg-term-border">
                   <div
