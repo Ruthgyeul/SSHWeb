@@ -1142,64 +1142,80 @@ export function SshSession({
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-term-border bg-term-card">
       {/* Session header */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
-        <StatusDot status={status} />
-        <span className="min-w-0 truncate text-xs text-term-dim">
-          {target ? `${target.user}@${target.host}` : "Not connected"}
-        </span>
-        {connected && connectedAt !== null && <Uptime since={connectedAt} />}
-        {connected && latency !== null && <LatencyChip ms={latency} />}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
+        {/* Identity + live status — takes the remaining width so the host label
+            truncates instead of shoving the controls off-screen. */}
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <StatusDot status={status} />
+          <span className="min-w-0 truncate text-xs text-term-dim">
+            {target ? `${target.user}@${target.host}` : "Not connected"}
+          </span>
+          {connected && connectedAt !== null && <Uptime since={connectedAt} />}
+          {connected && latency !== null && <LatencyChip ms={latency} />}
+        </div>
 
         {connected && (
-          <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
-            <button
-              type="button"
-              onClick={() => setShowShortcuts(true)}
-              className="rounded px-2 py-1 text-xs text-term-muted transition-colors hover:text-term-text"
-              title="Keyboard shortcuts"
-              aria-label="Keyboard shortcuts"
-            >
-              ?
-            </button>
-            {tab === "terminal" && (
+          // Controls, grouped so a narrow header wraps them as coherent blocks
+          // (utility icons / tab switcher / disconnect) rather than scattering
+          // individual buttons across lines.
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {/* Utility actions */}
+            <div className="flex items-center gap-1">
               <button
                 type="button"
-                onClick={() => {
-                  setTab("terminal");
-                  xtermRef.current?.openSearch();
-                }}
+                onClick={() => setShowShortcuts(true)}
                 className="rounded px-2 py-1 text-xs text-term-muted transition-colors hover:text-term-text"
-                title="Search terminal (Ctrl+F)"
-                aria-label="Search terminal"
+                title="Keyboard shortcuts"
+                aria-label="Keyboard shortcuts"
               >
-                🔍
+                ?
               </button>
-            )}
-            <TerminalSettings
-              prefs={termPrefs}
-              onChange={updateTermPrefs}
-              onClearThumbnailCache={clearThumbnails}
-              thumbnailCacheElevated={elevated}
-            />
-            {(["terminal", "files", "tunnels"] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setTab(t)}
-                className={cn(
-                  "rounded px-3 py-1 text-xs capitalize transition-colors",
-                  tab === t
-                    ? "bg-term-accent/15 text-term-accent"
-                    : "text-term-muted hover:text-term-text",
-                )}
-              >
-                {t}
-              </button>
-            ))}
+              {tab === "terminal" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTab("terminal");
+                    xtermRef.current?.openSearch();
+                  }}
+                  className="rounded px-2 py-1 text-xs text-term-muted transition-colors hover:text-term-text"
+                  title="Search terminal (Ctrl+F)"
+                  aria-label="Search terminal"
+                >
+                  🔍
+                </button>
+              )}
+              <TerminalSettings
+                prefs={termPrefs}
+                onChange={updateTermPrefs}
+                onClearThumbnailCache={clearThumbnails}
+                thumbnailCacheElevated={elevated}
+              />
+            </div>
+
+            {/* Tab switcher — one segmented control so the three tabs read as a
+                single unit and stay together when the header wraps. */}
+            <div className="inline-flex overflow-hidden rounded-md border border-term-border">
+              {(["terminal", "files", "tunnels"] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTab(t)}
+                  className={cn(
+                    "border-l border-term-border px-3 py-1 text-xs capitalize transition-colors first:border-l-0",
+                    tab === t
+                      ? "bg-term-accent/15 text-term-accent"
+                      : "text-term-muted hover:bg-term-card hover:text-term-text",
+                  )}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+
             <button
               type="button"
               onClick={disconnect}
-              className="ml-2 rounded border border-term-red/40 px-3 py-1 text-xs text-term-red hover:bg-term-red/10"
+              className="rounded-md border border-term-red/40 px-3 py-1 text-xs text-term-red hover:bg-term-red/10"
             >
               Disconnect
             </button>
