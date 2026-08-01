@@ -4,7 +4,39 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PreviewContentKind } from "@/lib/sshProtocol";
 import { renderMarkdown } from "@/lib/markdown";
 import { highlightToHtml } from "@/lib/syntaxHighlight";
+import { findMatches, type Match } from "@/lib/editorSearch";
 import { cn } from "@/lib/utils";
+
+/** Escape HTML-significant characters so file text is injected as literal text. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/** Render `text` as escaped HTML with each search match wrapped in a `<mark>`;
+ * the active match is tagged `data-active` (for scroll-into-view) and styled
+ * distinctly. Used by the text preview's find bar in place of the syntax
+ * highlighter while a search is active. */
+function buildSearchHtml(text: string, matches: Match[], active: number): string {
+  if (matches.length === 0) return escapeHtml(text);
+  let out = "";
+  let last = 0;
+  matches.forEach((m, i) => {
+    out += escapeHtml(text.slice(last, m.start));
+    const cls =
+      i === active
+        ? "bg-term-accent text-term-bg"
+        : "bg-term-accent/30 text-term-text";
+    out += `<mark class="${cls}"${i === active ? ' data-active="true"' : ""}>`;
+    out += escapeHtml(text.slice(m.start, m.end));
+    out += "</mark>";
+    last = m.end;
+  });
+  out += escapeHtml(text.slice(last));
+  return out;
+}
 
 /** What the preview modal can show: a content kind, a read-only `text` view
  * (syntax-highlighted, non-editable), or a download-only fallback. */
@@ -58,6 +90,8 @@ export function FilePreview({
   text,
   received,
   total,
+  truncated = false,
+  encodingWarning = false,
   hasGallery = false,
   index,
   count,
@@ -84,6 +118,10 @@ export function FilePreview({
   received?: number;
   /** Total transfer size, once the stream has begun. */
   total?: number;
+  /** True when a text preview shows only the head of a larger file. */
+  truncated?: boolean;
+  /** True when the decoded text looks like it isn't valid UTF-8. */
+  encodingWarning?: boolean;
   /** True when there is more than one previewable file to step through (←/→). */
   hasGallery?: boolean;
   /** 0-based position of the current file among its gallery siblings. */
@@ -141,6 +179,54 @@ export function FilePreview({
     activeThumbRef.current?.scrollIntoView({ block: "nearest", inline: "center" });
   }, [path]);
 
+  // Text-preview view options: soft-wrap long lines, and an in-modal find bar.
+  const [wrap, setWrap] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findCase, setFindCase] = useState(false);
+  const [findActive, setFindActive] = useState(0);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
+  const textPaneRef = useRef<HTMLDivElement | null>(null);
+
+  const isText = kind === "text";
+  // Matches for the find bar (only while it's open with a query).
+  const matches = useMemo<Match[]>(
+    () =>
+      isText && findOpen && findQuery
+        ? findMatches(text ?? "", findQuery, findCase)
+        : [],
+    [isText, findOpen, findQuery, findCase, text],
+  );
+  // Clamp the active index whenever the match set changes.
+  const activeIdx = matches.length ? findActive % matches.length : 0;
+  // Escaped text with matches marked, used in place of syntax highlighting while
+  // searching so the highlight can be layered on and stepped through.
+  const searchHtml = useMemo(
+    () =>
+      isText && findOpen && findQuery
+        ? buildSearchHtml(text ?? "", matches, activeIdx)
+        : "",
+    [isText, findOpen, findQuery, text, matches, activeIdx],
+  );
+  // Scroll the active match into view as the user steps through results.
+  useEffect(() => {
+    if (!findOpen || matches.length === 0) return;
+    textPaneRef.current
+      ?.querySelector("[data-active]")
+      ?.scrollIntoView({ block: "center" });
+  }, [findOpen, activeIdx, matches.length]);
+
+  const stepMatch = useCallback(
+    (dir: 1 | -1) => {
+      setFindActive((a) => {
+        const n = matches.length;
+        if (n === 0) return 0;
+        return (a + dir + n) % n;
+      });
+    },
+    [matches.length],
+  );
+
   const isImage = kind === "image";
   const zoomBy = useCallback((factor: number) => {
     setZoom((z) => {
@@ -156,14 +242,32 @@ export function FilePreview({
   }, []);
   const rotate = useCallback(() => setRotation((r) => (r + 90) % 360), []);
 
-  // Keyboard: Esc closes, ←/→ walk the gallery, and image transform shortcuts.
+  // Keyboard: Esc closes, ←/→ walk the gallery, image transforms, and Ctrl/⌘+F
+  // opens the text find bar.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const typing =
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement;
+      // Ctrl/⌘+F opens (and focuses) the find bar for a text preview.
+      if (isText && (e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        setFindOpen(true);
+        requestAnimationFrame(() => findInputRef.current?.focus());
+        return;
+      }
       if (e.key === "Escape") {
         e.preventDefault();
+        // Esc dismisses the find bar first, only then the whole modal.
+        if (findOpen) {
+          setFindOpen(false);
+          return;
+        }
         onClose();
         return;
       }
+      // While typing in the find input, leave the rest of the keys to it.
+      if (typing) return;
       // Let a focused <video>/<audio> keep its own arrow-key seeking; gallery
       // stepping for those is still available via the on-screen ‹ › buttons.
       const mediaFocused =
@@ -190,7 +294,7 @@ export function FilePreview({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [kind, isImage, hasGallery, onPrev, onNext, onClose, zoomBy, resetView, rotate]);
+  }, [kind, isImage, isText, findOpen, hasGallery, onPrev, onNext, onClose, zoomBy, resetView, rotate]);
 
   const onWheel = (e: React.WheelEvent) => {
     if (!isImage) return;
@@ -272,6 +376,85 @@ export function FilePreview({
   const toolBtn =
     "rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text disabled:opacity-40";
 
+  // Truncated / non-UTF-8 notices for text & markdown previews.
+  const banner = (truncated || encodingWarning) && (
+    <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-term-border bg-term-panel/60 px-4 py-1.5 text-[11px] text-term-yellow">
+      {truncated && (
+        <span>⚠ Showing the first part of a large file — download for the full contents.</span>
+      )}
+      {encodingWarning && (
+        <span>⚠ This file may not be UTF-8 — some characters may be garbled.</span>
+      )}
+    </div>
+  );
+
+  // In-modal find bar for the text preview (Ctrl/⌘+F).
+  const findBar = findOpen && isText && (
+    <div className="flex items-center gap-2 border-b border-term-border bg-term-panel/90 px-3 py-1.5">
+      <input
+        ref={findInputRef}
+        value={findQuery}
+        onChange={(e) => {
+          setFindQuery(e.target.value);
+          setFindActive(0);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            stepMatch(e.shiftKey ? -1 : 1);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            setFindOpen(false);
+          }
+        }}
+        placeholder="Find"
+        className="w-44 rounded border border-term-border bg-term-bg px-2 py-0.5 text-xs text-term-text outline-none focus:border-term-accent"
+      />
+      <span className="min-w-[3rem] text-[11px] tabular-nums text-term-muted">
+        {matches.length
+          ? `${activeIdx + 1}/${matches.length}`
+          : findQuery
+            ? "0/0"
+            : ""}
+      </span>
+      <button
+        type="button"
+        onClick={() => stepMatch(-1)}
+        disabled={!matches.length}
+        className={toolBtn}
+        aria-label="Previous match"
+      >
+        ↑
+      </button>
+      <button
+        type="button"
+        onClick={() => stepMatch(1)}
+        disabled={!matches.length}
+        className={toolBtn}
+        aria-label="Next match"
+      >
+        ↓
+      </button>
+      <button
+        type="button"
+        onClick={() => setFindCase((c) => !c)}
+        className={cn(toolBtn, findCase && "text-term-accent")}
+        aria-pressed={findCase}
+        title="Match case"
+      >
+        Aa
+      </button>
+      <button
+        type="button"
+        onClick={() => setFindOpen(false)}
+        className={toolBtn}
+        aria-label="Close find"
+      >
+        ×
+      </button>
+    </div>
+  );
+
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-term-card">
       <div className="flex items-center gap-3 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
@@ -349,6 +532,31 @@ export function FilePreview({
             </button>
           </div>
         )}
+        {isText && !loading && (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setWrap((w) => !w)}
+              className={cn(toolBtn, wrap && "text-term-accent")}
+              aria-pressed={wrap}
+              title="Toggle line wrap"
+            >
+              Wrap
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFindOpen(true);
+                requestAnimationFrame(() => findInputRef.current?.focus());
+              }}
+              className={cn(toolBtn, findOpen && "text-term-accent")}
+              aria-label="Find (Ctrl/⌘+F)"
+              title="Find (Ctrl/⌘+F)"
+            >
+              🔎
+            </button>
+          </div>
+        )}
         <button
           type="button"
           onClick={onDownload}
@@ -377,35 +585,52 @@ export function FilePreview({
           )}
         </div>
       ) : kind === "markdown" ? (
-        <div className="relative min-h-0 flex-1 overflow-auto bg-term-bg">
-          {loading && spinner}
-          {galleryArrows}
-          {!loading && (
-            <div
-              className="md-preview mx-auto max-w-3xl px-6 py-5"
-              dangerouslySetInnerHTML={{ __html: markdownHtml }}
-            />
-          )}
-        </div>
-      ) : kind === "text" ? (
-        <div className="relative min-h-0 flex-1 overflow-auto bg-term-bg">
-          {loading && spinner}
-          {galleryArrows}
-          {!loading && (
-            <div className="flex min-h-full font-mono text-xs leading-5">
-              <pre
-                aria-hidden
-                className="select-none border-r border-term-border px-3 py-3 text-right text-term-faint"
-              >
-                {Array.from({ length: lineCount }, (_, i) => i + 1).join("\n")}
-              </pre>
-              <pre
-                className="flex-1 overflow-x-auto whitespace-pre px-4 py-3 text-term-text"
-                dangerouslySetInnerHTML={{ __html: codeHtml }}
+        <>
+          {!loading && banner}
+          <div className="relative min-h-0 flex-1 overflow-auto bg-term-bg">
+            {loading && spinner}
+            {galleryArrows}
+            {!loading && (
+              <div
+                className="md-preview mx-auto max-w-3xl px-6 py-5"
+                dangerouslySetInnerHTML={{ __html: markdownHtml }}
               />
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </>
+      ) : kind === "text" ? (
+        <>
+          {!loading && banner}
+          {!loading && findBar}
+          <div
+            ref={textPaneRef}
+            className="relative min-h-0 flex-1 overflow-auto bg-term-bg"
+          >
+            {loading && spinner}
+            {galleryArrows}
+            {!loading && (
+              <div className="flex min-h-full font-mono text-xs leading-5">
+                {!wrap && (
+                  <pre
+                    aria-hidden
+                    className="select-none border-r border-term-border px-3 py-3 text-right text-term-faint"
+                  >
+                    {Array.from({ length: lineCount }, (_, i) => i + 1).join("\n")}
+                  </pre>
+                )}
+                <pre
+                  className={cn(
+                    "flex-1 px-4 py-3 text-term-text",
+                    wrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto whitespace-pre",
+                  )}
+                  dangerouslySetInnerHTML={{
+                    __html: findOpen && findQuery ? searchHtml : codeHtml,
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        </>
       ) : (
       <div
         className="min-h-0 flex-1 overflow-hidden bg-term-bg p-4"

@@ -20,6 +20,7 @@ import {
   parseOctalMode,
   sniffMediaKind,
   suggestCopyName,
+  TEXT_PREVIEW_MAX_BYTES,
   videoMimeType,
   type FileEntry,
   type ServerMessage,
@@ -107,6 +108,12 @@ interface PreviewState {
   /** Previewable files in the same view (display order), so the modal can step
    * ←/→ through them like a gallery. Empty/undefined for one-off opens. */
   siblings?: { path: string; name: string }[];
+  /** True when a text preview was capped at `TEXT_PREVIEW_MAX_BYTES` and the
+   * file is actually longer — the modal flags it's showing only the head. */
+  truncated?: boolean;
+  /** True when the decoded text contained U+FFFD replacement chars — a hint the
+   * file isn't valid UTF-8 (a legacy encoding, or actually binary). */
+  encodingWarning?: boolean;
 }
 
 /** Max concurrent grid-thumbnail reads. Enough to fill a visible screen of tiles
@@ -145,14 +152,17 @@ function previewRenderKind(name: string): PreviewMode {
 function previewFieldsFromBytes(
   name: string,
   bytes: Uint8Array<ArrayBuffer>,
-): Pick<PreviewState, "kind" | "src" | "text" | "bytes"> {
+): Pick<PreviewState, "kind" | "src" | "text" | "bytes" | "encodingWarning"> {
   let kind = previewRenderKind(name);
   if (kind === "text" || kind === "unsupported") {
     const sniffed = sniffMediaKind(bytes);
     if (sniffed) kind = sniffed;
   }
   if (kind === "markdown" || kind === "text") {
-    return { kind, src: "", text: new TextDecoder().decode(bytes), bytes };
+    const text = new TextDecoder().decode(bytes);
+    // A non-fatal decode substitutes U+FFFD for undecodable bytes; their
+    // presence flags a likely non-UTF-8 (legacy-encoded or binary) file.
+    return { kind, src: "", text, bytes, encodingWarning: text.includes("�") };
   }
   if (kind === "unsupported") {
     // Not decodable as media and not text — offer download only, no blob.
@@ -762,19 +772,37 @@ export function SshSession({
             const bytes = concatBytes(chunks);
             const name = msg.path.split("/").pop() || "file";
             // Cache the fully-received bytes even if the user has since stepped
-            // away — the next visit reuses them without re-transfer.
-            cachePreview(msg.path, name, bytes);
+            // away — the next visit reuses them without re-transfer. A truncated
+            // (head-only) text read is never cached: a re-open must re-read.
+            if (!msg.truncated) cachePreview(msg.path, name, bytes);
             // Only paint if still viewing this file (modal open, same path). A
             // prefetch that finished in the background just stays cached.
             if (previewPathRef.current !== msg.path) break;
+            // Build the render fields (may create a blob URL) only now that we're
+            // committing to paint this file.
+            const fields = previewFieldsFromBytes(name, bytes);
+            // A capped (head-only) read that magic-byte-sniffs as media was a
+            // mis-named/extensionless media file requested as text — its head
+            // can't render, so discard it and re-read the whole file uncapped.
+            if (
+              msg.truncated &&
+              fields.kind !== "text" &&
+              fields.kind !== "markdown" &&
+              fields.kind !== "unsupported"
+            ) {
+              if (fields.src.startsWith("blob:")) URL.revokeObjectURL(fields.src);
+              send({ t: "sftp-read", path: msg.path, preview: true });
+              break;
+            }
             setPreview((prev) =>
               prev && prev.path === msg.path
                 ? {
                     ...prev,
-                    ...previewFieldsFromBytes(name, bytes),
+                    ...fields,
                     loading: false,
                     received: undefined,
                     total: undefined,
+                    truncated: msg.truncated === true,
                   }
                 : prev,
             );
@@ -1098,17 +1126,24 @@ export function SshSession({
       // paint it once `previewPathRef` matches (below). A duplicate `sftp-read`
       // would clobber the bridge's per-path stream and the chunk buffer.
       const prefetching = prefetchPathsRef.current.delete(path);
+      const kind = previewRenderKind(name);
       setPreview({
         path,
         name,
-        kind: previewRenderKind(name),
+        kind,
         src: "",
         loading: true,
         placeholder: thumbnailsRef.current[path],
         siblings,
       });
       if (!prefetching && !previewBuffersRef.current[path]) {
-        send({ t: "sftp-read", path, preview: true });
+        // Text previews read only the head of a large file (and so can peek past
+        // the whole-file download cap); media reads the whole file for the blob.
+        const maxBytes =
+          kind === "text" || kind === "markdown"
+            ? TEXT_PREVIEW_MAX_BYTES
+            : undefined;
+        send({ t: "sftp-read", path, preview: true, maxBytes });
       }
     },
     [send, previewCacheKeyFor, prefetchNeighbors],
@@ -1956,6 +1991,8 @@ export function SshSession({
                 text={preview.text}
                 received={preview.received}
                 total={preview.total}
+                truncated={preview.truncated}
+                encodingWarning={preview.encodingWarning}
                 hasGallery={(preview.siblings?.length ?? 0) > 1}
                 index={preview.siblings?.findIndex((s) => s.path === preview.path)}
                 count={preview.siblings?.length}
