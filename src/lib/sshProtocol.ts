@@ -422,11 +422,47 @@ export function formatSize(bytes: number, type: FileEntry["type"]): string {
  * then case-insensitive by name. Returns a new array (does not mutate input).
  */
 export function sortEntries(entries: FileEntry[]): FileEntry[] {
+  return sortEntriesBy(entries, "name", "asc");
+}
+
+/** Which field a directory listing is sorted on. */
+export type SortKey = "name" | "size" | "mtime";
+/** Sort direction: ascending (A→Z, small→large, old→new) or descending. */
+export type SortDir = "asc" | "desc";
+
+/** The natural first-click direction for each sort key (name A→Z, but size and
+ * date most-recent/largest first, which is what a user usually wants). */
+export const DEFAULT_SORT_DIR: Record<SortKey, SortDir> = {
+  name: "asc",
+  size: "desc",
+  mtime: "desc",
+};
+
+/**
+ * Sort directory entries by `key`/`dir` for the file browser. Directories are
+ * always grouped ahead of files (the conventional "folders on top" behaviour),
+ * and entries are then ordered within each group by the chosen field. Name is
+ * the stable tiebreaker (always ascending) so equal sizes/dates stay in a
+ * predictable order. Returns a new array (does not mutate input).
+ */
+export function sortEntriesBy(
+  entries: FileEntry[],
+  key: SortKey,
+  dir: SortDir,
+): FileEntry[] {
+  const sign = dir === "desc" ? -1 : 1;
   const rank = (e: FileEntry) => (e.type === "dir" ? 0 : 1);
+  const byName = (a: FileEntry, b: FileEntry) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   return [...entries].sort((a, b) => {
     const r = rank(a) - rank(b);
-    if (r !== 0) return r;
-    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    if (r !== 0) return r; // directories always first
+    let cmp: number;
+    if (key === "size") cmp = a.size - b.size;
+    else if (key === "mtime") cmp = a.mtime - b.mtime;
+    else cmp = byName(a, b);
+    if (cmp === 0) return byName(a, b); // stable name tiebreak, always ascending
+    return cmp * sign;
   });
 }
 

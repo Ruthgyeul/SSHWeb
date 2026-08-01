@@ -31,6 +31,8 @@ import {
   parseMessage,
   parseOctalMode,
   sortEntries,
+  sortEntriesBy,
+  DEFAULT_SORT_DIR,
   validateConnectInput,
   validateForward,
   type FileEntry,
@@ -482,6 +484,61 @@ describe("sortEntries", () => {
     ]);
     // original untouched
     expect(entries[0].name).toBe("zeta.txt");
+  });
+});
+
+describe("sortEntriesBy", () => {
+  const entries: FileEntry[] = [
+    { name: "big.bin", type: "file", size: 900, mtime: 100, mode: 0 },
+    { name: "src", type: "dir", size: 0, mtime: 500, mode: 0 },
+    { name: "small.txt", type: "file", size: 10, mtime: 300, mode: 0 },
+    { name: "docs", type: "dir", size: 0, mtime: 200, mode: 0 },
+    { name: "mid.log", type: "file", size: 100, mtime: 200, mode: 0 },
+  ];
+
+  it("keeps directories first regardless of the sort field or direction", () => {
+    for (const key of ["name", "size", "mtime"] as const) {
+      for (const dir of ["asc", "desc"] as const) {
+        const sorted = sortEntriesBy(entries, key, dir);
+        expect(sorted.slice(0, 2).every((e) => e.type === "dir")).toBe(true);
+        expect(sorted.slice(2).every((e) => e.type === "file")).toBe(true);
+      }
+    }
+  });
+
+  it("sorts files by size ascending and descending", () => {
+    expect(
+      sortEntriesBy(entries, "size", "asc")
+        .filter((e) => e.type === "file")
+        .map((e) => e.name),
+    ).toEqual(["small.txt", "mid.log", "big.bin"]);
+    expect(
+      sortEntriesBy(entries, "size", "desc")
+        .filter((e) => e.type === "file")
+        .map((e) => e.name),
+    ).toEqual(["big.bin", "mid.log", "small.txt"]);
+  });
+
+  it("sorts by mtime, breaking ties by name (ascending) in both directions", () => {
+    // mid.log and docs both have mtime 200; docs is a dir so it leads, and the
+    // name tiebreak stays ascending even when the direction is descending.
+    expect(sortEntriesBy(entries, "mtime", "desc").map((e) => e.name)).toEqual([
+      "src", // dir, mtime 500
+      "docs", // dir, mtime 200
+      "small.txt", // 300
+      "mid.log", // 200
+      "big.bin", // 100
+    ]);
+  });
+
+  it("does not mutate its input", () => {
+    const copy = [...entries];
+    sortEntriesBy(entries, "size", "desc");
+    expect(entries).toEqual(copy);
+  });
+
+  it("exposes sensible default directions per key", () => {
+    expect(DEFAULT_SORT_DIR).toEqual({ name: "asc", size: "desc", mtime: "desc" });
   });
 });
 
