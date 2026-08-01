@@ -102,6 +102,9 @@ interface PreviewState {
   received?: number;
   /** Total size announced by `sftp-download-begin`, for the progress bar. */
   total?: number;
+  /** Previewable files in the same view (display order), so the modal can step
+   * ←/→ through them like a gallery. Empty/undefined for one-off opens. */
+  siblings?: { path: string; name: string }[];
 }
 
 /** Max concurrent grid-thumbnail reads. Enough to fill a visible screen of tiles
@@ -205,11 +208,20 @@ export function SshSession({
   // Mirrors the open preview's path so a late `sftp-read` reply can tell whether
   // the user is still viewing that file before it builds a blob URL for it.
   const previewPathRef = useRef<string | null>(null);
+  // Mirrors the full open-preview state so `stepPreview` (gallery ←/→) can read
+  // the latest siblings/loading without being torn down and rebuilt each render.
+  const previewRef = useRef<PreviewState | null>(null);
   // Cached grid-view image thumbnails, keyed by remote path → `data:` URL.
   // Populated lazily as tiles scroll into view; cleared on each directory change
   // (below) to bound memory. `requestedThumbsRef` dedupes in-flight requests so
   // a tile re-rendering never re-fetches.
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
+  // Mirror of `thumbnails` so callbacks can read the latest placeholder without
+  // listing `thumbnails` as a dependency (it changes on every tile load).
+  const thumbnailsRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    thumbnailsRef.current = thumbnails;
+  }, [thumbnails]);
   const requestedThumbsRef = useRef<Set<string>>(new Set());
   // Bound how many thumbnail reads are outstanding at once so a directory of
   // hundreds of images loads the visible tiles first instead of flooding the
@@ -917,6 +929,26 @@ export function SshSession({
     xtermRef.current?.clear();
   }, [send]);
 
+  // Open a file in the preview modal: paint it immediately in a loading state
+  // (with the cached grid thumbnail as an instant placeholder, if any) so the
+  // click feels responsive, then stream the bytes in. `siblings` lets the modal
+  // step ←/→ through the other previewable files in the same view.
+  const openPreviewFile = useCallback(
+    (path: string, name: string, siblings?: { path: string; name: string }[]) => {
+      setPreview({
+        path,
+        name,
+        kind: filePreviewKind(name) ?? "image",
+        src: "",
+        loading: true,
+        placeholder: thumbnailsRef.current[path],
+        siblings,
+      });
+      send({ t: "sftp-read", path, preview: true });
+    },
+    [send],
+  );
+
   const decideHostKey = useCallback(
     (accept: boolean) => {
       if (accept && authPrompt?.kind === "hostkey") {
@@ -960,6 +992,32 @@ export function SshSession({
   useEffect(() => {
     previewPathRef.current = preview?.path ?? null;
   }, [preview?.path]);
+
+  // Keep the full-state mirror in sync for stepPreview (gallery ←/→).
+  useEffect(() => {
+    previewRef.current = preview;
+  }, [preview]);
+
+  // Step the preview modal to the previous/next previewable file in the same
+  // view (wraps around). Cancels the current in-flight stream first so leaving a
+  // half-loaded file doesn't keep pulling bytes.
+  const stepPreview = useCallback(
+    (delta: number) => {
+      const cur = previewRef.current;
+      if (!cur || !cur.siblings || cur.siblings.length < 2) return;
+      const idx = cur.siblings.findIndex((s) => s.path === cur.path);
+      if (idx < 0) return;
+      const n = cur.siblings.length;
+      const target = cur.siblings[(idx + delta + n) % n];
+      if (!target || target.path === cur.path) return;
+      if (cur.loading) {
+        send({ t: "sftp-download-cancel", path: cur.path });
+        delete previewBuffersRef.current[cur.path];
+      }
+      openPreviewFile(target.path, target.name, cur.siblings);
+    },
+    [send, openPreviewFile],
+  );
 
   // Revoke a preview's blob URL once it's replaced or the modal closes, so
   // decoded media doesn't leak for the life of the session.
@@ -1705,20 +1763,7 @@ export function SshSession({
               onMove={onMove}
               onChmod={onChmod}
               onEdit={requestEdit}
-              onPreview={(path, name) => {
-                // Open the modal immediately in a loading state (with the cached
-                // grid thumbnail as an instant placeholder, if any) so the click
-                // feels responsive while the full file transfers.
-                setPreview({
-                  path,
-                  name,
-                  kind: filePreviewKind(name) ?? "image",
-                  src: "",
-                  loading: true,
-                  placeholder: thumbnails[path],
-                });
-                send({ t: "sftp-read", path, preview: true });
-              }}
+              onPreview={openPreviewFile}
               onOpenUnsupported={(path, name) =>
                 setPreview({
                   path,
@@ -1746,6 +1791,9 @@ export function SshSession({
                 text={preview.text}
                 received={preview.received}
                 total={preview.total}
+                hasGallery={(preview.siblings?.length ?? 0) > 1}
+                onPrev={() => stepPreview(-1)}
+                onNext={() => stepPreview(1)}
                 onDownload={() =>
                   // Media previews already hold the bytes; the download-only
                   // fallback fetches on demand (streamed, with a progress bar).
