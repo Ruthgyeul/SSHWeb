@@ -19,19 +19,39 @@ import type { TerminalPrefs } from "./useTerminalPrefs";
  * delegated up via `onChange` (the parent persists them through
  * `useTerminalPrefs`, so the choice is shared across sessions and reloads).
  */
+/** Human-readable byte size (e.g. `12.3 MB`) for the cached-media read-out. */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v >= 10 || Number.isInteger(v) ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
 export function TerminalSettings({
   prefs,
   onChange,
   onClearThumbnailCache,
+  getCacheBytes,
 }: {
   prefs: TerminalPrefs;
   onChange: (patch: Partial<TerminalPrefs>) => void;
-  /** Evict this connection's cached grid thumbnails from the bridge (and the
-   * in-memory copies). The cache lives server-side; the client keeps no store. */
+  /** Evict this connection's cached grid thumbnails from the bridge, plus the
+   * in-memory thumbnail + preview copies this browser is holding. */
   onClearThumbnailCache?: () => void | Promise<void>;
+  /** Current bytes of cached media held in this browser (grid thumbnails +
+   * recently-viewed previews), read when the popover opens to show the size. */
+  getCacheBytes?: () => number;
 }) {
   const [open, setOpen] = useState(false);
   const [cacheCleared, setCacheCleared] = useState(false);
+  // Bytes of in-browser cached media, sampled when the popover opens (and reset
+  // to 0 after a clear) so the read-out reflects what "Clear" will free.
+  const [cacheBytes, setCacheBytes] = useState<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Trusted host keys (TOFU store), read from localStorage when the popover
@@ -44,6 +64,7 @@ export function TerminalSettings({
     setOpen(next);
     if (next) {
       setCacheCleared(false);
+      setCacheBytes(getCacheBytes ? getCacheBytes() : null);
       try {
         setHosts(parseKnownHosts(localStorage.getItem(KNOWN_HOSTS_KEY)));
       } catch {
@@ -55,6 +76,7 @@ export function TerminalSettings({
   const clearCache = async () => {
     await onClearThumbnailCache?.();
     setCacheCleared(true);
+    setCacheBytes(0);
   };
 
   const forgetHost = (id: string) => {
@@ -193,20 +215,25 @@ export function TerminalSettings({
           {/* Grid thumbnail cache */}
           {onClearThumbnailCache && (
             <div className="mt-3 border-t border-term-border pt-3">
-              <span className="mb-1.5 block text-xs font-medium text-term-muted">
-                Grid thumbnail cache
+              <span className="mb-1.5 flex items-center justify-between text-xs font-medium text-term-muted">
+                <span>Media cache</span>
+                {cacheBytes !== null && (
+                  <span className="tabular-nums text-term-faint">
+                    {formatBytes(cacheBytes)} in memory
+                  </span>
+                )}
               </span>
               <button
                 type="button"
                 onClick={clearCache}
                 className="w-full rounded border border-term-border px-2 py-1 text-xs text-term-dim transition-colors hover:border-term-red hover:text-term-red"
               >
-                Clear thumbnail cache
+                Clear cache{cacheBytes ? ` (${formatBytes(cacheBytes)})` : ""}
               </button>
               <p className="mt-1 text-[10px] text-term-faint">
                 {cacheCleared
-                  ? "Cleared. Thumbnails will regenerate as you browse."
-                  : "Evicts this connection's cached thumbnails on the server."}
+                  ? "Cleared. Thumbnails & previews regenerate as you browse."
+                  : "Drops this browser's cached thumbnails & previews, and evicts this connection's tiles on the server."}
               </p>
             </div>
           )}

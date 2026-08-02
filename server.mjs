@@ -24,6 +24,9 @@ import net from "node:net";
 import { parse } from "node:url";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { spawn } from "node:child_process";
+import { writeFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import next from "next";
 import nextEnv from "@next/env";
 import { WebSocketServer } from "ws";
@@ -77,13 +80,13 @@ if (!ffmpegAvailable) {
 }
 
 /**
- * Extract a representative poster frame from a video buffer via ffmpeg, scaled
- * to fit the thumbnail box and returned as PNG bytes (or `null` on any failure).
- * The video is fed on stdin and the frame collected from stdout, so nothing
- * touches disk and the original file is never modified. ffmpeg exits after one
- * frame, so a broken-pipe error on the stdin write is expected and ignored.
+ * Run ffmpeg to pull one representative poster frame (PNG bytes) from `-i input`,
+ * scaled to fit the thumbnail box, or `null` on any failure. When `stdinBuffer`
+ * is given the input is fed on stdin (`pipe:0`); otherwise `input` is a file path
+ * ffmpeg can seek in. `thumbnail` picks a frame from the opening of the clip
+ * rather than a possibly-black frame 0.
  */
-function extractVideoFrame(buffer) {
+function ffmpegPosterFrame(input, stdinBuffer) {
   return new Promise((resolve) => {
     let proc;
     try {
@@ -91,9 +94,7 @@ function extractVideoFrame(buffer) {
         "-loglevel",
         "error",
         "-i",
-        "pipe:0",
-        // `thumbnail` picks a representative frame from the opening of the clip
-        // rather than a possibly-black frame 0; then fit it into the box.
+        input,
         "-vf",
         `thumbnail,scale=w=${THUMBNAIL_PIXELS}:h=${THUMBNAIL_PIXELS}:force_original_aspect_ratio=decrease`,
         "-frames:v",
@@ -126,16 +127,48 @@ function extractVideoFrame(buffer) {
     }, 15000);
     proc.stdout.on("data", (c) => chunks.push(c));
     proc.stdout.on("error", () => {});
-    // ffmpeg stops reading once it has its frame → EPIPE on the write is normal.
-    proc.stdin.on("error", () => {});
     proc.on("error", () => done(null));
     proc.on("close", (code) => {
       const out = Buffer.concat(chunks);
       done(code === 0 && out.length > 0 ? out : null);
     });
-    proc.stdin.write(buffer);
-    proc.stdin.end();
+    if (stdinBuffer) {
+      // ffmpeg stops reading once it has its frame → EPIPE on the write is normal.
+      proc.stdin.on("error", () => {});
+      proc.stdin.write(stdinBuffer);
+      proc.stdin.end();
+    }
   });
+}
+
+/**
+ * Extract a representative poster frame from a video buffer via ffmpeg, scaled to
+ * fit the thumbnail box (PNG bytes, or `null` on failure). The original file is
+ * never modified. Tries the disk-free **stdin pipe** first (works for faststart
+ * clips); if that yields nothing, falls back to a **short-lived temp file** so
+ * ffmpeg has a *seekable* input — needed for the common case of an MP4/MOV whose
+ * `moov` atom sits at the end of the file (most phone recordings), which a
+ * non-seekable pipe can't decode. The temp file is deleted immediately after.
+ */
+async function extractVideoFrame(buffer) {
+  const piped = await ffmpegPosterFrame("pipe:0", buffer);
+  if (piped) return piped;
+  let tmp = null;
+  try {
+    tmp = join(tmpdir(), `sshweb-poster-${randomBytes(8).toString("hex")}`);
+    await writeFile(tmp, buffer);
+    return await ffmpegPosterFrame(tmp, null);
+  } catch {
+    return null;
+  } finally {
+    if (tmp) {
+      try {
+        await unlink(tmp);
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+  }
 }
 
 const dev = process.env.NODE_ENV !== "production";
@@ -202,6 +235,15 @@ const THUMBNAIL_PIXELS = 256;
 const THUMB_CACHE_MB = parseInt(process.env.SSH_THUMB_CACHE_MB || "128", 10);
 const THUMB_CACHE_MAX_BYTES =
   THUMB_CACHE_MB > 0 ? THUMB_CACHE_MB * 1024 * 1024 : 0;
+// Time-to-live (ms) for a cached tile: a tile unused for this long is dropped,
+// so a re-login only reuses tiles from the recent past rather than keeping a
+// decoded copy of your files in the shared process memory indefinitely (a
+// confidentiality knob for a multi-tenant deploy). Default 30 min; 0 = never
+// expire (only LRU eviction / explicit purge / restart clear it).
+const THUMB_CACHE_TTL_MS = (() => {
+  const n = parseInt(process.env.SSH_THUMB_CACHE_TTL_MS ?? "1800000", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 1800000;
+})();
 // key → { buf: Buffer, bytes: number, lastUsed: number }; Map insertion order
 // doubles as the LRU order (get() re-inserts to move an entry to the newest).
 const thumbCache = new Map();
@@ -225,16 +267,45 @@ function planThumbCacheEvictions(rows, maxBytes) {
   return evict;
 }
 
-/** Look up a cached tile, bumping its recency; null on miss (or when disabled). */
+/** Look up a cached tile, bumping its recency; null on miss (or when disabled,
+ * or once the tile has aged past the TTL). */
 function thumbCacheGet(key) {
   if (THUMB_CACHE_MAX_BYTES <= 0) return null;
   const row = thumbCache.get(key);
   if (!row) return null;
-  row.lastUsed = Date.now();
+  const now = Date.now();
+  if (THUMB_CACHE_TTL_MS > 0 && now - row.lastUsed > THUMB_CACHE_TTL_MS) {
+    thumbCache.delete(key);
+    thumbCacheBytes -= row.bytes;
+    return null; // expired → treat as a miss (re-generated fresh)
+  }
+  row.lastUsed = now;
   thumbCache.delete(key);
   thumbCache.set(key, row); // move to newest for LRU
   thumbCacheHits += 1;
   return row.buf;
+}
+
+/** Actively drop tiles that have aged past the TTL (so memory frees on a timer,
+ * not only when a stale key is next requested). No-op when TTL is disabled. */
+function thumbCacheSweepExpired() {
+  if (THUMB_CACHE_TTL_MS <= 0 || THUMB_CACHE_MAX_BYTES <= 0) return;
+  const now = Date.now();
+  for (const [key, row] of thumbCache) {
+    if (now - row.lastUsed > THUMB_CACHE_TTL_MS) {
+      thumbCache.delete(key);
+      thumbCacheBytes -= row.bytes;
+    }
+  }
+}
+// Sweep on a timer (at most once a minute) so expired tiles free memory even
+// when the folder is never revisited. `unref` so it never keeps the process up.
+if (THUMB_CACHE_TTL_MS > 0 && THUMB_CACHE_MAX_BYTES > 0) {
+  const timer = setInterval(
+    thumbCacheSweepExpired,
+    Math.min(THUMB_CACHE_TTL_MS, 60000),
+  );
+  timer.unref?.();
 }
 
 /** Store a finished tile, evicting least-recently-used entries once over budget. */
@@ -269,15 +340,15 @@ function thumbCachePurge(prefixes) {
   }
 }
 
-// Click-to-view image previews are downscaled to a *lossless* WebP so a big
-// photo opens far faster while staying pixel-identical to the (downscaled)
-// source; the original is only read, never modified, and Download (or zooming
-// past the preview resolution) still fetches it whole. These mirror
-// src/lib/sshProtocol.ts (the "two synchronized places" discipline): the
-// preview's longest-edge bound, its WebP lossless-compression tightness, the
-// minimum original size worth transcoding, and the largest original read into
-// memory to transcode (only the WebP crosses the wire, so this can exceed the
-// download cap; it just bounds decode memory).
+// Click-to-view image previews are downscaled to a compact transcode (format
+// chosen by SSH_PREVIEW_IMAGE_FORMAT) so a big photo opens far faster while
+// staying visually indistinguishable at the preview resolution; the original is
+// only read, never modified, and Download (or zooming past the preview
+// resolution) still fetches it whole. These mirror src/lib/sshProtocol.ts (the
+// "two synchronized places" discipline): the preview's longest-edge bound, its
+// encode quality, the minimum original size worth transcoding, and the largest
+// original read into memory to transcode (only the transcode crosses the wire,
+// so this can exceed the download cap; it just bounds decode memory).
 const PREVIEW_IMAGE_MAX_DIM = 2560;
 // Default quality mirrors PREVIEW_IMAGE_QUALITY in src/lib/sshProtocol.ts.
 const PREVIEW_IMAGE_QUALITY = (() => {
