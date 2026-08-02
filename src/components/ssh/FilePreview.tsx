@@ -537,7 +537,7 @@ export function FilePreview({
 
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-term-card">
-      <div className="flex items-center gap-3 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
         <span className="text-xs text-term-muted" aria-hidden>
           {MODE_ICON[kind]}
         </span>
@@ -553,7 +553,7 @@ export function FilePreview({
           </span>
         )}
         {isImage && !loading && src && (
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1">
             {dims && (
               <span
                 className={cn(
@@ -724,10 +724,10 @@ export function FilePreview({
         </>
       ) : (
       <div
-        className="min-h-0 flex-1 overflow-hidden bg-term-bg p-4"
+        className="relative min-h-0 flex-1 overflow-hidden bg-term-bg"
         onWheel={onWheel}
       >
-        <div className="relative flex min-h-full items-center justify-center">
+        <div className="absolute inset-0 flex items-center justify-center p-4">
           {loading && spinner}
           {galleryArrows}
           {kind === "video" ? (
