@@ -29,11 +29,12 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
     title: "Preview",
     items: [
       { keys: ["←", "→"], desc: "Previous / next file (gallery)" },
+      { keys: ["Shift", "←/→"], desc: "Previous / next file (works over video/audio too)" },
       { keys: ["+", "−"], desc: "Zoom an image in / out" },
       { keys: ["0"], desc: "Reset the image view" },
       { keys: ["R"], desc: "Rotate the image 90°" },
       { keys: ["Space"], desc: "Play / pause a video" },
-      { keys: ["←", "→"], desc: "Seek a video ∓5s (arrows step the gallery otherwise)" },
+      { keys: ["←", "→"], desc: "Seek a video ∓5s (Shift+←/→ steps the gallery)" },
       { keys: ["↑", "↓"], desc: "Video volume up / down (M mute, F fullscreen)" },
       { keys: ["Ctrl/⌘", "F"], desc: "Find in a text preview" },
       { keys: ["Esc"], desc: "Close the find bar / the preview" },

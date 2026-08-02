@@ -96,6 +96,7 @@ export function FilePreview({
   truncated = false,
   encodingWarning = false,
   optimized = false,
+  originalDims,
   loadingOriginal = false,
   onLoadOriginal,
   videoFallbackSrc,
@@ -140,6 +141,10 @@ export function FilePreview({
   /** True when the shown image is a downscaled WebP preview, not the original —
    * enables the "load original" affordance (zoom / button) for pixel-perfect detail. */
   optimized?: boolean;
+  /** The ORIGINAL image's pixel dimensions (when the shown bytes are a downscaled
+   * preview), so the toolbar shows the true size and a very large original is
+   * loaded only on an explicit click (not auto-fetched on zoom). */
+  originalDims?: { w: number; h: number };
   /** True while the full-resolution original is being fetched to replace the WebP. */
   loadingOriginal?: boolean;
   /** Fetch the full-resolution original to replace an optimized preview (called
@@ -311,11 +316,17 @@ export function FilePreview({
   }, []);
   const rotate = useCallback(() => setRotation((r) => (r + 90) % 360), []);
 
+  // A very large original (past LARGE_IMAGE_PIXELS) is NOT auto-fetched on zoom —
+  // decoding one can spike memory / crash the tab, so it loads only on an explicit
+  // "Original" click. Normal-sized originals still auto-load on zoom-in.
+  const originalIsHuge =
+    !!originalDims && originalDims.w * originalDims.h > LARGE_IMAGE_PIXELS;
+
   // Zooming past the fit view on an optimized (downscaled WebP) image pulls the
   // full-resolution original so the zoomed detail is pixel-perfect.
   useEffect(() => {
-    if (optimized && isImage && zoom > 1) requestOriginal();
-  }, [optimized, isImage, zoom, requestOriginal]);
+    if (optimized && isImage && zoom > 1 && !originalIsHuge) requestOriginal();
+  }, [optimized, isImage, zoom, originalIsHuge, requestOriginal]);
 
   // Keyboard: Esc closes, ←/→ walk the gallery, image transforms, and Ctrl/⌘+F
   // opens the text find bar.
@@ -343,8 +354,16 @@ export function FilePreview({
       }
       // While typing in the find input, leave the rest of the keys to it.
       if (typing) return;
+      // Shift+←/→ always steps the gallery, on every kind — including video/audio,
+      // where the plain arrows are reserved for seeking. Lets the keyboard step
+      // through a folder of clips without reaching for the on-screen ‹ › buttons.
+      if (hasGallery && e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        e.preventDefault();
+        (e.key === "ArrowLeft" ? onPrev : onNext)?.();
+        return;
+      }
       // Let a focused <video>/<audio> keep its own arrow-key seeking; gallery
-      // stepping for those is still available via the on-screen ‹ › buttons.
+      // stepping for those is via Shift+←/→ (above) or the on-screen ‹ › buttons.
       const mediaFocused =
         kind === "video" || kind === "audio";
       if (!mediaFocused && hasGallery && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
@@ -624,31 +643,41 @@ export function FilePreview({
         )}
         {isImage && !loading && src && (
           <div className="flex flex-wrap items-center gap-1">
-            {dims && (
-              <span
-                className={cn(
-                  "mr-1 text-[11px] tabular-nums",
-                  dims.w * dims.h > LARGE_IMAGE_PIXELS
-                    ? "text-term-yellow"
-                    : "text-term-faint",
-                )}
-                title={
-                  dims.w * dims.h > LARGE_IMAGE_PIXELS
-                    ? "Very large image — may be slow to render"
-                    : undefined
-                }
-              >
-                {dims.w * dims.h > LARGE_IMAGE_PIXELS && "⚠ "}
-                {dims.w}×{dims.h}
-              </span>
-            )}
+            {(() => {
+              // Prefer the ORIGINAL's true dimensions (from the bridge) over the
+              // downscaled preview's own dimensions, so the read-out reflects the
+              // real photo size even while a light WebP is on screen.
+              const shown = originalDims ?? dims;
+              if (!shown) return null;
+              const huge = shown.w * shown.h > LARGE_IMAGE_PIXELS;
+              return (
+                <span
+                  className={cn(
+                    "mr-1 text-[11px] tabular-nums",
+                    huge ? "text-term-yellow" : "text-term-faint",
+                  )}
+                  title={
+                    huge
+                      ? "Very large image — the full-resolution original loads only on the Original button"
+                      : undefined
+                  }
+                >
+                  {huge && "⚠ "}
+                  {shown.w}×{shown.h}
+                </span>
+              );
+            })()}
             {onLoadOriginal && (optimized || loadingOriginal) && (
               <button
                 type="button"
                 onClick={requestOriginal}
                 disabled={loadingOriginal}
-                className={cn(toolBtn, "mr-1")}
-                title="Load the full-resolution original for pixel-perfect zoom"
+                className={cn(toolBtn, "mr-1", originalIsHuge && "text-term-yellow")}
+                title={
+                  originalIsHuge
+                    ? "Load the very large full-resolution original (may be slow / memory-heavy)"
+                    : "Load the full-resolution original for pixel-perfect zoom"
+                }
               >
                 {loadingOriginal ? "Original…" : "Original"}
               </button>

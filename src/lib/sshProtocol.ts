@@ -285,6 +285,11 @@ export type ServerMessage =
       // the client these are an *optimized* preview, not the original — so the
       // modal builds its blob with this type and routes Download to the original.
       mime?: string;
+      // The ORIGINAL image's pixel dimensions (only on a transcoded preview
+      // begin), so the modal shows the true size and can gate loading a very
+      // large original on demand. May be absent when sharp couldn't read them.
+      origWidth?: number;
+      origHeight?: number;
     }
   | { t: "sftp-download-chunk"; path: string; dataB64: string; preview?: boolean }
   // `truncated` is set when a capped `preview` read (`maxBytes`) stopped short
