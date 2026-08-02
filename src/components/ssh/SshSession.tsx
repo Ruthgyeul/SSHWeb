@@ -106,6 +106,10 @@ interface PreviewState {
    * rather than the original file. Keeps the view light while routing the
    * Download button to the untouched original. */
   optimized?: boolean;
+  /** True while the full-resolution original is being fetched on demand (zoom /
+   * "load original") to replace an `optimized` preview — drives a small badge;
+   * the WebP stays visible until the original arrives. */
+  loadingOriginal?: boolean;
   /** Bytes received so far while the preview streams in — drives the modal's
    * progress bar. Set once the `sftp-download-begin` for this preview arrives. */
   received?: number;
@@ -307,6 +311,10 @@ export function SshSession({
   // images streamed ahead of a ←/→ step). Lets the download handlers buffer
   // their bytes without painting the modal; cleared as each stream ends.
   const prefetchPathsRef = useRef<Set<string>>(new Set());
+  // Paths for which the full-resolution original is being fetched on demand to
+  // replace an optimized (WebP) preview — so the download handlers paint the
+  // original into the open modal instead of caching it over the fast WebP.
+  const originalLoadPathsRef = useRef<Set<string>>(new Set());
   // Per-session capability token for the seekable /api/preview media endpoint
   // (from `caps`), read when building a video preview's `src`. Null when the
   // deployment didn't mint one — video then falls back to blob streaming.
@@ -831,13 +839,19 @@ export function SshSession({
             // the original — so Download must re-fetch the original.
             const optimized = !!serverMime;
             const wasPrefetch = prefetchPathsRef.current.delete(msg.path);
+            // An on-demand original load (zoom / "load original") replacing an
+            // optimized preview: paint it but keep the fast WebP in the cache.
+            const isOriginalLoad = originalLoadPathsRef.current.delete(msg.path);
             if (!chunks) break;
             const bytes = concatBytes(chunks);
             const name = msg.path.split("/").pop() || "file";
             // Cache the fully-received bytes even if the user has since stepped
             // away — the next visit reuses them without re-transfer. A truncated
-            // (head-only) text read is never cached: a re-open must re-read.
-            if (!msg.truncated) cachePreview(msg.path, name, bytes, optimized, serverMime);
+            // (head-only) text read is never cached: a re-open must re-read. An
+            // original-load isn't cached either, so re-opening still paints the
+            // light WebP first and zoom re-fetches the original.
+            if (!msg.truncated && !isOriginalLoad)
+              cachePreview(msg.path, name, bytes, optimized, serverMime);
             // Only paint if still viewing this file (modal open, same path). A
             // prefetch that finished in the background just stays cached.
             if (previewPathRef.current !== msg.path) break;
@@ -867,6 +881,7 @@ export function SshSession({
                     total: undefined,
                     truncated: msg.truncated === true,
                     optimized,
+                    loadingOriginal: false,
                   }
                 : prev,
             );
@@ -985,6 +1000,10 @@ export function SshSession({
             setFilesLoading(false);
             setSavingPath(null);
             setElevatedPending(false);
+            // An in-flight "load original" that fails (e.g. the original is over
+            // the download cap) should keep the WebP preview and just clear the
+            // loading badge so it can be retried.
+            originalLoadPathsRef.current.clear();
             // A preview read that fails (e.g. over the download cap, or a read
             // error) must not leave the modal spinning forever: drop it to the
             // download-only card so the user still has a way to fetch the file.
@@ -997,7 +1016,9 @@ export function SshSession({
                     received: undefined,
                     total: undefined,
                   }
-                : prev,
+                : prev && prev.loadingOriginal
+                  ? { ...prev, loadingOriginal: false }
+                  : prev,
             );
             notify("error", msg.message);
           } else {
@@ -1150,9 +1171,11 @@ export function SshSession({
     uploadInFlightRef.current = 0;
     downloadBuffersRef.current = {};
     previewBuffersRef.current = {};
+    previewMimeRef.current = {};
     previewCacheRef.current.clear();
     previewCacheBytesRef.current = 0;
     prefetchPathsRef.current.clear();
+    originalLoadPathsRef.current.clear();
     streamTokenRef.current = null;
     videoTimesRef.current.clear();
     setHasLast(false);
@@ -1186,6 +1209,9 @@ export function SshSession({
           kind: mediaKind,
           src: mediaStreamSrc(streamTokenRef.current, path),
           loading: false,
+          // The cached grid thumbnail (video poster frame) shows instantly as the
+          // <video> poster while the stream initializes — no black flash.
+          placeholder: thumbnailsRef.current[path],
           siblings,
         });
         prefetchNeighbors(path, siblings);
@@ -1243,6 +1269,25 @@ export function SshSession({
       }
     },
     [send, previewCacheKeyFor, prefetchNeighbors],
+  );
+
+  // Fetch the full-resolution original of an open, optimized (WebP) image preview
+  // — triggered by zooming in or the "load original" button — and swap it into
+  // the modal so zoomed detail is pixel-perfect. The light WebP stays cached, so
+  // stepping away and back still paints instantly. Guards against a duplicate
+  // in-flight request for the same file.
+  const loadPreviewOriginal = useCallback(
+    (path: string) => {
+      if (originalLoadPathsRef.current.has(path)) return;
+      originalLoadPathsRef.current.add(path);
+      setPreview((prev) =>
+        prev && prev.path === path ? { ...prev, loadingOriginal: true } : prev,
+      );
+      // Full read (no previewResize): the original streams in and replaces the
+      // WebP in the modal (see the `sftp-download-end` handler).
+      send({ t: "sftp-read", path, preview: true });
+    },
+    [send],
   );
 
   const decideHostKey = useCallback(
@@ -2089,6 +2134,9 @@ export function SshSession({
                 total={preview.total}
                 truncated={preview.truncated}
                 encodingWarning={preview.encodingWarning}
+                optimized={preview.optimized}
+                loadingOriginal={preview.loadingOriginal}
+                onLoadOriginal={() => loadPreviewOriginal(preview.path)}
                 getStartTime={() => videoTimesRef.current.get(preview.path) ?? 0}
                 onTime={(t) => videoTimesRef.current.set(preview.path, t)}
                 hasGallery={(preview.siblings?.length ?? 0) > 1}
