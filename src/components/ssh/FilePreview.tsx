@@ -95,6 +95,9 @@ export function FilePreview({
   optimized = false,
   loadingOriginal = false,
   onLoadOriginal,
+  videoFallbackSrc,
+  subtitleSrc,
+  subtitleTrackLabel,
   getStartTime,
   onTime,
   hasGallery = false,
@@ -133,8 +136,16 @@ export function FilePreview({
   /** True while the full-resolution original is being fetched to replace the WebP. */
   loadingOriginal?: boolean;
   /** Fetch the full-resolution original to replace an optimized preview (called
-   * once on first zoom-in, or via the toolbar button). */
+   * once on first zoom-in, or via the toolbar button). Omitted when there's no
+   * viewable raw original to swap in (e.g. a HEIC preview is always a transcode). */
   onLoadOriginal?: () => void;
+  /** For a video the browser can't play natively, an alternate `src` (the bridge
+   * transcode) to switch to when the primary source errors. */
+  videoFallbackSrc?: string;
+  /** `blob:` URL of a WebVTT subtitle track to show on the `<video>`. */
+  subtitleSrc?: string;
+  /** Label for the subtitle track (e.g. `EN`). */
+  subtitleTrackLabel?: string;
   /** Get the playback position (seconds) to resume a video from when it opens.
    * A getter (not a value) so the parent's ref isn't read during render. */
   getStartTime?: () => number;
@@ -193,6 +204,23 @@ export function FilePreview({
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
   // The <video> element, for keyboard transport controls & resume position.
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  // Playback speed (applied to the <video>); stepped with [ and ].
+  const [rate, setRate] = useState(1);
+  // Switch to the bridge-transcode `src` once native playback of this video
+  // errors (a codec the browser can't decode). Reset per file (modal is keyed
+  // by path). A video whose container is known-unplayable already arrives with
+  // its `src` pointed at the transcode, so this only covers the surprise cases.
+  const [usingFallback, setUsingFallback] = useState(false);
+  const videoSrc = usingFallback && videoFallbackSrc ? videoFallbackSrc : src;
+  const setSpeed = useCallback((next: number) => {
+    const clamped = Math.min(4, Math.max(0.25, Math.round(next * 100) / 100));
+    setRate(clamped);
+    if (videoRef.current) videoRef.current.playbackRate = clamped;
+  }, []);
+  // Keep the element's rate in sync (e.g. after it (re)mounts on a fallback swap).
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.playbackRate = rate;
+  }, [rate, videoSrc]);
   // Fire the "load original" request at most once per open file (the modal is
   // keyed by path, so this resets when stepping the gallery).
   const originalFiredRef = useRef(false);
@@ -353,6 +381,26 @@ export function FilePreview({
             if (document.fullscreenElement) void document.exitFullscreen();
             else void v.requestFullscreen?.();
             return;
+          case "]":
+          case ">":
+            e.preventDefault(); // speed up
+            setSpeed(v.playbackRate + 0.25);
+            return;
+          case "[":
+          case "<":
+            e.preventDefault(); // slow down
+            setSpeed(v.playbackRate - 0.25);
+            return;
+          case ".":
+            e.preventDefault(); // step one frame forward
+            v.pause();
+            v.currentTime = v.currentTime + 1 / 30;
+            return;
+          case ",":
+            e.preventDefault(); // step one frame back
+            v.pause();
+            v.currentTime = Math.max(0, v.currentTime - 1 / 30);
+            return;
           default:
             return;
         }
@@ -374,7 +422,7 @@ export function FilePreview({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [kind, isImage, isText, findOpen, hasGallery, onPrev, onNext, onClose, zoomBy, resetView, rotate]);
+  }, [kind, isImage, isText, findOpen, hasGallery, onPrev, onNext, onClose, zoomBy, resetView, rotate, setSpeed]);
 
   const onWheel = (e: React.WheelEvent) => {
     if (!isImage) return;
@@ -572,7 +620,7 @@ export function FilePreview({
                 {dims.w}×{dims.h}
               </span>
             )}
-            {(optimized || loadingOriginal) && (
+            {onLoadOriginal && (optimized || loadingOriginal) && (
               <button
                 type="button"
                 onClick={requestOriginal}
@@ -731,32 +779,53 @@ export function FilePreview({
           {loading && spinner}
           {galleryArrows}
           {kind === "video" ? (
-            src ? (
-              <video
-                ref={videoRef}
-                src={src}
-                controls
-                playsInline
-                // Only fetch enough to show the first frame + duration until the
-                // user hits play — a range-streamed clip then pulls ranges on
-                // demand instead of buffering ahead.
-                preload="metadata"
-                // The cached grid poster frame shows instantly (no black flash)
-                // while the stream initializes.
-                poster={placeholder}
-                onLoadedMetadata={(e) => {
-                  const v = e.currentTarget;
-                  // Resume from the last position (if within the clip).
-                  const start = getStartTime?.() ?? 0;
-                  if (start > 0 && start < v.duration) {
-                    v.currentTime = start;
-                  }
-                }}
-                onTimeUpdate={(e) => onTime?.(e.currentTarget.currentTime)}
-                className="max-h-full max-w-full"
-              >
-                Your browser cannot play this video.
-              </video>
+            videoSrc ? (
+              <>
+                {rate !== 1 && (
+                  <span className="absolute right-3 top-3 z-20 rounded bg-term-panel/80 px-1.5 py-0.5 text-[11px] tabular-nums text-term-muted">
+                    {rate}×
+                  </span>
+                )}
+                <video
+                  ref={videoRef}
+                  src={videoSrc}
+                  controls
+                  playsInline
+                  // Only fetch enough to show the first frame + duration until the
+                  // user hits play — a range-streamed clip then pulls ranges on
+                  // demand instead of buffering ahead.
+                  preload="metadata"
+                  // The cached grid poster frame shows instantly (no black flash)
+                  // while the stream initializes.
+                  poster={placeholder}
+                  onLoadedMetadata={(e) => {
+                    const v = e.currentTarget;
+                    v.playbackRate = rate;
+                    // Resume from the last position (if within the clip).
+                    const start = getStartTime?.() ?? 0;
+                    if (start > 0 && start < v.duration) {
+                      v.currentTime = start;
+                    }
+                  }}
+                  onError={() => {
+                    // A codec the browser can't decode: retry via the bridge
+                    // transcode (progressive MP4) if we haven't already.
+                    if (videoFallbackSrc && !usingFallback) setUsingFallback(true);
+                  }}
+                  onTimeUpdate={(e) => onTime?.(e.currentTarget.currentTime)}
+                  className="max-h-full max-w-full"
+                >
+                  {subtitleSrc && (
+                    <track
+                      default
+                      kind="subtitles"
+                      src={subtitleSrc}
+                      label={subtitleTrackLabel ?? "Subtitles"}
+                    />
+                  )}
+                  Your browser cannot play this video.
+                </video>
+              </>
             ) : null
           ) : kind === "audio" ? (
             src ? (

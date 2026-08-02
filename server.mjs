@@ -176,6 +176,99 @@ const THUMBNAIL_VIDEO_MAX_BYTES = 64 * 1024 * 1024;
 // src/lib/sshProtocol.ts. Images are downscaled to fit this box and re-encoded
 // as WebP before being sent to the grid.
 const THUMBNAIL_PIXELS = 256;
+
+// ---------------------------------------------------------------------------
+// Server-side grid-thumbnail cache (in-memory, LRU).
+//
+// Generating a thumbnail reads the original off the SSH target and downscales
+// it with sharp/ffmpeg — cheap per file, but a directory of hundreds repeats
+// that on every visit and every re-login. Caching the finished WebP tile here
+// lets a return visit (even a fresh login) reuse it with no SSH read and no
+// transcode, so image/video grids paint as fast as the bytes can be sent. The
+// cache is:
+//   • process-global (shared across sessions/logins) so a re-login reuses it;
+//   • in-memory only — nothing is written to disk, so no file-derived data
+//     outlives a bridge restart, and the client keeps thumbnails in memory only
+//     (dropping every tile on logout — no browser copy lingers to download);
+//   • keyed by identity (`user@host`, or `user@host#root` for an elevated read)
+//     + path + `size:mtime`, so one login never reads another identity's tiles,
+//     an edited file misses (new version tag), and an elevated (root-read) tile
+//     is isolated from the login-user one;
+//   • bounded by SSH_THUMB_CACHE_MB (default 128 MB; 0 disables) and evicted
+//     least-recently-used first.
+//
+// `thumbCacheKey` + `planThumbCacheEvictions` mirror `thumbnailCacheKey` +
+// `planThumbnailEvictions` in src/lib/thumbnailCache.ts — keep them in sync.
+const THUMB_CACHE_MB = parseInt(process.env.SSH_THUMB_CACHE_MB || "128", 10);
+const THUMB_CACHE_MAX_BYTES =
+  THUMB_CACHE_MB > 0 ? THUMB_CACHE_MB * 1024 * 1024 : 0;
+// key → { buf: Buffer, bytes: number, lastUsed: number }; Map insertion order
+// doubles as the LRU order (get() re-inserts to move an entry to the newest).
+const thumbCache = new Map();
+let thumbCacheBytes = 0;
+
+/** Mirrors src/lib/thumbnailCache.ts:thumbnailCacheKey. */
+function thumbCacheKey(scope, path, version) {
+  return `${scope} ${path} ${version}`;
+}
+
+/** Mirrors src/lib/thumbnailCache.ts:planThumbnailEvictions. */
+function planThumbCacheEvictions(rows, maxBytes) {
+  if (maxBytes <= 0) return rows.map((r) => r.key);
+  const newestFirst = [...rows].sort((a, b) => b.lastUsed - a.lastUsed);
+  const evict = [];
+  let total = 0;
+  for (const row of newestFirst) {
+    total += row.bytes;
+    if (total > maxBytes) evict.push(row.key);
+  }
+  return evict;
+}
+
+/** Look up a cached tile, bumping its recency; null on miss (or when disabled). */
+function thumbCacheGet(key) {
+  if (THUMB_CACHE_MAX_BYTES <= 0) return null;
+  const row = thumbCache.get(key);
+  if (!row) return null;
+  row.lastUsed = Date.now();
+  thumbCache.delete(key);
+  thumbCache.set(key, row); // move to newest for LRU
+  thumbCacheHits += 1;
+  return row.buf;
+}
+
+/** Store a finished tile, evicting least-recently-used entries once over budget. */
+function thumbCachePut(key, buf) {
+  if (THUMB_CACHE_MAX_BYTES <= 0 || buf.length > THUMB_CACHE_MAX_BYTES) return;
+  const existing = thumbCache.get(key);
+  if (existing) thumbCacheBytes -= existing.bytes;
+  thumbCache.set(key, { buf, bytes: buf.length, lastUsed: Date.now() });
+  thumbCacheBytes += buf.length;
+  if (thumbCacheBytes <= THUMB_CACHE_MAX_BYTES) return;
+  const rows = [];
+  for (const [k, v] of thumbCache)
+    rows.push({ key: k, bytes: v.bytes, lastUsed: v.lastUsed });
+  for (const k of planThumbCacheEvictions(rows, THUMB_CACHE_MAX_BYTES)) {
+    const v = thumbCache.get(k);
+    if (v) {
+      thumbCacheBytes -= v.bytes;
+      thumbCache.delete(k);
+    }
+  }
+}
+
+/** Evict every tile whose key starts with one of `prefixes` (the "clear cache"
+ * action drops a connection's `user@host …` and `user@host#root …` entries). */
+function thumbCachePurge(prefixes) {
+  for (const key of [...thumbCache.keys()]) {
+    if (prefixes.some((p) => key.startsWith(p))) {
+      const v = thumbCache.get(key);
+      if (v) thumbCacheBytes -= v.bytes;
+      thumbCache.delete(key);
+    }
+  }
+}
+
 // Click-to-view image previews are downscaled to a *lossless* WebP so a big
 // photo opens far faster while staying pixel-identical to the (downscaled)
 // source; the original is only read, never modified, and Download (or zooming
@@ -186,14 +279,76 @@ const THUMBNAIL_PIXELS = 256;
 // memory to transcode (only the WebP crosses the wire, so this can exceed the
 // download cap; it just bounds decode memory).
 const PREVIEW_IMAGE_MAX_DIM = 2560;
-const PREVIEW_IMAGE_QUALITY = 82;
+// Default quality mirrors PREVIEW_IMAGE_QUALITY in src/lib/sshProtocol.ts.
+const PREVIEW_IMAGE_QUALITY = (() => {
+  const q = parseInt(process.env.SSH_PREVIEW_IMAGE_QUALITY || "92", 10);
+  return Number.isFinite(q) && q >= 1 && q <= 100 ? q : 92;
+})();
+// Preview transcode format, selectable per-deployment:
+//   • webp-lossy   (default) — fastest to open; visually indistinguishable at
+//                   the preview resolution; smallest encode CPU.
+//   • webp-lossless — pixel-exact but larger on the wire and slower to encode.
+//   • avif         — smallest wire size at a given quality, but the slowest CPU
+//                   encode (previews aren't server-cached, so this is a real
+//                   first-open cost).
+// Pixel-perfect detail is always available on demand (zoom / "Original" /
+// Download all fetch the untouched original), so the default trades nothing the
+// user can see for a large speed-up.
+const PREVIEW_IMAGE_FORMAT = (() => {
+  const v = (process.env.SSH_PREVIEW_IMAGE_FORMAT || "webp-lossy")
+    .trim()
+    .toLowerCase();
+  return v === "webp-lossless" || v === "avif" ? v : "webp-lossy";
+})();
 const PREVIEW_IMAGE_MIN_BYTES = 512 * 1024;
 const PREVIEW_IMAGE_SOURCE_MAX_BYTES = 64 * 1024 * 1024;
-// Whether an image is downscaled to a WebP preview. Mirrors
+// Whether an image is downscaled to a preview transcode. Mirrors
 // `isResizablePreviewImage` in src/lib/sshProtocol.ts — excludes SVG (vector)
-// and GIF (may be animated), which stream as their originals.
+// and GIF (may be animated), which stream as their originals; includes HEIC/HEIF
+// (which browsers can't render raw, so they're *only* ever shown transcoded).
 function isResizablePreviewImage(name) {
-  return /\.(png|apng|jpg|jpeg|jfif|pjpeg|pjp|webp|bmp|ico|cur|avif)$/i.test(name);
+  return /\.(png|apng|jpg|jpeg|jfif|pjpeg|pjp|webp|bmp|ico|cur|avif|heic|heif|heics|heifs)$/i.test(
+    name,
+  );
+}
+// Mirrors `isBrowserRenderableImage` in src/lib/sshProtocol.ts: whether the
+// browser can render this image's raw bytes in an <img>. HEIC/HEIF cannot, so
+// those must never be streamed raw for preview — only the transcode is sent.
+function isBrowserRenderableImage(name) {
+  return (
+    isResizablePreviewImage(name) && !/\.(heic|heif|heics|heifs)$/i.test(name)
+  );
+}
+// Encode a decoded original (as a Buffer) to the configured preview format,
+// downscaled to fit PREVIEW_IMAGE_MAX_DIM. Returns { bytes, mime } or null when
+// sharp can't decode/encode it. EXIF orientation is baked in so the preview is
+// upright. The original file is only read, never modified.
+async function encodePreviewImage(buffer) {
+  try {
+    let pipe = sharp(buffer)
+      .rotate()
+      .resize(PREVIEW_IMAGE_MAX_DIM, PREVIEW_IMAGE_MAX_DIM, {
+        fit: "inside",
+        withoutEnlargement: true,
+      });
+    if (PREVIEW_IMAGE_FORMAT === "avif") {
+      const bytes = await pipe.avif({ quality: PREVIEW_IMAGE_QUALITY }).toBuffer();
+      return { bytes, mime: "image/avif" };
+    }
+    if (PREVIEW_IMAGE_FORMAT === "webp-lossless") {
+      const bytes = await pipe
+        .webp({ lossless: true, quality: PREVIEW_IMAGE_QUALITY })
+        .toBuffer();
+      return { bytes, mime: "image/webp" };
+    }
+    // Default: high-quality lossy WebP — fast to encode, small on the wire.
+    const bytes = await pipe
+      .webp({ quality: PREVIEW_IMAGE_QUALITY })
+      .toBuffer();
+    return { bytes, mime: "image/webp" };
+  } catch {
+    return null;
+  }
 }
 // Recursive-search limits. MAX_FIND_RESULTS mirrors src/lib/sshProtocol.ts; the
 // node budget bounds how many filesystem entries a single search may visit so a
@@ -281,6 +436,18 @@ const PREVIEW_STREAM_PATH = "/api/preview";
 // Cap a single Range response so one request can't be turned into an unbounded
 // pull; the browser just issues more ranges as playback advances.
 const STREAM_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
+// On-the-fly video transcode (for containers/codecs the browser can't play
+// natively — see `videoNeedsTranscode` in src/lib/sshProtocol.ts). A `<video>`
+// requests `/api/preview?...&transcode=1` and the bridge pipes the source
+// through ffmpeg to fragmented MP4 (H.264/AAC), streamed progressively so it
+// starts playing before the whole clip is converted. It's CPU-heavy, so the
+// number running at once is capped; each spawn is killed when the client
+// disconnects (so pausing/seeking away frees the CPU). Requires ffmpeg.
+const MAX_TRANSCODES = (() => {
+  const n = parseInt(process.env.SSH_MAX_TRANSCODES || "3", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 3;
+})();
+let activeTranscodes = 0;
 // Content types for the streaming endpoint, by lower-case extension. Mirrors the
 // media MIME maps in `src/lib/sshProtocol.ts` (the "two synchronized places"
 // discipline) for the formats a browser can play inline.
@@ -352,6 +519,7 @@ let sftpBytesDown = 0; // bytes read by streamed downloads
 let thumbsServed = 0;
 let thumbsSkipped = 0;
 let thumbBytesOut = 0;
+let thumbCacheHits = 0; // tiles served straight from the in-memory cache
 // Set once a graceful shutdown starts, so new upgrades are refused.
 let shuttingDown = false;
 
@@ -605,7 +773,13 @@ const server = createServer((req, res) => {
         served: thumbsServed,
         skipped: thumbsSkipped,
         bytesOut: thumbBytesOut,
+        cacheHits: thumbCacheHits,
+        cacheEntries: thumbCache.size,
+        cacheBytes: thumbCacheBytes,
       },
+      // Live video transcodes running (on-the-fly conversion of non-natively-
+      // playable containers), and the per-process ceiling.
+      transcodes: { active: activeTranscodes, max: MAX_TRANSCODES },
       uptime: Math.floor(process.uptime()),
     });
     return;
@@ -706,6 +880,89 @@ const server = createServer((req, res) => {
           return res.end();
         }
         const size = stats.size;
+        // On-the-fly transcode for a non-natively-playable video: pipe the source
+        // through ffmpeg to fragmented MP4 and stream it progressively (no Range —
+        // it's a live conversion), so a .avi/.wmv/.ts/… plays without the client
+        // ever downloading or transcoding it. CPU-capped and killed on disconnect.
+        if (q.transcode === "1") {
+          if (!ffmpegAvailable) {
+            res.writeHead(501);
+            return res.end();
+          }
+          if (MAX_TRANSCODES > 0 && activeTranscodes >= MAX_TRANSCODES) {
+            res.writeHead(503, { "Retry-After": "5" });
+            return res.end();
+          }
+          res.writeHead(200, {
+            "Content-Type": "video/mp4",
+            // A live transcode can't be range-served; tell the player not to try.
+            "Accept-Ranges": "none",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+          });
+          if (req.method === "HEAD") return res.end();
+          activeTranscodes += 1;
+          let proc = null;
+          const src = s.createReadStream(filePath);
+          let released = false;
+          const release = () => {
+            if (released) return;
+            released = true;
+            activeTranscodes -= 1;
+          };
+          const cleanup = () => {
+            try {
+              src.destroy();
+            } catch {
+              /* already gone */
+            }
+            if (proc) {
+              try {
+                proc.kill("SIGKILL");
+              } catch {
+                /* already gone */
+              }
+            }
+            release();
+          };
+          try {
+            proc = spawn("ffmpeg", [
+              "-loglevel", "error",
+              "-i", "pipe:0",
+              "-c:v", "libx264",
+              "-preset", "veryfast",
+              "-crf", "23",
+              "-pix_fmt", "yuv420p",
+              "-c:a", "aac",
+              "-b:a", "128k",
+              // Fragmented MP4 so playback can start before the whole file is
+              // converted (a normal MP4 needs its index written last).
+              "-movflags", "frag_keyframe+empty_moov+faststart",
+              "-f", "mp4",
+              "pipe:1",
+            ]);
+          } catch {
+            cleanup();
+            return res.destroy();
+          }
+          // Client went away (navigated / paused-and-closed) → stop converting.
+          res.on("close", cleanup);
+          proc.on("error", () => {
+            cleanup();
+            res.destroy();
+          });
+          proc.on("close", () => {
+            release();
+            res.end();
+          });
+          proc.stdin.on("error", () => {}); // EPIPE when ffmpeg exits early
+          proc.stderr?.on("data", () => {}); // drain, don't buffer
+          src.on("error", () => cleanup());
+          src.pipe(proc.stdin);
+          proc.stdout.pipe(res);
+          return;
+        }
         const type = streamContentType(filePath);
         const rangeHeader = req.headers.range;
         // Common headers for both full and partial responses.
@@ -1075,6 +1332,7 @@ wss.on("connection", (ws, req) => {
   let elevated = false; // whether SFTP ops are currently routed through sudo
   let streamSftp = null; // dedicated SFTP channel for the HTTP media stream
   let streamToken = null; // capability token for /api/preview (this session)
+  let sessionScope = ""; // `user@host` — the thumbnail-cache identity for this login
   let counted = false; // whether this connection is included in activeSessions
   let closed = false;
   // Pending handshake callbacks that wait on a round-trip to the browser.
@@ -1600,6 +1858,8 @@ wss.on("connection", (ws, req) => {
 
     activeSessions += 1;
     counted = true;
+    // The thumbnail-cache identity for this login (see the server-side cache).
+    sessionScope = `${username}@${host}`;
     send({ t: "status", state: "connecting" });
 
     ssh = new SSHClient();
@@ -1621,7 +1881,12 @@ wss.on("connection", (ws, req) => {
         // Advertise per-deployment capabilities so the UI only offers what the
         // server actually permits (e.g. the elevated/sudo file-access toggle).
         // `streamToken` lets the client build `/api/preview` URLs for video.
-        send({ t: "caps", sudo: ALLOW_SUDO, streamToken });
+        send({
+          t: "caps",
+          sudo: ALLOW_SUDO,
+          streamToken,
+          maxDownloadBytes: MAX_DOWNLOAD_BYTES,
+        });
         ssh.shell(
           {
             term: "xterm-256color",
@@ -2287,18 +2552,37 @@ wss.on("connection", (ws, req) => {
               if (statErr || stats.size > THUMBNAIL_VIDEO_MAX_BYTES || !sharp) {
                 return skipThumb();
               }
+              // Serve straight from the in-memory cache when we already hold this
+              // exact tile (same identity + path + size:mtime): no SSH read, no
+              // sharp/ffmpeg transcode, so a re-visited or re-logged-in grid
+              // paints as fast as the bytes can be sent. Elevated (root) reads
+              // are scoped under `#root` so they never mix with login-user tiles.
+              const scope = elevated ? `${sessionScope}#root` : sessionScope;
+              const cacheKey = thumbCacheKey(
+                scope,
+                msg.path,
+                `${stats.size}:${stats.mtime}`,
+              );
+              const cached = thumbCacheGet(cacheKey);
+              if (cached) return sendThumb(cached);
               s.readFile(msg.path, async (err, buffer) => {
                 if (err) return skipThumb();
                 // Image: decode + downscale straight to WebP.
                 const imageThumb = await toWebpThumb(buffer, true);
-                if (imageThumb) return sendThumb(imageThumb);
+                if (imageThumb) {
+                  thumbCachePut(cacheKey, imageThumb);
+                  return sendThumb(imageThumb);
+                }
                 // Not a sharp-decodable image (video, or corrupt): extract a poster
                 // frame with ffmpeg and downscale that to WebP too.
                 if (ffmpegAvailable) {
                   const frame = await extractVideoFrame(buffer);
                   if (frame) {
                     const videoThumb = await toWebpThumb(frame, false);
-                    if (videoThumb) return sendThumb(videoThumb);
+                    if (videoThumb) {
+                      thumbCachePut(cacheKey, videoThumb);
+                      return sendThumb(videoThumb);
+                    }
                   }
                 }
                 // Couldn't produce a WebP thumbnail — keep the icon rather than
@@ -2376,41 +2660,32 @@ wss.on("connection", (ws, req) => {
             };
 
             // Fast image preview: downscale a (possibly large) original to a
-            // small WebP so click-to-view loads in KB, not MB. Only the WebP
-            // crosses the wire, so this may read a source past the whole-file
-            // download cap — bounded by PREVIEW_IMAGE_SOURCE_MAX_BYTES to cap
-            // decode memory. The `mime` on the begin frame tells the client these
-            // are an optimized preview (Download still fetches the original). The
-            // original file is only read, never modified.
+            // small transcode (see PREVIEW_IMAGE_FORMAT) so click-to-view loads
+            // in KB, not MB. Only the transcode crosses the wire, so this may read
+            // a source past the whole-file download cap — bounded by
+            // PREVIEW_IMAGE_SOURCE_MAX_BYTES to cap decode memory. The `mime` on
+            // the begin frame tells the client these are an optimized preview
+            // (Download still fetches the original). The original is only read,
+            // never modified. HEIC/HEIF are forced through this path regardless
+            // of size — the browser can't render them raw, so a transcode is the
+            // *only* way to preview them.
+            const mustTranscode = !isBrowserRenderableImage(name);
             if (
               isPreview &&
               msg.previewResize === true &&
               sharp &&
               isResizablePreviewImage(name) &&
-              stats.size >= PREVIEW_IMAGE_MIN_BYTES &&
+              (stats.size >= PREVIEW_IMAGE_MIN_BYTES || mustTranscode) &&
               stats.size <= PREVIEW_IMAGE_SOURCE_MAX_BYTES
             ) {
               s.readFile(msg.path, async (err, buffer) => {
                 if (err) return sendError(err.message, "sftp");
-                let webp = null;
-                try {
-                  webp = await sharp(buffer)
-                    .rotate() // bake in EXIF orientation so the preview is upright
-                    .resize(PREVIEW_IMAGE_MAX_DIM, PREVIEW_IMAGE_MAX_DIM, {
-                      fit: "inside",
-                      withoutEnlargement: true,
-                    })
-                    // Lossless WebP: no encode artifacts, so the on-screen preview
-                    // is pixel-identical to the (downscaled) source. `quality` here
-                    // tunes the lossless compression tightness, not fidelity.
-                    .webp({ lossless: true, quality: PREVIEW_IMAGE_QUALITY })
-                    .toBuffer();
-                } catch {
-                  webp = null;
-                }
-                // Only send the transcode when it actually saved bytes; otherwise
-                // fall back to the original (honouring the normal download cap).
-                if (webp && webp.length < buffer.length) {
+                const encoded = await encodePreviewImage(buffer);
+                // Send the transcode when it saved bytes, or whenever the raw
+                // bytes can't be rendered by the browser (HEIC/HEIF) — there the
+                // transcode is the only viewable form, size regardless.
+                if (encoded && (mustTranscode || encoded.bytes.length < buffer.length)) {
+                  const webp = encoded.bytes;
                   const CHUNK = 256 * 1024;
                   send({
                     t: "sftp-download-begin",
@@ -2418,7 +2693,7 @@ wss.on("connection", (ws, req) => {
                     name,
                     size: webp.length,
                     preview: true,
-                    mime: "image/webp",
+                    mime: encoded.mime,
                   });
                   for (let off = 0; off < webp.length; off += CHUNK) {
                     const chunk = webp.subarray(
@@ -2442,6 +2717,16 @@ wss.on("connection", (ws, req) => {
                     truncated: false,
                   });
                   return;
+                }
+                // A non-renderable image we couldn't transcode (sharp missing
+                // HEIF support, or corrupt bytes) can't be shown raw — surface an
+                // error so the client degrades to the download-only card rather
+                // than piping unrenderable bytes into an <img>.
+                if (mustTranscode) {
+                  return sendError(
+                    "Can't preview this image (unsupported format).",
+                    "sftp",
+                  );
                 }
                 if (MAX_DOWNLOAD_BYTES > 0 && stats.size > MAX_DOWNLOAD_BYTES) {
                   return sendError(
@@ -2675,6 +2960,13 @@ wss.on("connection", (ws, req) => {
 
       case "forward-close":
         closeForward(msg.id);
+        break;
+
+      case "thumb-purge":
+        // Drop this connection's cached tiles (both login-user and elevated).
+        if (sessionScope) {
+          thumbCachePurge([`${sessionScope} `, `${sessionScope}#root `]);
+        }
         break;
 
       case "disconnect":
