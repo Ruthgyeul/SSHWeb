@@ -69,6 +69,7 @@ import { MobileKeys } from "./MobileKeys";
 import { SnippetsBar } from "./SnippetsBar";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TerminalSettings } from "./TerminalSettings";
+import { SearchIcon } from "./icons";
 import { useTerminalPrefs } from "./useTerminalPrefs";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
@@ -2140,16 +2141,28 @@ export function SshSession({
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-term-border bg-term-card">
       {/* Session header */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
-        {/* Identity + live status — takes the remaining width so the host label
-            truncates instead of shoving the controls off-screen. */}
-        <div className="flex min-w-0 flex-1 items-center gap-3">
+        {/* Identity — keeps a min-width floor so `user@host` stays readable and
+            truncates within itself; the min-width forces the controls (and, when
+            tighter, the status chips) to wrap to a new line rather than
+            collapsing the host to nothing or overlapping it. */}
+        <div className="flex min-w-[9rem] flex-1 items-center gap-2.5">
           <StatusDot status={status} />
-          <span className="min-w-0 truncate text-xs text-term-dim">
+          <span
+            className="min-w-0 flex-1 truncate text-xs text-term-dim"
+            title={target ? `${target.user}@${target.host}` : undefined}
+          >
             {target ? `${target.user}@${target.host}` : "Not connected"}
           </span>
-          {connected && connectedAt !== null && <Uptime since={connectedAt} />}
-          {connected && latency !== null && <LatencyChip ms={latency} />}
         </div>
+
+        {/* Live status chips — their own group so they wrap away from the host
+            (as a unit) before the host has to truncate. */}
+        {connected && (connectedAt !== null || latency !== null) && (
+          <div className="flex flex-none items-center gap-3">
+            {connectedAt !== null && <Uptime since={connectedAt} />}
+            {latency !== null && <LatencyChip ms={latency} />}
+          </div>
+        )}
 
         {connected && (
           // Controls, grouped so a narrow header wraps them as coherent blocks
@@ -2174,11 +2187,11 @@ export function SshSession({
                     setTab("terminal");
                     xtermRef.current?.openSearch();
                   }}
-                  className="rounded px-2 py-1 text-xs text-term-muted transition-colors hover:text-term-text"
+                  className="rounded px-2 py-1 text-term-muted transition-colors hover:text-term-text"
                   title="Search terminal (Ctrl+F)"
                   aria-label="Search terminal"
                 >
-                  🔍
+                  <SearchIcon className="h-3.5 w-3.5" />
                 </button>
               )}
               <TerminalSettings

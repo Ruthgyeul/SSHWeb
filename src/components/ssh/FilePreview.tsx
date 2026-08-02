@@ -6,6 +6,8 @@ import { renderMarkdown } from "@/lib/markdown";
 import { highlightToHtml } from "@/lib/syntaxHighlight";
 import { findMatches, type Match } from "@/lib/editorSearch";
 import { cn } from "@/lib/utils";
+import { FileIcon, iconKindForName, type FileIconKind } from "./FileIcon";
+import { SearchIcon } from "./icons";
 
 /** Escape HTML-significant characters so file text is injected as literal text. */
 function escapeHtml(s: string): string {
@@ -42,15 +44,15 @@ function buildSearchHtml(text: string, matches: Match[], active: number): string
  * (syntax-highlighted, non-editable), or a download-only fallback. */
 export type PreviewMode = PreviewContentKind | "text" | "unsupported";
 
-/** Header icon per preview mode. */
-const MODE_ICON: Record<PreviewMode, string> = {
-  image: "🖼",
-  video: "🎞",
-  audio: "🎵",
-  pdf: "📕",
-  markdown: "📝",
-  text: "🗒",
-  unsupported: "📄",
+/** Header icon (SVG kind) per preview mode. */
+const MODE_ICON_KIND: Record<PreviewMode, FileIconKind> = {
+  image: "image",
+  video: "video",
+  audio: "audio",
+  pdf: "pdf",
+  markdown: "text",
+  text: "text",
+  unsupported: "file",
 };
 
 const MIN_ZOOM = 1;
@@ -586,9 +588,8 @@ export function FilePreview({
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-term-card">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
-        <span className="text-xs text-term-muted" aria-hidden>
-          {MODE_ICON[kind]}
-        </span>
+        <FileIcon kind={MODE_ICON_KIND[kind]} className="text-term-muted" />
+
         <span
           className="min-w-0 flex-1 truncate text-xs text-term-dim"
           title={path}
@@ -692,7 +693,7 @@ export function FilePreview({
               aria-label="Find (Ctrl/⌘+F)"
               title="Find (Ctrl/⌘+F)"
             >
-              🔎
+              <SearchIcon className="h-3.5 w-3.5" />
             </button>
           </div>
         )}
@@ -876,9 +877,7 @@ export function FilePreview({
             ) : null
           ) : (
             <div className="flex flex-col items-center gap-3 text-center text-term-muted">
-              <span className="text-4xl opacity-60" aria-hidden>
-                📄
-              </span>
+              <FileIcon kind="file" className="h-12 w-12 opacity-60" />
               <p className="text-sm">This file type can’t be previewed inline.</p>
               <button
                 type="button"
@@ -919,8 +918,8 @@ export function FilePreview({
                     className="h-full w-full object-cover"
                   />
                 ) : (
-                  <span className="flex h-full w-full items-center justify-center text-sm text-term-muted">
-                    📄
+                  <span className="flex h-full w-full items-center justify-center text-term-muted">
+                    <FileIcon kind={iconKindForName(f.name)} className="h-5 w-5" />
                   </span>
                 )}
               </button>

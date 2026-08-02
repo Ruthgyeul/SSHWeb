@@ -6,10 +6,7 @@ import {
   filterEntries,
   formatMode,
   formatSize,
-  isProbablyAudioFile,
-  isProbablyImageFile,
   isProbablyTextFile,
-  isProbablyVideoFile,
   isThumbnailable,
   parentPath,
   pathSegments,
@@ -23,6 +20,8 @@ import {
   type SortKey,
 } from "@/lib/sshProtocol";
 import { cn } from "@/lib/utils";
+import { FileIcon } from "./FileIcon";
+import { EyeIcon, FolderOpenIcon, PencilIcon, SearchIcon } from "./icons";
 import { collectDroppedFiles, droppedEntries } from "./dropUpload";
 import { useFileViewMode } from "./useFileViewMode";
 import { useFileSort } from "./useFileSort";
@@ -138,16 +137,6 @@ function SortHeader({
   );
 }
 
-/** The emoji stand-in for an entry, by type (shared by both list and grid). */
-function fileIcon(entry: FileEntry): string {
-  if (entry.type === "dir") return "📁";
-  if (entry.type === "link") return "🔗";
-  if (isProbablyVideoFile(entry.name)) return "🎞";
-  if (isProbablyImageFile(entry.name)) return "🖼";
-  if (isProbablyAudioFile(entry.name)) return "🎵";
-  return "📄";
-}
-
 /**
  * A grid-tile thumbnail: shows the file-type icon until the tile scrolls into
  * view, then lazily requests the media (once) and swaps in the returned WebP
@@ -168,7 +157,7 @@ function Thumbnail({
   src: string | undefined;
   kind: PreviewKind | null;
   thumbnailable: boolean;
-  fallback: string;
+  fallback: React.ReactNode;
   onRequest: (path: string) => void;
   /** Report whether this tile is in/near the viewport, so the parent can serve
    * visible tiles first (the request itself is deduped upstream). */
@@ -207,7 +196,7 @@ function Thumbnail({
   return (
     <div
       ref={ref}
-      className="relative flex h-24 w-full items-center justify-center overflow-hidden rounded bg-term-panel/50 text-4xl"
+      className="relative flex h-24 w-full items-center justify-center overflow-hidden rounded bg-term-panel/50"
     >
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element -- remote data: URL
@@ -219,14 +208,16 @@ function Thumbnail({
           draggable={false}
         />
       ) : (
-        <span aria-hidden>{fallback}</span>
+        fallback
       )}
       {src && kind === "video" && (
         <span
-          className="pointer-events-none absolute text-2xl drop-shadow"
+          className="pointer-events-none absolute flex h-8 w-8 items-center justify-center rounded-full bg-black/45 text-white drop-shadow"
           aria-hidden
         >
-          ▶
+          <svg viewBox="0 0 24 24" fill="currentColor" className="ml-0.5 h-4 w-4">
+            <path d="M8 5v14l11-7z" />
+          </svg>
         </span>
       )}
     </div>
@@ -575,8 +566,9 @@ export function FileBrowser({
               : "border-term-border text-term-muted hover:text-term-text",
           )}
           title="Search this folder and its subfolders"
+          aria-label="Search subfolders"
         >
-          🔎
+          <SearchIcon />
         </button>
         {/* List / grid layout toggle */}
         <div
@@ -747,9 +739,7 @@ export function FileBrowser({
           onSubmit={submitSearch}
           className="flex items-center gap-2 border-b border-term-border bg-term-panel/30 px-3 py-1.5"
         >
-          <span className="text-xs text-term-faint" aria-hidden>
-            🔎
-          </span>
+          <SearchIcon className="text-term-faint" />
           <input
             type="text"
             value={searchInput}
@@ -821,9 +811,7 @@ export function FileBrowser({
       {/* In-CWD name filter */}
       {!search && sorted.length > 0 && (
         <div className="flex items-center gap-2 border-b border-term-border bg-term-panel/30 px-3 py-1.5">
-          <span className="text-xs text-term-faint" aria-hidden>
-            🔍
-          </span>
+          <SearchIcon className="text-term-faint" />
           <input
             type="text"
             value={filter}
@@ -1111,9 +1099,7 @@ export function FileBrowser({
                 </div>
               ) : search.results.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
-                  <span className="text-3xl opacity-60" aria-hidden>
-                    🔎
-                  </span>
+                  <SearchIcon className="h-8 w-8 opacity-60" />
                   <p className="text-sm">
                     {search.mode === "content"
                       ? `No file contents matched “${search.query}”`
@@ -1136,7 +1122,7 @@ export function FileBrowser({
                           className="flex w-full flex-col gap-0.5 border-b border-term-border/50 px-3 py-1.5 text-left text-sm hover:bg-term-panel/60"
                         >
                           <span className="flex w-full items-center gap-2">
-                            <span aria-hidden>{fileIcon(r)}</span>
+                            <FileIcon entry={r} />
                             <span
                               className={cn(
                                 "min-w-0 flex-1 truncate",
@@ -1172,9 +1158,7 @@ export function FileBrowser({
         {loading && <p className="px-3 py-4 text-xs text-term-muted">Loading…</p>}
         {!loading && sorted.length === 0 && (
           <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
-            <span className="text-3xl opacity-60" aria-hidden>
-              📂
-            </span>
+            <FolderOpenIcon className="h-8 w-8 opacity-60" />
             <p className="text-sm">This directory is empty</p>
             <p className="text-xs text-term-faint">
               Drag files here, or use “↑ upload” / “+ file” to add one.
@@ -1183,9 +1167,7 @@ export function FileBrowser({
         )}
         {!loading && sorted.length > 0 && visible.length === 0 && (
           <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
-            <span className="text-3xl opacity-60" aria-hidden>
-              🔍
-            </span>
+            <SearchIcon className="h-8 w-8 opacity-60" />
             <p className="text-sm">No files match “{filter.trim()}”</p>
             <button
               type="button"
@@ -1296,7 +1278,7 @@ export function FileBrowser({
                         isDir ? "text-term-accent" : "text-term-dim",
                       )}
                     >
-                      <span aria-hidden>{fileIcon(entry)}</span>
+                      <FileIcon entry={entry} />
                       <span className="truncate">{entry.name}</span>
                       {entry.type === "link" && entry.target && (
                         <span className="truncate text-xs text-term-faint">
@@ -1322,7 +1304,7 @@ export function FileBrowser({
                         className={cn(actionBtn, "hover:text-term-accent")}
                         title="Preview"
                       >
-                        👁
+                        <EyeIcon />
                       </button>
                     )}
                     {editable && (
@@ -1335,7 +1317,7 @@ export function FileBrowser({
                           className={cn(actionBtn, "hover:text-term-accent")}
                           title="Preview (read-only)"
                         >
-                          👁
+                          <EyeIcon />
                         </button>
                         <button
                           type="button"
@@ -1343,7 +1325,7 @@ export function FileBrowser({
                           className={cn(actionBtn, "hover:text-term-accent")}
                           title="Edit"
                         >
-                          ✎
+                          <PencilIcon />
                         </button>
                       </>
                     )}
@@ -1463,7 +1445,15 @@ export function FileBrowser({
                       src={thumbnails[target]}
                       kind={previewKind(entry.name)}
                       thumbnailable={isThumbnailable(entry)}
-                      fallback={fileIcon(entry)}
+                      fallback={
+                        <FileIcon
+                          entry={entry}
+                          className={cn(
+                            "h-10 w-10",
+                            isDir ? "text-term-accent" : "text-term-muted",
+                          )}
+                        />
+                      }
                       onRequest={onRequestThumbnail}
                       onVisibility={onThumbnailVisibility}
                     />
@@ -1500,7 +1490,7 @@ export function FileBrowser({
                           className={cn(actionBtn, "hover:text-term-accent")}
                           title="Preview"
                         >
-                          👁
+                          <EyeIcon />
                         </button>
                       )}
                       {editable && (
@@ -1513,7 +1503,7 @@ export function FileBrowser({
                             className={cn(actionBtn, "hover:text-term-accent")}
                             title="Preview (read-only)"
                           >
-                            👁
+                            <EyeIcon />
                           </button>
                           <button
                             type="button"
@@ -1521,7 +1511,7 @@ export function FileBrowser({
                             className={cn(actionBtn, "hover:text-term-accent")}
                             title="Edit"
                           >
-                            ✎
+                            <PencilIcon />
                           </button>
                         </>
                       )}
