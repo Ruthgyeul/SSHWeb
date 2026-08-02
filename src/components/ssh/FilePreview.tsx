@@ -7,7 +7,7 @@ import { highlightToHtml } from "@/lib/syntaxHighlight";
 import { findMatches, type Match } from "@/lib/editorSearch";
 import { cn } from "@/lib/utils";
 import { FileIcon, iconKindForName, type FileIconKind } from "./FileIcon";
-import { SearchIcon } from "./icons";
+import { PencilIcon, SearchIcon } from "./icons";
 
 /** Escape HTML-significant characters so file text is injected as literal text. */
 function escapeHtml(s: string): string {
@@ -92,6 +92,7 @@ export function FilePreview({
   text,
   received,
   total,
+  streaming = false,
   truncated = false,
   encodingWarning = false,
   optimized = false,
@@ -109,6 +110,7 @@ export function FilePreview({
   onJump,
   onPrev,
   onNext,
+  onEdit,
   onDownload,
   onCancel,
   onClose,
@@ -128,6 +130,9 @@ export function FilePreview({
   received?: number;
   /** Total transfer size, once the stream has begun. */
   total?: number;
+  /** True while a text/markdown preview is still streaming in (content already
+   * painting, more bytes arriving) — drives a slim top progress strip. */
+  streaming?: boolean;
   /** True when a text preview shows only the head of a larger file. */
   truncated?: boolean;
   /** True when the decoded text looks like it isn't valid UTF-8. */
@@ -168,6 +173,8 @@ export function FilePreview({
   /** Step to the next previewable file in the view. */
   onNext?: () => void;
   onDownload: () => void;
+  /** Open this file in the editor (shown for editable text/markdown previews). */
+  onEdit?: () => void;
   /** Abort the in-flight preview transfer (only shown while loading). */
   onCancel?: () => void;
   onClose: () => void;
@@ -180,9 +187,12 @@ export function FilePreview({
   );
   // Read-only syntax-highlighted HTML for the `text` kind (a quick, non-editing
   // look at code/config/logs). Escaped in `highlightToHtml`, so safe to inject.
+  // Skipped while the file is still streaming in — re-highlighting the whole
+  // (growing) buffer on every chunk would be wasteful; a cheap escaped plain
+  // render is shown instead until the stream completes.
   const codeHtml = useMemo(
-    () => (kind === "text" ? highlightToHtml(text ?? "") : ""),
-    [kind, text],
+    () => (kind === "text" && !streaming ? highlightToHtml(text ?? "") : ""),
+    [kind, streaming, text],
   );
   const lineCount = useMemo(
     () => (kind === "text" ? (text ?? "").split("\n").length : 0),
@@ -506,6 +516,17 @@ export function FilePreview({
   const toolBtn =
     "rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text disabled:opacity-40";
 
+  // A slim progress strip pinned to the top of a text/markdown pane while its
+  // content is still streaming in (the body already paints progressively).
+  const streamStrip = streaming && (
+    <div className="absolute inset-x-0 top-0 z-20 h-0.5 overflow-hidden bg-term-border">
+      <div
+        className="h-full bg-term-accent transition-[width]"
+        style={{ width: `${pct ?? 0}%` }}
+      />
+    </div>
+  );
+
   // Truncated / non-UTF-8 notices for text & markdown previews.
   const banner = (truncated || encodingWarning) && (
     <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-term-border bg-term-panel/60 px-4 py-1.5 text-[11px] text-term-yellow">
@@ -697,6 +718,16 @@ export function FilePreview({
             </button>
           </div>
         )}
+        {onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="flex items-center gap-1 rounded border border-term-border px-3 py-1 text-xs text-term-muted hover:text-term-text"
+            title="Edit this file"
+          >
+            <PencilIcon className="h-3.5 w-3.5" /> Edit
+          </button>
+        )}
         <button
           type="button"
           onClick={onDownload}
@@ -728,6 +759,7 @@ export function FilePreview({
         <>
           {!loading && banner}
           <div className="relative min-h-0 flex-1 overflow-auto bg-term-bg">
+            {streamStrip}
             {loading && spinner}
             {galleryArrows}
             {!loading && (
@@ -746,6 +778,7 @@ export function FilePreview({
             ref={textPaneRef}
             className="relative min-h-0 flex-1 overflow-auto bg-term-bg"
           >
+            {streamStrip}
             {loading && spinner}
             {galleryArrows}
             {!loading && (
@@ -758,15 +791,28 @@ export function FilePreview({
                     {Array.from({ length: lineCount }, (_, i) => i + 1).join("\n")}
                   </pre>
                 )}
-                <pre
-                  className={cn(
-                    "flex-1 px-4 py-3 text-term-text",
-                    wrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto whitespace-pre",
-                  )}
-                  dangerouslySetInnerHTML={{
-                    __html: findOpen && findQuery ? searchHtml : codeHtml,
-                  }}
-                />
+                {streaming ? (
+                  // While streaming, render cheap escaped plain text (no per-chunk
+                  // syntax highlighting); the highlighter runs once the stream ends.
+                  <pre
+                    className={cn(
+                      "flex-1 px-4 py-3 text-term-text",
+                      wrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto whitespace-pre",
+                    )}
+                  >
+                    {text ?? ""}
+                  </pre>
+                ) : (
+                  <pre
+                    className={cn(
+                      "flex-1 px-4 py-3 text-term-text",
+                      wrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto whitespace-pre",
+                    )}
+                    dangerouslySetInnerHTML={{
+                      __html: findOpen && findQuery ? searchHtml : codeHtml,
+                    }}
+                  />
+                )}
               </div>
             )}
           </div>

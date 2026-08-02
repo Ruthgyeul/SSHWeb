@@ -890,9 +890,29 @@ export function SshSession({
             if (!chunks) break;
             const bytes = base64ToBytes(msg.dataB64);
             chunks.push(bytes);
+            // Progressive text/markdown: decode what's arrived so far and paint it
+            // as the modal fills, instead of showing only a spinner until the whole
+            // (up to `TEXT_PREVIEW_MAX_BYTES`) transfer completes. A large log's head
+            // appears almost immediately. Only for the actively-viewed text/markdown
+            // preview (prefetches are images); media/PDF still buffer to a blob. Any
+            // trailing partial multi-byte char is resolved on the next chunk / end.
+            const cur = previewRef.current;
+            const progressive =
+              previewPathRef.current === msg.path &&
+              cur?.path === msg.path &&
+              (cur.kind === "text" || cur.kind === "markdown");
+            const partialText = progressive
+              ? new TextDecoder().decode(concatBytes(chunks))
+              : null;
             setPreview((prev) =>
               prev && prev.path === msg.path
-                ? { ...prev, received: (prev.received ?? 0) + bytes.length }
+                ? {
+                    ...prev,
+                    received: (prev.received ?? 0) + bytes.length,
+                    ...(partialText !== null
+                      ? { text: partialText, loading: false }
+                      : {}),
+                  }
                 : prev,
             );
             break;
@@ -2326,6 +2346,11 @@ export function SshSession({
                 text={preview.text}
                 received={preview.received}
                 total={preview.total}
+                streaming={
+                  preview.loading === false &&
+                  preview.received !== undefined &&
+                  preview.total !== undefined
+                }
                 truncated={preview.truncated}
                 encodingWarning={preview.encodingWarning}
                 optimized={preview.optimized}
@@ -2363,6 +2388,28 @@ export function SshSession({
                 }}
                 onPrev={() => stepPreview(-1)}
                 onNext={() => stepPreview(1)}
+                onEdit={
+                  // A read-only text/markdown preview can jump straight into the
+                  // editor without closing and re-finding the file. Only for
+                  // editable files (media/PDF/unsupported have no editor).
+                  (preview.kind === "text" || preview.kind === "markdown") &&
+                  isProbablyTextFile(preview.name)
+                    ? () => {
+                        // Stop an in-flight preview stream before switching.
+                        if (preview.loading || preview.received !== undefined) {
+                          send({ t: "sftp-download-cancel", path: preview.path });
+                          delete previewBuffersRef.current[preview.path];
+                        }
+                        closeSubtitleTrack();
+                        const version = entryVersionRef.current.get(preview.path);
+                        const size = version
+                          ? parseInt(version.split(":")[0], 10)
+                          : 0;
+                        setPreview(null);
+                        requestEdit(preview.path, preview.name, size);
+                      }
+                    : undefined
+                }
                 onDownload={() =>
                   // Reuse the held bytes only when they're the *original*; an
                   // optimized (downscaled WebP) preview — or a stream-only
