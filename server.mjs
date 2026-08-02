@@ -176,6 +176,99 @@ const THUMBNAIL_VIDEO_MAX_BYTES = 64 * 1024 * 1024;
 // src/lib/sshProtocol.ts. Images are downscaled to fit this box and re-encoded
 // as WebP before being sent to the grid.
 const THUMBNAIL_PIXELS = 256;
+
+// ---------------------------------------------------------------------------
+// Server-side grid-thumbnail cache (in-memory, LRU).
+//
+// Generating a thumbnail reads the original off the SSH target and downscales
+// it with sharp/ffmpeg — cheap per file, but a directory of hundreds repeats
+// that on every visit and every re-login. Caching the finished WebP tile here
+// lets a return visit (even a fresh login) reuse it with no SSH read and no
+// transcode, so image/video grids paint as fast as the bytes can be sent. The
+// cache is:
+//   • process-global (shared across sessions/logins) so a re-login reuses it;
+//   • in-memory only — nothing is written to disk, so no file-derived data
+//     outlives a bridge restart, and the client keeps thumbnails in memory only
+//     (dropping every tile on logout — no browser copy lingers to download);
+//   • keyed by identity (`user@host`, or `user@host#root` for an elevated read)
+//     + path + `size:mtime`, so one login never reads another identity's tiles,
+//     an edited file misses (new version tag), and an elevated (root-read) tile
+//     is isolated from the login-user one;
+//   • bounded by SSH_THUMB_CACHE_MB (default 128 MB; 0 disables) and evicted
+//     least-recently-used first.
+//
+// `thumbCacheKey` + `planThumbCacheEvictions` mirror `thumbnailCacheKey` +
+// `planThumbnailEvictions` in src/lib/thumbnailCache.ts — keep them in sync.
+const THUMB_CACHE_MB = parseInt(process.env.SSH_THUMB_CACHE_MB || "128", 10);
+const THUMB_CACHE_MAX_BYTES =
+  THUMB_CACHE_MB > 0 ? THUMB_CACHE_MB * 1024 * 1024 : 0;
+// key → { buf: Buffer, bytes: number, lastUsed: number }; Map insertion order
+// doubles as the LRU order (get() re-inserts to move an entry to the newest).
+const thumbCache = new Map();
+let thumbCacheBytes = 0;
+
+/** Mirrors src/lib/thumbnailCache.ts:thumbnailCacheKey. */
+function thumbCacheKey(scope, path, version) {
+  return `${scope} ${path} ${version}`;
+}
+
+/** Mirrors src/lib/thumbnailCache.ts:planThumbnailEvictions. */
+function planThumbCacheEvictions(rows, maxBytes) {
+  if (maxBytes <= 0) return rows.map((r) => r.key);
+  const newestFirst = [...rows].sort((a, b) => b.lastUsed - a.lastUsed);
+  const evict = [];
+  let total = 0;
+  for (const row of newestFirst) {
+    total += row.bytes;
+    if (total > maxBytes) evict.push(row.key);
+  }
+  return evict;
+}
+
+/** Look up a cached tile, bumping its recency; null on miss (or when disabled). */
+function thumbCacheGet(key) {
+  if (THUMB_CACHE_MAX_BYTES <= 0) return null;
+  const row = thumbCache.get(key);
+  if (!row) return null;
+  row.lastUsed = Date.now();
+  thumbCache.delete(key);
+  thumbCache.set(key, row); // move to newest for LRU
+  thumbCacheHits += 1;
+  return row.buf;
+}
+
+/** Store a finished tile, evicting least-recently-used entries once over budget. */
+function thumbCachePut(key, buf) {
+  if (THUMB_CACHE_MAX_BYTES <= 0 || buf.length > THUMB_CACHE_MAX_BYTES) return;
+  const existing = thumbCache.get(key);
+  if (existing) thumbCacheBytes -= existing.bytes;
+  thumbCache.set(key, { buf, bytes: buf.length, lastUsed: Date.now() });
+  thumbCacheBytes += buf.length;
+  if (thumbCacheBytes <= THUMB_CACHE_MAX_BYTES) return;
+  const rows = [];
+  for (const [k, v] of thumbCache)
+    rows.push({ key: k, bytes: v.bytes, lastUsed: v.lastUsed });
+  for (const k of planThumbCacheEvictions(rows, THUMB_CACHE_MAX_BYTES)) {
+    const v = thumbCache.get(k);
+    if (v) {
+      thumbCacheBytes -= v.bytes;
+      thumbCache.delete(k);
+    }
+  }
+}
+
+/** Evict every tile whose key starts with one of `prefixes` (the "clear cache"
+ * action drops a connection's `user@host …` and `user@host#root …` entries). */
+function thumbCachePurge(prefixes) {
+  for (const key of [...thumbCache.keys()]) {
+    if (prefixes.some((p) => key.startsWith(p))) {
+      const v = thumbCache.get(key);
+      if (v) thumbCacheBytes -= v.bytes;
+      thumbCache.delete(key);
+    }
+  }
+}
+
 // Click-to-view image previews are downscaled to a *lossless* WebP so a big
 // photo opens far faster while staying pixel-identical to the (downscaled)
 // source; the original is only read, never modified, and Download (or zooming
@@ -352,6 +445,7 @@ let sftpBytesDown = 0; // bytes read by streamed downloads
 let thumbsServed = 0;
 let thumbsSkipped = 0;
 let thumbBytesOut = 0;
+let thumbCacheHits = 0; // tiles served straight from the in-memory cache
 // Set once a graceful shutdown starts, so new upgrades are refused.
 let shuttingDown = false;
 
@@ -605,6 +699,9 @@ const server = createServer((req, res) => {
         served: thumbsServed,
         skipped: thumbsSkipped,
         bytesOut: thumbBytesOut,
+        cacheHits: thumbCacheHits,
+        cacheEntries: thumbCache.size,
+        cacheBytes: thumbCacheBytes,
       },
       uptime: Math.floor(process.uptime()),
     });
@@ -1075,6 +1172,7 @@ wss.on("connection", (ws, req) => {
   let elevated = false; // whether SFTP ops are currently routed through sudo
   let streamSftp = null; // dedicated SFTP channel for the HTTP media stream
   let streamToken = null; // capability token for /api/preview (this session)
+  let sessionScope = ""; // `user@host` — the thumbnail-cache identity for this login
   let counted = false; // whether this connection is included in activeSessions
   let closed = false;
   // Pending handshake callbacks that wait on a round-trip to the browser.
@@ -1600,6 +1698,8 @@ wss.on("connection", (ws, req) => {
 
     activeSessions += 1;
     counted = true;
+    // The thumbnail-cache identity for this login (see the server-side cache).
+    sessionScope = `${username}@${host}`;
     send({ t: "status", state: "connecting" });
 
     ssh = new SSHClient();
@@ -2287,18 +2387,37 @@ wss.on("connection", (ws, req) => {
               if (statErr || stats.size > THUMBNAIL_VIDEO_MAX_BYTES || !sharp) {
                 return skipThumb();
               }
+              // Serve straight from the in-memory cache when we already hold this
+              // exact tile (same identity + path + size:mtime): no SSH read, no
+              // sharp/ffmpeg transcode, so a re-visited or re-logged-in grid
+              // paints as fast as the bytes can be sent. Elevated (root) reads
+              // are scoped under `#root` so they never mix with login-user tiles.
+              const scope = elevated ? `${sessionScope}#root` : sessionScope;
+              const cacheKey = thumbCacheKey(
+                scope,
+                msg.path,
+                `${stats.size}:${stats.mtime}`,
+              );
+              const cached = thumbCacheGet(cacheKey);
+              if (cached) return sendThumb(cached);
               s.readFile(msg.path, async (err, buffer) => {
                 if (err) return skipThumb();
                 // Image: decode + downscale straight to WebP.
                 const imageThumb = await toWebpThumb(buffer, true);
-                if (imageThumb) return sendThumb(imageThumb);
+                if (imageThumb) {
+                  thumbCachePut(cacheKey, imageThumb);
+                  return sendThumb(imageThumb);
+                }
                 // Not a sharp-decodable image (video, or corrupt): extract a poster
                 // frame with ffmpeg and downscale that to WebP too.
                 if (ffmpegAvailable) {
                   const frame = await extractVideoFrame(buffer);
                   if (frame) {
                     const videoThumb = await toWebpThumb(frame, false);
-                    if (videoThumb) return sendThumb(videoThumb);
+                    if (videoThumb) {
+                      thumbCachePut(cacheKey, videoThumb);
+                      return sendThumb(videoThumb);
+                    }
                   }
                 }
                 // Couldn't produce a WebP thumbnail — keep the icon rather than
@@ -2675,6 +2794,13 @@ wss.on("connection", (ws, req) => {
 
       case "forward-close":
         closeForward(msg.id);
+        break;
+
+      case "thumb-purge":
+        // Drop this connection's cached tiles (both login-user and elevated).
+        if (sessionScope) {
+          thumbCachePurge([`${sessionScope} `, `${sessionScope}#root `]);
+        }
         break;
 
       case "disconnect":

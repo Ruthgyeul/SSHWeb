@@ -231,6 +231,10 @@ export type ClientMessage =
     }
   // Tear down a previously opened forward and close its listener.
   | { t: "forward-close"; id: string }
+  // Evict this connection's cached grid thumbnails from the bridge's in-memory
+  // cache (the settings "Clear thumbnail cache" action). Drops both the
+  // login-user and elevated (`#root`) entries for this `user@host`.
+  | { t: "thumb-purge" }
   | { t: "disconnect" };
 
 /* ------------------------------------------------------------------ */

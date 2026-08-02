@@ -12,7 +12,6 @@ import {
   imageMimeType,
   isLargeForEditor,
   isProbablyTextFile,
-  isThumbnailable,
   joinPath,
   modeToOctal,
   parentPath,
@@ -26,13 +25,7 @@ import {
   type ServerMessage,
 } from "@/lib/sshProtocol";
 import { getThemePreset } from "@/lib/terminalTheme";
-import {
-  clearThumbnailCache,
-  fileVersionTag,
-  getCachedThumbnails,
-  putCachedThumbnail,
-  thumbnailCacheKey,
-} from "@/lib/thumbnailCache";
+import { fileVersionTag } from "@/lib/thumbnailCache";
 import {
   KNOWN_HOSTS_KEY,
   parseKnownHosts,
@@ -128,8 +121,10 @@ interface PreviewState {
 
 /** Max concurrent grid-thumbnail reads. Enough to fill a visible screen of tiles
  * quickly without swamping the single bridge WebSocket when a folder holds
- * hundreds of images; the rest queue and drain as replies arrive. */
-const MAX_INFLIGHT_THUMBS = 6;
+ * hundreds of images; the rest queue and drain as replies arrive. The bridge
+ * serves cache hits without an SSH read or transcode, so a higher ceiling
+ * mainly speeds the first paint of a fresh folder. */
+const MAX_INFLIGHT_THUMBS = 12;
 
 /** In-memory budget for the recently-viewed preview cache (raw file bytes). A
  * revisited file re-opens instantly with no re-transfer; the LRU evicts the
@@ -207,12 +202,6 @@ function previewFieldsFromBytes(
   const src = URL.createObjectURL(new Blob([bytes], { type: mime }));
   return { kind, src, bytes };
 }
-
-/** Only persist small thumbnails (the server-resized WebP images, a few KB). This
- * skips raw video clips and full images sent when server-side resizing is
- * unavailable, so the on-disk cache never balloons with multi-MB payloads. Length
- * is of the `data:` URL string (~1.33× the byte size). */
-const THUMB_PERSIST_MAX_CHARS = 512 * 1024;
 
 /** What a session reports up to the tab manager for its tab chip. */
 export interface SessionMeta {
@@ -345,10 +334,8 @@ export function SshSession({
   const thumbQueueRef = useRef<string[]>([]);
   // path → `size:mtime` version tag for the current listing, for cache keys.
   const entryVersionRef = useRef<Map<string, string>>(new Map());
-  // Mirrors of state the (bound-once) ws message handler reads: the connection
-  // scope for cache keys, and whether we're elevated (root) — elevated reads are
-  // never persisted so a `sudo` thumbnail can't linger on disk.
-  const scopeRef = useRef("");
+  // Mirrors, for the (bound-once) ws message handler, whether we're elevated
+  // (root): elevated in-memory caches are dropped on `sudo` toggle and logout.
   const elevatedRef = useRef(false);
   // Active local port-forwards, keyed by their client-generated id.
   const [forwards, setForwards] = useState<Record<string, ForwardState>>({});
@@ -497,7 +484,7 @@ export function SshSession({
   // Lazily fetch a grid thumbnail for `path`, at most once (the ref dedupes so a
   // tile scrolling in and out never re-requests). The request is queued behind a
   // concurrency limit; the reply arrives as an `sftp-read` with `thumb: true` and
-  // lands in the `thumbnails` cache (and, when not elevated, IndexedDB).
+  // lands in the in-memory `thumbnails` map (the persistent cache is server-side).
   const requestThumbnail = useCallback(
     (path: string) => {
       if (requestedThumbsRef.current.has(path)) return;
@@ -515,17 +502,18 @@ export function SshSession({
     else visibleThumbsRef.current.delete(path);
   }, []);
 
-  // "Clear thumbnail cache" (settings): wipe the persistent IndexedDB store and
-  // the in-memory cache, then let the visible tiles re-request from the bridge
+  // "Clear thumbnail cache" (settings): ask the bridge to evict this
+  // connection's cached tiles (the cache lives server-side now), then drop the
+  // in-memory copies and let the visible tiles re-request — a fresh generation
   // (clearing `requestedThumbsRef` un-blocks their intersection observers).
-  const clearThumbnails = useCallback(async () => {
-    await clearThumbnailCache();
+  const clearThumbnails = useCallback(() => {
+    send({ t: "thumb-purge" });
     requestedThumbsRef.current = new Set();
     visibleThumbsRef.current.clear();
     thumbQueueRef.current = [];
     thumbInFlightRef.current = 0;
     setThumbnails({});
-  }, []);
+  }, [send]);
 
   // Cache key for a path: path + its version tag (size:mtime) so an edited file
   // misses and re-fetches. Falls back to the bare path when the version is
@@ -535,8 +523,10 @@ export function SshSession({
     return version ? `${path} ${version}` : path;
   }, []);
 
-  // Store a fully-loaded preview's bytes in the LRU (unless elevated, or bigger
-  // than the whole budget), evicting the oldest entries once over budget.
+  // Store a fully-loaded preview's bytes in the LRU (unless bigger than the whole
+  // budget), evicting the oldest entries once over budget. This in-memory cache
+  // holds elevated (root) reads too — it's dropped on every `sudo` toggle and on
+  // logout, so a root-read file never lingers in the browser after either.
   const cachePreview = useCallback(
     (
       path: string,
@@ -545,7 +535,7 @@ export function SshSession({
       optimized?: boolean,
       mime?: string,
     ) => {
-      if (elevatedRef.current || bytes.length > MAX_PREVIEW_CACHE_BYTES) return;
+      if (bytes.length > MAX_PREVIEW_CACHE_BYTES) return;
       const key = previewCacheKeyFor(path);
       const cache = previewCacheRef.current;
       const existing = cache.get(key);
@@ -573,13 +563,14 @@ export function SshSession({
 
   // Stream the gallery neighbours of `path` (the previous & next image) into the
   // preview cache ahead of a ←/→ step, so paging through a folder of photos is
-  // instant. Only images (the common case), never elevated (never cached), and
-  // never a neighbour already cached, in flight, or bigger than
-  // `PREFETCH_MAX_BYTES`. The download handlers recognise these paths via
-  // `prefetchPathsRef` and buffer their bytes without painting the modal.
+  // instant. Only images (the common case), and never a neighbour already
+  // cached, in flight, or bigger than `PREFETCH_MAX_BYTES`. The download handlers
+  // recognise these paths via `prefetchPathsRef` and buffer their bytes without
+  // painting the modal. (Elevated reads prefetch too — the cache is dropped on
+  // every `sudo` toggle and on logout, so nothing root-read lingers.)
   const prefetchNeighbors = useCallback(
     (path: string, siblings?: { path: string; name: string }[]) => {
-      if (elevatedRef.current || !siblings || siblings.length < 2) return;
+      if (!siblings || siblings.length < 2) return;
       const idx = siblings.findIndex((s) => s.path === path);
       if (idx < 0) return;
       const n = siblings.length;
@@ -761,25 +752,12 @@ export function SshSession({
             if (msg.dataB64) {
               // The bridge always downscales a thumbnail to WebP (image or video
               // poster frame) — it never sends a full-size original as a thumb —
-              // so a thumb payload is always `image/webp`.
+              // so a thumb payload is always `image/webp`. The bridge also caches
+              // the finished tile server-side, so the client only holds it in
+              // memory (dropped on logout — no browser copy persists).
               const mime = msg.mime ?? "image/webp";
               const dataUrl = `data:${mime};base64,${msg.dataB64}`;
               setThumbnails((prev) => ({ ...prev, [msg.path]: dataUrl }));
-              // Persist so a return visit paints instantly — but never persist a
-              // root-read (elevated) thumbnail (those stay in-memory only), nor a
-              // large payload (only the small resized thumbnails are worth caching).
-              if (
-                !elevatedRef.current &&
-                dataUrl.length <= THUMB_PERSIST_MAX_CHARS
-              ) {
-                const version = entryVersionRef.current.get(msg.path);
-                if (version) {
-                  void putCachedThumbnail(
-                    thumbnailCacheKey(scopeRef.current, msg.path, version),
-                    dataUrl,
-                  );
-                }
-              }
             }
           } else {
             // Plain one-shot read (zip of a folder / multi-select). Previews now
@@ -1197,6 +1175,15 @@ export function SshSession({
     originalLoadPathsRef.current.clear();
     streamTokenRef.current = null;
     videoTimesRef.current.clear();
+    // Logout invalidates every cached thumbnail in the browser (they live in
+    // memory only) so nothing stays viewable or downloadable after disconnect;
+    // the server keeps its own cache for a future re-login. `setPreview(null)`
+    // above already revokes any open preview blob.
+    setThumbnails({});
+    requestedThumbsRef.current = new Set();
+    visibleThumbsRef.current.clear();
+    thumbQueueRef.current = [];
+    thumbInFlightRef.current = 0;
     setHasLast(false);
     ctrlRef.current = false;
     altRef.current = false;
@@ -1386,54 +1373,22 @@ export function SshSession({
     if (url && url.startsWith("blob:")) return () => URL.revokeObjectURL(url);
   }, [preview?.src]);
 
-  // Keep the refs the (bound-once) ws handler reads current.
-  useEffect(() => {
-    scopeRef.current = target ? `${target.user}@${target.host}` : "";
-  }, [target]);
+  // Keep the ref the (bound-once) ws handler reads current.
   useEffect(() => {
     elevatedRef.current = elevated;
   }, [elevated]);
 
-  // On each listing, rebuild the path→version map (for cache keys) and preload
-  // any persisted thumbnails so a revisited folder paints instantly with no
-  // bridge round-trips. Elevated (root) sessions are never persisted, so they
-  // skip the cache entirely and just re-fetch (in-memory only) as before.
+  // On each listing, rebuild the path→version map (size:mtime) that keys the
+  // in-memory preview cache so an edited file re-fetches. The thumbnail cache
+  // itself lives on the bridge now, so there's nothing to preload here — a
+  // visible tile requests its thumb and the bridge serves it (from its cache
+  // when it has it, so a re-visited folder still paints fast).
   useEffect(() => {
     const base = cwd.replace(/\/$/, "");
     const versions = new Map<string, string>();
     for (const e of entries) versions.set(`${base}/${e.name}`, fileVersionTag(e));
     entryVersionRef.current = versions;
-
-    const scope = target ? `${target.user}@${target.host}` : "";
-    if (elevated || !scope) return;
-    const wanted = entries
-      .filter((e) => isThumbnailable(e))
-      .map((e) => {
-        const path = `${base}/${e.name}`;
-        return { path, key: thumbnailCacheKey(scope, path, fileVersionTag(e)) };
-      })
-      .filter((w) => !requestedThumbsRef.current.has(w.path));
-    if (wanted.length === 0) return;
-
-    let cancelled = false;
-    void getCachedThumbnails(wanted.map((w) => w.key)).then((hits) => {
-      if (cancelled || hits.size === 0) return;
-      const found: Record<string, string> = {};
-      for (const w of wanted) {
-        const url = hits.get(w.key);
-        if (url) {
-          found[w.path] = url;
-          requestedThumbsRef.current.add(w.path); // don't re-fetch from the bridge
-        }
-      }
-      if (Object.keys(found).length > 0) {
-        setThumbnails((prev) => ({ ...prev, ...found }));
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [entries, cwd, elevated, target]);
+  }, [entries, cwd]);
 
   // Report label + status to the tab manager whenever they change.
   useEffect(() => {
@@ -2024,7 +1979,6 @@ export function SshSession({
                 prefs={termPrefs}
                 onChange={updateTermPrefs}
                 onClearThumbnailCache={clearThumbnails}
-                thumbnailCacheElevated={elevated}
               />
             </div>
 

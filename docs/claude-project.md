@@ -168,7 +168,8 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   credential-free event logs (`SSH_LOG=json|off`), serves a metrics-carrying JSON
   health probe at `GET /api/health` (session counts, cumulative shell bytes, an
   `sftp` block of file-transfer volume — completed uploads/downloads + bytes —
-  and a `thumbnails` block of WebP tiles served/skipped + bytes), and shuts down
+  and a `thumbnails` block of WebP tiles served/skipped + bytes plus the
+  server-side cache's hits/entries/bytes), and shuts down
   gracefully (drains sessions on SIGTERM/SIGINT). Grid thumbnails are **always** served as a tiny WebP and
   nothing else: images are downscaled in-memory with `sharp`
   (`THUMBNAIL_PIXELS`, mirrored from `sshProtocol.ts`) before being sent — the
@@ -179,11 +180,23 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   **never** sent as a thumbnail: `sharp` is therefore required for thumbnails
   (and `ffmpeg` for video tiles) — when either is missing, or the bytes can't
   be decoded, the bridge skips that tile (an empty `thumb` reply → the client
-  keeps its type icon) instead of falling back to the original bytes. The client concurrency-limits thumbnail reads (serving tiles currently in the
-  viewport first) and caches finished
-  thumbnails in IndexedDB (`src/lib/thumbnailCache.ts`) so revisiting a folder
-  needs no re-fetch; a "Clear thumbnail cache" action in the settings popover
-  (non-elevated sessions only) wipes that store on demand.
+  keeps its type icon) instead of falling back to the original bytes. **The
+  finished WebP tiles are cached on the bridge, not the browser**: an in-memory
+  LRU cache (`SSH_THUMB_CACHE_MB`, default 128 MB; `0` disables) keyed by
+  identity (`user@host`, or `user@host#root` for an elevated read) + path +
+  `size:mtime` serves a re-visited folder — or a fresh re-login — with **no SSH
+  read and no transcode**, so grids paint as fast as the bytes send; the pure key
+  + LRU-eviction logic lives in `src/lib/thumbnailCache.ts` and is hand-mirrored
+  in `server.mjs` (the same "two synchronized places" discipline). Nothing is
+  written to disk, and **elevated (root) reads are cached too** — isolated under
+  the `#root` scope so they never mix with login-user tiles. The client
+  concurrency-limits thumbnail reads (serving tiles currently in the viewport
+  first) and holds tiles **in memory only** — so **logging out immediately drops
+  every cached thumbnail, preview blob and stream token from the browser** (no
+  on-disk copy lingers, nothing stays downloadable), while the server keeps its
+  cache for the next login. A "Clear thumbnail cache" action in the settings
+  popover sends a `thumb-purge` that evicts this connection's tiles (login-user
+  **and** `#root`) from the server cache.
 
 ## Assets
 
