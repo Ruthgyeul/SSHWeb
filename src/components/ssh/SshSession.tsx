@@ -335,6 +335,9 @@ export function SshSession({
     thumbnailsRef.current = thumbnails;
   }, [thumbnails]);
   const requestedThumbsRef = useRef<Set<string>>(new Set());
+  // Paths whose grid tiles are currently in/near the viewport, so `pumpThumbs`
+  // serves visible tiles before ones that have scrolled out of view.
+  const visibleThumbsRef = useRef<Set<string>>(new Set());
   // Bound how many thumbnail reads are outstanding at once so a directory of
   // hundreds of images loads the visible tiles first instead of flooding the
   // bridge with every request the moment they scroll near the viewport.
@@ -473,13 +476,19 @@ export function SshSession({
 
   // Drain the thumbnail queue up to the concurrency limit. Each `thumb` reply
   // (success, skip, or error — the server always replies) frees a slot and calls
-  // this again, so the queue keeps flowing until it empties.
+  // this again, so the queue keeps flowing until it empties. Tiles currently in
+  // (or near) the viewport are served first — so after a fast scroll the visible
+  // tiles paint before the ones that scrolled past — falling back to FIFO order
+  // when nothing queued is visible.
   const pumpThumbs = useCallback(() => {
     while (
       thumbInFlightRef.current < MAX_INFLIGHT_THUMBS &&
       thumbQueueRef.current.length > 0
     ) {
-      const path = thumbQueueRef.current.shift()!;
+      const q = thumbQueueRef.current;
+      let idx = q.findIndex((p) => visibleThumbsRef.current.has(p));
+      if (idx < 0) idx = 0;
+      const path = q.splice(idx, 1)[0];
       thumbInFlightRef.current += 1;
       send({ t: "sftp-read", path, thumb: true });
     }
@@ -499,12 +508,20 @@ export function SshSession({
     [pumpThumbs],
   );
 
+  // A grid tile reports whether it's currently in/near the viewport, feeding the
+  // visible-first priority in `pumpThumbs`. Cheap ref mutation (no re-render).
+  const setThumbVisible = useCallback((path: string, visible: boolean) => {
+    if (visible) visibleThumbsRef.current.add(path);
+    else visibleThumbsRef.current.delete(path);
+  }, []);
+
   // "Clear thumbnail cache" (settings): wipe the persistent IndexedDB store and
   // the in-memory cache, then let the visible tiles re-request from the bridge
   // (clearing `requestedThumbsRef` un-blocks their intersection observers).
   const clearThumbnails = useCallback(async () => {
     await clearThumbnailCache();
     requestedThumbsRef.current = new Set();
+    visibleThumbsRef.current.clear();
     thumbQueueRef.current = [];
     thumbInFlightRef.current = 0;
     setThumbnails({});
@@ -664,6 +681,7 @@ export function SshSession({
           // (nor should a user-visible one be assumed still readable as root).
           // The re-list below re-fetches thumbnails under the new identity.
           requestedThumbsRef.current = new Set();
+          visibleThumbsRef.current.clear();
           thumbQueueRef.current = [];
           thumbInFlightRef.current = 0;
           setThumbnails({});
@@ -681,6 +699,7 @@ export function SshSession({
           // a file op doesn't re-fetch every image).
           if (msg.path !== cwdRef.current) {
             requestedThumbsRef.current = new Set();
+            visibleThumbsRef.current.clear();
             thumbQueueRef.current = [];
             thumbInFlightRef.current = 0;
             setThumbnails({});
@@ -2116,6 +2135,7 @@ export function SshSession({
               }
               thumbnails={thumbnails}
               onRequestThumbnail={requestThumbnail}
+              onThumbnailVisibility={setThumbVisible}
               search={search}
               onSearch={onSearch}
               onClearSearch={onClearSearch}

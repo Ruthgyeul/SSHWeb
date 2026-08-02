@@ -169,9 +169,9 @@ const MAX_DOWNLOAD_BYTES =
 // thumbnail. Mirrors `THUMBNAIL_VIDEO_MAX_BYTES` in src/lib/sshProtocol.ts (the
 // larger of the image/video caps) — a `thumb` read past it is silently ignored
 // so a client can't pull a huge file "as a thumbnail". The client also gates
-// per-type via `isThumbnailable` (2 MB images / 8 MB videos), which is a
+// per-type via `isThumbnailable` (32 MB images / 64 MB videos), which is a
 // bandwidth nicety rather than the security bound.
-const THUMBNAIL_VIDEO_MAX_BYTES = 8 * 1024 * 1024;
+const THUMBNAIL_VIDEO_MAX_BYTES = 64 * 1024 * 1024;
 // Longest edge (px) of a generated thumbnail. Mirrors `THUMBNAIL_PIXELS` in
 // src/lib/sshProtocol.ts. Images are downscaled to fit this box and re-encoded
 // as WebP before being sent to the grid.

@@ -875,13 +875,14 @@ export function isProbablyImageFile(name: string): boolean {
 /**
  * Upper bound (bytes) on the *original* image the file-browser grid will
  * auto-fetch as a thumbnail. The bridge reads the original into memory and
- * downscales it (originals are never modified) before sending, so what crosses
- * the WebSocket is tiny; this cap bounds the read the bridge does from the SSH
- * target. Larger images just show the generic icon until opened. Mirrored in
- * `server.mjs`, which also enforces it so a client can't request a huge file
- * "as a thumbnail".
+ * downscales it to a tiny WebP (originals are never modified) before sending, so
+ * what crosses the WebSocket is tiny regardless; this cap only bounds the read
+ * the bridge does from the SSH target (decode memory). Set generously so nearly
+ * every real photo gets a thumbnail; larger images just show the generic icon
+ * until opened. Mirrored in `server.mjs`, which also enforces it so a client
+ * can't request a huge file "as a thumbnail".
  */
-export const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
+export const THUMBNAIL_MAX_BYTES = 32 * 1024 * 1024;
 
 /**
  * Longest edge (px) of a generated grid thumbnail. The bridge downscales images
@@ -893,14 +894,14 @@ export const THUMBNAIL_PIXELS = 256;
 
 /**
  * Upper bound (bytes) on a video the grid will auto-fetch to render a poster
- * frame. Video thumbnails work by pulling the whole (short) clip and letting a
- * `<video>` element paint its first frame — there's no server-side frame
- * extraction (unlike images, which are downscaled on the bridge) — so the cap is
- * a bit higher than the image one but still keeps the grid cheap; larger clips
- * just show the film icon. Mirrored in `server.mjs` (as the absolute ceiling for
- * any `thumb` read).
+ * frame. The bridge reads the clip into memory, extracts a poster frame with
+ * `ffmpeg`, and downscales it to a tiny WebP — so what crosses the wire is tiny;
+ * this cap only bounds the read + decode the bridge does. Set generously so most
+ * clips get a poster thumbnail; larger videos just show the film icon (reading a
+ * multi-hundred-MB clip whole to poster it would be wasteful). Mirrored in
+ * `server.mjs` (as the absolute ceiling for any `thumb` read).
  */
-export const THUMBNAIL_VIDEO_MAX_BYTES = 8 * 1024 * 1024;
+export const THUMBNAIL_VIDEO_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
  * Whether a listing entry should get an auto-loaded thumbnail in the grid view:
