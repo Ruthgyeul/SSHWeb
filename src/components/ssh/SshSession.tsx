@@ -146,12 +146,14 @@ const MAX_INFLIGHT_THUMBS = 12;
 /** In-memory budget for the recently-viewed preview cache (raw file bytes). A
  * revisited file re-opens instantly with no re-transfer; the LRU evicts the
  * oldest entries once the total exceeds this. Bytes (not blob URLs) are cached
- * so each open builds a fresh, independently-revoked `blob:` URL. Sized to hold
- * a whole gallery: image previews are now light lossy WebP (a few hundred KB
- * each), so this fits hundreds of them — stepping ←/→ and back re-opens with no
- * re-transfer. Held in memory only, so it's dropped on logout / sudo toggle
- * (nothing lingers). */
-const MAX_PREVIEW_CACHE_BYTES = 128 * 1024 * 1024;
+ * so each open builds a fresh, independently-revoked `blob:` URL. Kept modest to
+ * bound how much decoded file data sits in the tab's memory at once (a
+ * confidentiality/RAM-residual choice) — since image previews are light lossy
+ * WebP (a few hundred KB each) this still holds a good stretch of a gallery for
+ * instant ←/→ stepping, and the bridge's own cache keeps a further re-open fast.
+ * Held in memory only, so it's dropped on logout / sudo toggle (nothing
+ * lingers). */
+const MAX_PREVIEW_CACHE_BYTES = 64 * 1024 * 1024;
 
 /** Don't prefetch a gallery neighbour bigger than this — prefetching is a
  * latency nicety for the common case (folders of photos), not a reason to pull
@@ -562,6 +564,32 @@ export function SshSession({
   // connection's cached tiles (the cache lives server-side now), then drop the
   // in-memory copies and let the visible tiles re-request — a fresh generation
   // (clearing `requestedThumbsRef` un-blocks their intersection observers).
+  const clearPreviewCache = useCallback(() => {
+    previewCacheRef.current.clear();
+    previewCacheBytesRef.current = 0;
+    prefetchPathsRef.current.clear();
+  }, []);
+
+  // Approximate bytes a `data:…;base64,` URL decodes to (the tile's real size).
+  const dataUrlBytes = useCallback((url: string) => {
+    const comma = url.indexOf(",");
+    if (comma < 0) return 0;
+    const b64 = url.length - comma - 1;
+    const pad = url.endsWith("==") ? 2 : url.endsWith("=") ? 1 : 0;
+    return Math.max(0, Math.floor((b64 * 3) / 4) - pad);
+  }, []);
+
+  // Total bytes of cached media this browser is holding in memory right now:
+  // grid thumbnails + the recently-viewed preview LRU. Surfaced next to the
+  // settings "Clear thumbnail cache" action so the RAM residual is visible.
+  const clientCacheBytes = useCallback(() => {
+    let total = previewCacheBytesRef.current;
+    for (const url of Object.values(thumbnailsRef.current)) {
+      total += dataUrlBytes(url);
+    }
+    return total;
+  }, [dataUrlBytes]);
+
   const clearThumbnails = useCallback(() => {
     send({ t: "thumb-purge" });
     requestedThumbsRef.current = new Set();
@@ -569,7 +597,10 @@ export function SshSession({
     thumbQueueRef.current = [];
     thumbInFlightRef.current = 0;
     setThumbnails({});
-  }, [send]);
+    // Also drop the recently-viewed preview bytes held in this browser, so
+    // "clear" empties the whole in-memory media cache, not just grid tiles.
+    clearPreviewCache();
+  }, [send, clearPreviewCache]);
 
   // Cache key for a path: path + its version tag (size:mtime) so an edited file
   // misses and re-fetches. Falls back to the bare path when the version is
@@ -611,11 +642,6 @@ export function SshSession({
     [previewCacheKeyFor],
   );
 
-  const clearPreviewCache = useCallback(() => {
-    previewCacheRef.current.clear();
-    previewCacheBytesRef.current = 0;
-    prefetchPathsRef.current.clear();
-  }, []);
 
   // Stream the gallery neighbours of `path` (the previous & next image) into the
   // preview cache ahead of a ←/→ step, so paging through a folder of photos is
@@ -2159,6 +2185,7 @@ export function SshSession({
                 prefs={termPrefs}
                 onChange={updateTermPrefs}
                 onClearThumbnailCache={clearThumbnails}
+                getCacheBytes={clientCacheBytes}
               />
             </div>
 

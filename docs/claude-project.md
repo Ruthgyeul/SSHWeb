@@ -193,9 +193,11 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   nothing else: images are downscaled in-memory with `sharp`
   (`THUMBNAIL_PIXELS`, mirrored from `sshProtocol.ts`) before being sent — the
   original file is only read, never modified — and video tiles get a poster
-  frame extracted by `ffmpeg` (the clip is piped to ffmpeg on stdin, nothing
-  touches disk) and downscaled to WebP the same way, so a folder of photos or
-  videos sends KB per tile instead of whole files. A full-size original is
+  frame extracted by `ffmpeg` (piped to ffmpeg on stdin, with a short-lived temp
+  file as a seekable fallback for MP4/MOV whose `moov` atom sits at the end — most
+  phone recordings — which a non-seekable pipe can't decode; the temp file is
+  deleted immediately) and downscaled to WebP the same way, so a folder of photos
+  or videos sends KB per tile instead of whole files. A full-size original is
   **never** sent as a thumbnail: `sharp` is therefore required for thumbnails
   (and `ffmpeg` for video tiles) — when either is missing, or the bytes can't
   be decoded, the bridge skips that tile (an empty `thumb` reply → the client
@@ -206,16 +208,21 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   `size:mtime` serves a re-visited folder — or a fresh re-login — with **no SSH
   read and no transcode**, so grids paint as fast as the bytes send; the pure key
   + LRU-eviction logic lives in `src/lib/thumbnailCache.ts` and is hand-mirrored
-  in `server.mjs` (the same "two synchronized places" discipline). Nothing is
-  written to disk, and **elevated (root) reads are cached too** — isolated under
-  the `#root` scope so they never mix with login-user tiles. The client
-  concurrency-limits thumbnail reads (serving tiles currently in the viewport
-  first) and holds tiles **in memory only** — so **logging out immediately drops
-  every cached thumbnail, preview blob and stream token from the browser** (no
-  on-disk copy lingers, nothing stays downloadable), while the server keeps its
-  cache for the next login. A "Clear thumbnail cache" action in the settings
-  popover sends a `thumb-purge` that evicts this connection's tiles (login-user
-  **and** `#root`) from the server cache.
+  in `server.mjs` (the same "two synchronized places" discipline). The tile bytes
+  are never written to disk, and a tile unused for `SSH_THUMB_CACHE_TTL_MS`
+  (default 30 min; `0` = never expire) is dropped so decoded copies of your files
+  don't linger in shared process memory indefinitely — a confidentiality knob for
+  a multi-tenant deploy, while a re-login within the window still reuses tiles for
+  free. **Elevated (root) reads are cached too** — isolated under the `#root`
+  scope so they never mix with login-user tiles. The client concurrency-limits
+  thumbnail reads (serving tiles currently in the viewport first) and holds tiles
+  **in memory only** — so **logging out immediately drops every cached thumbnail,
+  preview blob and stream token from the browser** (no on-disk copy lingers,
+  nothing stays downloadable), while the server keeps its cache for the next
+  login. The settings popover shows how much media cache this browser is holding
+  and a **"Clear cache"** action drops the browser's in-memory thumbnails and
+  previews and sends a `thumb-purge` that evicts this connection's tiles
+  (login-user **and** `#root`) from the server cache.
 
 ## Assets
 
