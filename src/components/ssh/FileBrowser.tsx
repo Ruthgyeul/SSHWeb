@@ -162,6 +162,7 @@ function Thumbnail({
   thumbnailable,
   fallback,
   onRequest,
+  onVisibility,
 }: {
   path: string;
   src: string | undefined;
@@ -169,24 +170,37 @@ function Thumbnail({
   thumbnailable: boolean;
   fallback: string;
   onRequest: (path: string) => void;
+  /** Report whether this tile is in/near the viewport, so the parent can serve
+   * visible tiles first (the request itself is deduped upstream). */
+  onVisibility: (path: string, visible: boolean) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!thumbnailable || src) return;
     const el = ref.current;
     if (!el) return;
+    // Stay observing (don't disconnect on first hit) so the tile keeps reporting
+    // when it leaves/re-enters the viewport — that feeds the visible-first queue
+    // priority. The actual fetch is requested once (deduped by the parent).
     const io = new IntersectionObserver(
       (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          onRequest(path);
-          io.disconnect();
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            onVisibility(path, true);
+            onRequest(path);
+          } else {
+            onVisibility(path, false);
+          }
         }
       },
       { rootMargin: "200px" },
     );
     io.observe(el);
-    return () => io.disconnect();
-  }, [path, src, thumbnailable, onRequest]);
+    return () => {
+      io.disconnect();
+      onVisibility(path, false);
+    };
+  }, [path, src, thumbnailable, onRequest, onVisibility]);
 
   // The bridge always downscales a thumbnail — a photo or a video poster frame —
   // to a small WebP, so a tile is always an <img> (never a full <video> clip).
@@ -259,6 +273,7 @@ export function FileBrowser({
   onRefresh,
   thumbnails,
   onRequestThumbnail,
+  onThumbnailVisibility,
   search,
   onSearch,
   onClearSearch,
@@ -315,6 +330,9 @@ export function FileBrowser({
   thumbnails: Record<string, string>;
   /** Ask the parent to fetch a thumbnail for `path` (deduped upstream). */
   onRequestThumbnail: (path: string) => void;
+  /** Report a grid tile's viewport visibility so the parent serves visible
+   * thumbnails first. */
+  onThumbnailVisibility: (path: string, visible: boolean) => void;
   /** Active recursive search, or null when browsing the normal listing. */
   search: SearchState | null;
   /** Run a recursive search of the current directory for `query` — by file name
@@ -1447,6 +1465,7 @@ export function FileBrowser({
                       thumbnailable={isThumbnailable(entry)}
                       fallback={fileIcon(entry)}
                       onRequest={onRequestThumbnail}
+                      onVisibility={onThumbnailVisibility}
                     />
                   </button>
                   <button

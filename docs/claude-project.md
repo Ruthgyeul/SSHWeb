@@ -179,7 +179,8 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   **never** sent as a thumbnail: `sharp` is therefore required for thumbnails
   (and `ffmpeg` for video tiles) — when either is missing, or the bytes can't
   be decoded, the bridge skips that tile (an empty `thumb` reply → the client
-  keeps its type icon) instead of falling back to the original bytes. The client concurrency-limits thumbnail reads and caches finished
+  keeps its type icon) instead of falling back to the original bytes. The client concurrency-limits thumbnail reads (serving tiles currently in the
+  viewport first) and caches finished
   thumbnails in IndexedDB (`src/lib/thumbnailCache.ts`) so revisiting a folder
   needs no re-fetch; a "Clear thumbnail cache" action in the settings popover
   (non-elevated sessions only) wipes that store on demand.
