@@ -262,7 +262,7 @@ export function FileEditor({
 
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-term-card">
-      <div className="flex items-center gap-3 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
         <span className="text-xs text-term-muted" aria-hidden>
           ✎
         </span>
