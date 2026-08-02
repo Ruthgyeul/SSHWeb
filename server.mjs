@@ -176,6 +176,23 @@ const THUMBNAIL_VIDEO_MAX_BYTES = 8 * 1024 * 1024;
 // src/lib/sshProtocol.ts. Images are downscaled to fit this box and re-encoded
 // as WebP before being sent to the grid.
 const THUMBNAIL_PIXELS = 256;
+// Click-to-view image previews are downscaled to a WebP so a big photo opens in
+// KB, not MB (the original is only read, never modified, and Download still
+// fetches it whole). These mirror src/lib/sshProtocol.ts (the "two synchronized
+// places" discipline): the preview's longest-edge bound, its WebP quality, the
+// minimum original size worth transcoding, and the largest original read into
+// memory to transcode (only the tiny WebP crosses the wire, so this can exceed
+// the download cap; it just bounds decode memory).
+const PREVIEW_IMAGE_MAX_DIM = 2560;
+const PREVIEW_IMAGE_QUALITY = 82;
+const PREVIEW_IMAGE_MIN_BYTES = 512 * 1024;
+const PREVIEW_IMAGE_SOURCE_MAX_BYTES = 64 * 1024 * 1024;
+// Whether an image is downscaled to a WebP preview. Mirrors
+// `isResizablePreviewImage` in src/lib/sshProtocol.ts — excludes SVG (vector)
+// and GIF (may be animated), which stream as their originals.
+function isResizablePreviewImage(name) {
+  return /\.(png|apng|jpg|jpeg|jfif|pjpeg|pjp|webp|bmp|ico|cur|avif)$/i.test(name);
+}
 // Recursive-search limits. MAX_FIND_RESULTS mirrors src/lib/sshProtocol.ts; the
 // node budget bounds how many filesystem entries a single search may visit so a
 // deep/large tree can't tie up the session (the walk reads listings/metadata
@@ -2291,6 +2308,147 @@ wss.on("connection", (ws, req) => {
 
             if (statErr) return sendError(statErr.message, "sftp");
             const isPreview = msg.preview === true;
+
+            // Stream a file (optionally head-only via `cap`) as download/preview
+            // frames, pausing on WebSocket backpressure so a big file never
+            // balloons the send buffer. Preview frames are tagged `preview: true`
+            // so the client routes the bytes into the modal (as a blob/text)
+            // instead of saving a file. Cancellable via the `downloads` map.
+            const streamOriginal = (cap) => {
+              // A capped read only pulls the file's head (`{ start, end }`), so a
+              // huge log previews as text without transferring the whole thing.
+              const truncated = cap > 0 && stats.size > cap;
+              const stream = truncated
+                ? s.createReadStream(msg.path, { start: 0, end: cap - 1 })
+                : s.createReadStream(msg.path);
+              downloads.set(msg.path, stream);
+              send({
+                t: "sftp-download-begin",
+                path: msg.path,
+                name,
+                size: truncated ? cap : stats.size,
+                preview: isPreview,
+              });
+              stream.on("data", (chunk) => {
+                bytesDown += chunk.length;
+                sftpBytesDown += chunk.length;
+                send({
+                  t: "sftp-download-chunk",
+                  path: msg.path,
+                  dataB64: chunk.toString("base64"),
+                  preview: isPreview,
+                });
+                if (ws.bufferedAmount > 8 * 1024 * 1024) {
+                  stream.pause();
+                  const resume = setInterval(() => {
+                    if (ws.readyState !== ws.OPEN) {
+                      clearInterval(resume);
+                      stream.destroy();
+                    } else if (ws.bufferedAmount < 1 * 1024 * 1024) {
+                      clearInterval(resume);
+                      stream.resume();
+                    }
+                  }, 25);
+                }
+              });
+              stream.on("error", (err) => {
+                // A cancel (`sftp-download-cancel`) removes the map entry before
+                // destroying the stream, so a still-present entry here means a
+                // genuine read error (worth a toast); a missing one means we tore
+                // the stream down on purpose and should stay silent.
+                if (downloads.has(msg.path)) {
+                  downloads.delete(msg.path);
+                  sendError(err.message, "sftp");
+                }
+              });
+              stream.on("end", () => {
+                downloads.delete(msg.path);
+                sftpFilesDown += 1;
+                send({
+                  t: "sftp-download-end",
+                  path: msg.path,
+                  preview: isPreview,
+                  truncated,
+                });
+              });
+            };
+
+            // Fast image preview: downscale a (possibly large) original to a
+            // small WebP so click-to-view loads in KB, not MB. Only the WebP
+            // crosses the wire, so this may read a source past the whole-file
+            // download cap — bounded by PREVIEW_IMAGE_SOURCE_MAX_BYTES to cap
+            // decode memory. The `mime` on the begin frame tells the client these
+            // are an optimized preview (Download still fetches the original). The
+            // original file is only read, never modified.
+            if (
+              isPreview &&
+              msg.previewResize === true &&
+              sharp &&
+              isResizablePreviewImage(name) &&
+              stats.size >= PREVIEW_IMAGE_MIN_BYTES &&
+              stats.size <= PREVIEW_IMAGE_SOURCE_MAX_BYTES
+            ) {
+              s.readFile(msg.path, async (err, buffer) => {
+                if (err) return sendError(err.message, "sftp");
+                let webp = null;
+                try {
+                  webp = await sharp(buffer)
+                    .rotate() // bake in EXIF orientation so the preview is upright
+                    .resize(PREVIEW_IMAGE_MAX_DIM, PREVIEW_IMAGE_MAX_DIM, {
+                      fit: "inside",
+                      withoutEnlargement: true,
+                    })
+                    .webp({ quality: PREVIEW_IMAGE_QUALITY })
+                    .toBuffer();
+                } catch {
+                  webp = null;
+                }
+                // Only send the transcode when it actually saved bytes; otherwise
+                // fall back to the original (honouring the normal download cap).
+                if (webp && webp.length < buffer.length) {
+                  const CHUNK = 256 * 1024;
+                  send({
+                    t: "sftp-download-begin",
+                    path: msg.path,
+                    name,
+                    size: webp.length,
+                    preview: true,
+                    mime: "image/webp",
+                  });
+                  for (let off = 0; off < webp.length; off += CHUNK) {
+                    const chunk = webp.subarray(
+                      off,
+                      Math.min(off + CHUNK, webp.length),
+                    );
+                    bytesDown += chunk.length;
+                    sftpBytesDown += chunk.length;
+                    send({
+                      t: "sftp-download-chunk",
+                      path: msg.path,
+                      dataB64: chunk.toString("base64"),
+                      preview: true,
+                    });
+                  }
+                  sftpFilesDown += 1;
+                  send({
+                    t: "sftp-download-end",
+                    path: msg.path,
+                    preview: true,
+                    truncated: false,
+                  });
+                  return;
+                }
+                if (MAX_DOWNLOAD_BYTES > 0 && stats.size > MAX_DOWNLOAD_BYTES) {
+                  return sendError(
+                    `File too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
+                    "sftp",
+                  );
+                }
+                streamOriginal(0);
+              });
+              return;
+            }
+
             // A capped preview (text head-read) transfers at most `cap` bytes, so
             // it may peek at a file past the whole-file download cap. Clamp the
             // client-supplied cap to the download cap so `maxBytes` can never be
@@ -2328,67 +2486,8 @@ wss.on("connection", (ws, req) => {
             }
 
             // Plain downloads AND previews stream in chunks so the browser can
-            // show a progress bar (and cancel). Preview frames are tagged
-            // `preview: true` so the client routes the bytes into the modal (as a
-            // blob/text) instead of saving a file. Pause on WebSocket
-            // backpressure and resume when it drains, so a big file never
-            // balloons the send buffer.
-            // A capped read only pulls the file's head (`{ start, end }`), so a
-            // huge log previews as text without transferring the whole thing.
-            const truncated = cap > 0 && stats.size > cap;
-            const stream = truncated
-              ? s.createReadStream(msg.path, { start: 0, end: cap - 1 })
-              : s.createReadStream(msg.path);
-            downloads.set(msg.path, stream);
-            send({
-              t: "sftp-download-begin",
-              path: msg.path,
-              name,
-              size: truncated ? cap : stats.size,
-              preview: isPreview,
-            });
-            stream.on("data", (chunk) => {
-              bytesDown += chunk.length;
-              sftpBytesDown += chunk.length;
-              send({
-                t: "sftp-download-chunk",
-                path: msg.path,
-                dataB64: chunk.toString("base64"),
-                preview: isPreview,
-              });
-              if (ws.bufferedAmount > 8 * 1024 * 1024) {
-                stream.pause();
-                const resume = setInterval(() => {
-                  if (ws.readyState !== ws.OPEN) {
-                    clearInterval(resume);
-                    stream.destroy();
-                  } else if (ws.bufferedAmount < 1 * 1024 * 1024) {
-                    clearInterval(resume);
-                    stream.resume();
-                  }
-                }, 25);
-              }
-            });
-            stream.on("error", (err) => {
-              // A cancel (`sftp-download-cancel`) removes the map entry before
-              // destroying the stream, so a still-present entry here means a
-              // genuine read error (worth a toast); a missing one means we tore
-              // the stream down on purpose and should stay silent.
-              if (downloads.has(msg.path)) {
-                downloads.delete(msg.path);
-                sendError(err.message, "sftp");
-              }
-            });
-            stream.on("end", () => {
-              downloads.delete(msg.path);
-              sftpFilesDown += 1;
-              send({
-                t: "sftp-download-end",
-                path: msg.path,
-                preview: isPreview,
-                truncated,
-              });
-            });
+            // show a progress bar (and cancel).
+            streamOriginal(cap);
           }),
         );
         break;

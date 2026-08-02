@@ -98,8 +98,14 @@ interface PreviewState {
    * while the full-resolution media loads. Absent in list view / for audio. */
   placeholder?: string;
   /** Raw bytes, kept so "Download" doesn't need a second round-trip. Absent for
-   * `unsupported` previews, which stream the file only if the user downloads. */
+   * `unsupported` previews, which stream the file only if the user downloads.
+   * When `optimized` is set these are the *downscaled WebP preview*, not the
+   * original — so Download must re-fetch the original instead of saving these. */
   bytes?: Uint8Array<ArrayBuffer>;
+  /** True when `bytes`/`src` are a bridge-downscaled WebP preview of an image
+   * rather than the original file. Keeps the view light while routing the
+   * Download button to the untouched original. */
+  optimized?: boolean;
   /** Bytes received so far while the preview streams in — drives the modal's
    * progress bar. Set once the `sftp-download-begin` for this preview arrives. */
   received?: number;
@@ -138,8 +144,10 @@ const PREFETCH_MAX_BYTES = 16 * 1024 * 1024;
  * served over HTTP instead of buffering the whole clip into a blob. */
 const PREVIEW_STREAM_PATH = "/api/preview";
 
-/** Build the `/api/preview` URL for a video path with the session's stream token. */
-function videoStreamSrc(token: string, path: string): string {
+/** Build the `/api/preview` URL for a media (video/audio) path with the session's
+ * stream token, so a `<video>`/`<audio>` plays over HTTP Range instead of
+ * buffering the whole original into a blob. */
+function mediaStreamSrc(token: string, path: string): string {
   return `${PREVIEW_STREAM_PATH}?token=${encodeURIComponent(token)}&path=${encodeURIComponent(path)}`;
 }
 
@@ -162,6 +170,7 @@ function previewRenderKind(name: string): PreviewMode {
 function previewFieldsFromBytes(
   name: string,
   bytes: Uint8Array<ArrayBuffer>,
+  mimeOverride?: string,
 ): Pick<PreviewState, "kind" | "src" | "text" | "bytes" | "encodingWarning"> {
   let kind = previewRenderKind(name);
   if (kind === "text" || kind === "unsupported") {
@@ -178,14 +187,17 @@ function previewFieldsFromBytes(
     // Not decodable as media and not text — offer download only, no blob.
     return { kind, src: "", bytes };
   }
+  // A server-transcoded image preview arrives as WebP regardless of the file's
+  // name, so trust the bridge's `mimeOverride` when it sends one.
   const mime =
-    kind === "pdf"
+    mimeOverride ??
+    ((kind === "pdf"
       ? "application/pdf"
       : (kind === "video"
           ? videoMimeType(name)
           : kind === "audio"
             ? audioMimeType(name)
-            : imageMimeType(name)) ?? "application/octet-stream";
+            : imageMimeType(name)) ?? "application/octet-stream"));
   // A blob: URL renders large images/video/PDFs far faster than a giant data:
   // URL and lets <video> seek; revoked by the effect that watches preview.src.
   const src = URL.createObjectURL(new Blob([bytes], { type: mime }));
@@ -340,13 +352,29 @@ export function SshSession({
   // over the same `sftp-download-*` frames (tagged `preview`), but land in the
   // modal (as a blob/text) instead of a saved file — so they buffer here.
   const previewBuffersRef = useRef<Record<string, Uint8Array[]>>({});
+  // Server-supplied content type for a streaming preview, captured from its
+  // `sftp-download-begin`. Present only when the bridge transcoded an image to a
+  // WebP preview — its presence marks the bytes as an *optimized* (non-original)
+  // preview so Download re-fetches the original.
+  const previewMimeRef = useRef<Record<string, string>>({});
   // LRU cache of recently-viewed preview file bytes, keyed by path + version
   // (size:mtime) so an edited file re-fetches. A `Map` keeps insertion order for
   // eviction; `previewCacheBytesRef` tracks the running total against the budget.
   // Elevated (root) reads are never cached — they must not linger after de-elevate.
-  const previewCacheRef = useRef<Map<string, { name: string; bytes: Uint8Array<ArrayBuffer> }>>(
-    new Map(),
-  );
+  const previewCacheRef = useRef<
+    Map<
+      string,
+      {
+        name: string;
+        bytes: Uint8Array<ArrayBuffer>;
+        // Set when `bytes` are a downscaled WebP preview (not the original), with
+        // the WebP content type for building the blob. Download re-fetches the
+        // original in that case.
+        optimized?: boolean;
+        mime?: string;
+      }
+    >
+  >(new Map());
   const previewCacheBytesRef = useRef(0);
   // Text captured at save time per path, so `sftp-ok` can reconcile the editor's
   // saved content (marking that file clean) without a re-read.
@@ -485,14 +513,20 @@ export function SshSession({
   // Store a fully-loaded preview's bytes in the LRU (unless elevated, or bigger
   // than the whole budget), evicting the oldest entries once over budget.
   const cachePreview = useCallback(
-    (path: string, name: string, bytes: Uint8Array<ArrayBuffer>) => {
+    (
+      path: string,
+      name: string,
+      bytes: Uint8Array<ArrayBuffer>,
+      optimized?: boolean,
+      mime?: string,
+    ) => {
       if (elevatedRef.current || bytes.length > MAX_PREVIEW_CACHE_BYTES) return;
       const key = previewCacheKeyFor(path);
       const cache = previewCacheRef.current;
       const existing = cache.get(key);
       if (existing) previewCacheBytesRef.current -= existing.bytes.length;
       cache.delete(key);
-      cache.set(key, { name, bytes });
+      cache.set(key, { name, bytes, optimized, mime });
       previewCacheBytesRef.current += bytes.length;
       // Evict oldest (front of the Map) until back within budget.
       while (previewCacheBytesRef.current > MAX_PREVIEW_CACHE_BYTES) {
@@ -534,7 +568,8 @@ export function SshSession({
         const size = version ? parseInt(version.split(":")[0], 10) : 0;
         if (size > PREFETCH_MAX_BYTES) continue;
         prefetchPathsRef.current.add(nb.path);
-        send({ t: "sftp-read", path: nb.path, preview: true });
+        // Neighbours are images (checked above) — prefetch the light WebP too.
+        send({ t: "sftp-read", path: nb.path, preview: true, previewResize: true });
       }
     },
     [send, previewCacheKeyFor],
@@ -735,6 +770,10 @@ export function SshSession({
             const isPrefetch = prefetchPathsRef.current.has(msg.path);
             if (previewPathRef.current !== msg.path && !isPrefetch) break;
             previewBuffersRef.current[msg.path] = [];
+            // A `mime` here means the bridge sent a transcoded (WebP) preview
+            // rather than the original bytes; remember it for the end frame.
+            if (msg.mime) previewMimeRef.current[msg.path] = msg.mime;
+            else delete previewMimeRef.current[msg.path];
             setPreview((prev) =>
               prev && prev.path === msg.path
                 ? { ...prev, received: 0, total: msg.size }
@@ -786,6 +825,11 @@ export function SshSession({
           if (msg.preview) {
             const chunks = previewBuffersRef.current[msg.path];
             delete previewBuffersRef.current[msg.path];
+            const serverMime = previewMimeRef.current[msg.path];
+            delete previewMimeRef.current[msg.path];
+            // A server mime means these bytes are a downscaled WebP preview, not
+            // the original — so Download must re-fetch the original.
+            const optimized = !!serverMime;
             const wasPrefetch = prefetchPathsRef.current.delete(msg.path);
             if (!chunks) break;
             const bytes = concatBytes(chunks);
@@ -793,13 +837,13 @@ export function SshSession({
             // Cache the fully-received bytes even if the user has since stepped
             // away — the next visit reuses them without re-transfer. A truncated
             // (head-only) text read is never cached: a re-open must re-read.
-            if (!msg.truncated) cachePreview(msg.path, name, bytes);
+            if (!msg.truncated) cachePreview(msg.path, name, bytes, optimized, serverMime);
             // Only paint if still viewing this file (modal open, same path). A
             // prefetch that finished in the background just stays cached.
             if (previewPathRef.current !== msg.path) break;
             // Build the render fields (may create a blob URL) only now that we're
             // committing to paint this file.
-            const fields = previewFieldsFromBytes(name, bytes);
+            const fields = previewFieldsFromBytes(name, bytes, serverMime);
             // A capped (head-only) read that magic-byte-sniffs as media was a
             // mis-named/extensionless media file requested as text — its head
             // can't render, so discard it and re-read the whole file uncapped.
@@ -822,6 +866,7 @@ export function SshSession({
                     received: undefined,
                     total: undefined,
                     truncated: msg.truncated === true,
+                    optimized,
                   }
                 : prev,
             );
@@ -1125,20 +1170,21 @@ export function SshSession({
   // modal step ←/→ through the other previewable files in the same view.
   const openPreviewFile = useCallback(
     (path: string, name: string, siblings?: { path: string; name: string }[]) => {
-      // A video with a stream token (non-elevated) plays over the seekable HTTP
-      // endpoint: no whole-file transfer, and the browser can seek instantly.
-      // Elevated sessions keep the blob path (the endpoint reads as the login
-      // user, so it can't reach root-only files).
+      // Video AND audio with a stream token (non-elevated) play over the
+      // seekable HTTP endpoint: no whole-file transfer, original quality, and the
+      // browser can seek instantly. Elevated sessions keep the blob path (the
+      // endpoint reads as the login user, so it can't reach root-only files).
+      const mediaKind = filePreviewKind(name);
       if (
         !elevatedRef.current &&
         streamTokenRef.current &&
-        filePreviewKind(name) === "video"
+        (mediaKind === "video" || mediaKind === "audio")
       ) {
         setPreview({
           path,
           name,
-          kind: "video",
-          src: videoStreamSrc(streamTokenRef.current, path),
+          kind: mediaKind,
+          src: mediaStreamSrc(streamTokenRef.current, path),
           loading: false,
           siblings,
         });
@@ -1157,7 +1203,8 @@ export function SshSession({
           loading: false,
           placeholder: thumbnailsRef.current[path],
           siblings,
-          ...previewFieldsFromBytes(name, hit.bytes),
+          optimized: hit.optimized,
+          ...previewFieldsFromBytes(name, hit.bytes, hit.mime),
         });
         prefetchNeighbors(path, siblings);
         return;
@@ -1184,7 +1231,15 @@ export function SshSession({
           kind === "text" || kind === "markdown"
             ? TEXT_PREVIEW_MAX_BYTES
             : undefined;
-        send({ t: "sftp-read", path, preview: true, maxBytes });
+        // Ask the bridge to downscale an image to a light WebP for fast viewing
+        // (the original is still fetched whole by Download).
+        send({
+          t: "sftp-read",
+          path,
+          preview: true,
+          maxBytes,
+          previewResize: kind === "image",
+        });
       }
     },
     [send, previewCacheKeyFor, prefetchNeighbors],
@@ -2057,9 +2112,11 @@ export function SshSession({
                 onPrev={() => stepPreview(-1)}
                 onNext={() => stepPreview(1)}
                 onDownload={() =>
-                  // Media previews already hold the bytes; the download-only
-                  // fallback fetches on demand (streamed, with a progress bar).
-                  preview.bytes
+                  // Reuse the held bytes only when they're the *original*; an
+                  // optimized (downscaled WebP) preview — or a stream-only
+                  // video/audio, or the download-only fallback — fetches the
+                  // untouched original on demand (streamed, with a progress bar).
+                  preview.bytes && !preview.optimized
                     ? triggerDownload(preview.name, preview.bytes)
                     : send({ t: "sftp-read", path: preview.path })
                 }

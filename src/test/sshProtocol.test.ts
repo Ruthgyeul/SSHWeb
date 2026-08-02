@@ -17,6 +17,7 @@ import {
   isProbablyPreviewableFile,
   isProbablyTextFile,
   isProbablyVideoFile,
+  isResizablePreviewImage,
   isThumbnailable,
   THUMBNAIL_MAX_BYTES,
   THUMBNAIL_VIDEO_MAX_BYTES,
@@ -381,6 +382,28 @@ describe("image detection", () => {
     expect(imageMimeType("a.svg")).toBe("image/svg+xml");
     expect(imageMimeType("a.txt")).toBeNull();
     expect(imageMimeType("noext")).toBeNull();
+  });
+});
+
+describe("isResizablePreviewImage", () => {
+  it("downscales ordinary raster images", () => {
+    expect(isResizablePreviewImage("photo.jpg")).toBe(true);
+    expect(isResizablePreviewImage("Banner.PNG")).toBe(true);
+    expect(isResizablePreviewImage("shot.webp")).toBe(true);
+    expect(isResizablePreviewImage("pic.avif")).toBe(true);
+  });
+
+  it("streams vector / animated images as their originals", () => {
+    // SVG is vector (rasterizing loses scalability); GIF may be animated
+    // (a sharp WebP downscale would drop to a single frame).
+    expect(isResizablePreviewImage("logo.svg")).toBe(false);
+    expect(isResizablePreviewImage("anim.GIF")).toBe(false);
+  });
+
+  it("returns false for non-images", () => {
+    expect(isResizablePreviewImage("notes.md")).toBe(false);
+    expect(isResizablePreviewImage("clip.mp4")).toBe(false);
+    expect(isResizablePreviewImage("noextension")).toBe(false);
   });
 });
 
