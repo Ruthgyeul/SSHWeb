@@ -391,12 +391,27 @@ function isBrowserRenderableImage(name) {
   );
 }
 // Encode a decoded original (as a Buffer) to the configured preview format,
-// downscaled to fit PREVIEW_IMAGE_MAX_DIM. Returns { bytes, mime } or null when
-// sharp can't decode/encode it. EXIF orientation is baked in so the preview is
-// upright. The original file is only read, never modified.
+// downscaled to fit PREVIEW_IMAGE_MAX_DIM. Returns { bytes, mime, srcWidth,
+// srcHeight } or null when sharp can't decode/encode it. `srcWidth`/`srcHeight`
+// are the ORIGINAL image's pixel dimensions (orientation-independent product) so
+// the client can show the true size and gate loading a very large original. EXIF
+// orientation is baked in so the preview is upright. The original file is only
+// read, never modified.
 async function encodePreviewImage(buffer) {
   try {
-    let pipe = sharp(buffer)
+    const src = sharp(buffer);
+    // Read the source dimensions before resizing (best-effort — may be undefined
+    // for exotic formats; the client just falls back to the preview's own dims).
+    let srcWidth;
+    let srcHeight;
+    try {
+      const meta = await src.metadata();
+      srcWidth = meta.width;
+      srcHeight = meta.height;
+    } catch {
+      /* metadata unavailable — leave dims undefined */
+    }
+    let pipe = src
       .rotate()
       .resize(PREVIEW_IMAGE_MAX_DIM, PREVIEW_IMAGE_MAX_DIM, {
         fit: "inside",
@@ -404,19 +419,19 @@ async function encodePreviewImage(buffer) {
       });
     if (PREVIEW_IMAGE_FORMAT === "avif") {
       const bytes = await pipe.avif({ quality: PREVIEW_IMAGE_QUALITY }).toBuffer();
-      return { bytes, mime: "image/avif" };
+      return { bytes, mime: "image/avif", srcWidth, srcHeight };
     }
     if (PREVIEW_IMAGE_FORMAT === "webp-lossless") {
       const bytes = await pipe
         .webp({ lossless: true, quality: PREVIEW_IMAGE_QUALITY })
         .toBuffer();
-      return { bytes, mime: "image/webp" };
+      return { bytes, mime: "image/webp", srcWidth, srcHeight };
     }
     // Default: high-quality lossy WebP — fast to encode, small on the wire.
     const bytes = await pipe
       .webp({ quality: PREVIEW_IMAGE_QUALITY })
       .toBuffer();
-    return { bytes, mime: "image/webp" };
+    return { bytes, mime: "image/webp", srcWidth, srcHeight };
   } catch {
     return null;
   }
@@ -2765,6 +2780,11 @@ wss.on("connection", (ws, req) => {
                     size: webp.length,
                     preview: true,
                     mime: encoded.mime,
+                    // The ORIGINAL's dimensions (not the downscaled preview's), so
+                    // the client shows the true size and can gate loading a very
+                    // large original on demand.
+                    origWidth: encoded.srcWidth,
+                    origHeight: encoded.srcHeight,
                   });
                   for (let off = 0; off < webp.length; off += CHUNK) {
                     const chunk = webp.subarray(

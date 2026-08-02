@@ -69,6 +69,7 @@ import { MobileKeys } from "./MobileKeys";
 import { SnippetsBar } from "./SnippetsBar";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TerminalSettings } from "./TerminalSettings";
+import { SearchIcon } from "./icons";
 import { useTerminalPrefs } from "./useTerminalPrefs";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
@@ -116,6 +117,10 @@ interface PreviewState {
   received?: number;
   /** Total size announced by `sftp-download-begin`, for the progress bar. */
   total?: number;
+  /** The ORIGINAL image's pixel dimensions (from a transcoded preview's begin
+   * frame), so the modal shows the true size and can gate loading a very large
+   * original. Undefined for non-image previews or when unknown. */
+  originalDims?: { w: number; h: number };
   /** For a video that the browser can't play natively, the `/api/preview`
    * transcode URL to fall back to when native playback errors (or immediately,
    * for a known-unplayable container). Absent for natively-playable media. */
@@ -154,6 +159,13 @@ const MAX_INFLIGHT_THUMBS = 12;
  * Held in memory only, so it's dropped on logout / sudo toggle (nothing
  * lingers). */
 const MAX_PREVIEW_CACHE_BYTES = 64 * 1024 * 1024;
+
+/** How long a cached preview stays reusable. A file not re-opened within this
+ * window is dropped so decoded copies of your files don't linger in the tab's
+ * memory indefinitely — the same confidentiality/RAM-residual TTL the bridge's
+ * thumbnail cache uses (30 min). A re-open within the window still paints
+ * instantly and refreshes the entry's age. */
+const PREVIEW_CACHE_TTL_MS = 30 * 60 * 1000;
 
 /** Don't prefetch a gallery neighbour bigger than this — prefetching is a
  * latency nicety for the common case (folders of photos), not a reason to pull
@@ -428,6 +440,9 @@ export function SshSession({
         // original in that case.
         optimized?: boolean;
         mime?: string;
+        /** Last-used timestamp (ms) — an entry older than PREVIEW_CACHE_TTL_MS is
+         * dropped so decoded file bytes don't linger in memory indefinitely. */
+        ts: number;
       }
     >
   >(new Map());
@@ -625,10 +640,19 @@ export function SshSession({
       if (bytes.length > MAX_PREVIEW_CACHE_BYTES) return;
       const key = previewCacheKeyFor(path);
       const cache = previewCacheRef.current;
+      const now = Date.now();
+      // Opportunistically drop entries that have aged out (TTL), so stale decoded
+      // bytes don't sit in memory just because nothing pushed the LRU over budget.
+      for (const [k, v] of cache) {
+        if (now - v.ts > PREVIEW_CACHE_TTL_MS) {
+          cache.delete(k);
+          previewCacheBytesRef.current -= v.bytes.length;
+        }
+      }
       const existing = cache.get(key);
       if (existing) previewCacheBytesRef.current -= existing.bytes.length;
       cache.delete(key);
-      cache.set(key, { name, bytes, optimized, mime });
+      cache.set(key, { name, bytes, optimized, mime, ts: now });
       previewCacheBytesRef.current += bytes.length;
       // Evict oldest (front of the Map) until back within budget.
       while (previewCacheBytesRef.current > MAX_PREVIEW_CACHE_BYTES) {
@@ -643,10 +667,13 @@ export function SshSession({
   );
 
 
-  // Stream the gallery neighbours of `path` (the previous & next image) into the
-  // preview cache ahead of a ←/→ step, so paging through a folder of photos is
-  // instant. Only images (the common case), and never a neighbour already
-  // cached, in flight, or bigger than `PREFETCH_MAX_BYTES`. The download handlers
+  // Stream the gallery neighbours of `path` (the previous & next previewable
+  // file) into the preview cache ahead of a ←/→ step, so paging through a folder
+  // is instant. Images prefetch as the light downscaled WebP; small,
+  // natively-playable audio/video clips prefetch whole (within the media-cache
+  // budget) so stepping onto one opens instantly and fully seekable — matching
+  // the `cacheSmallWhole` path in `openPreviewFile`. A neighbour already cached,
+  // in flight, or bigger than the relevant cap is skipped. The download handlers
   // recognise these paths via `prefetchPathsRef` and buffer their bytes without
   // painting the modal. (Elevated reads prefetch too — the cache is dropped on
   // every `sudo` toggle and on logout, so nothing root-read lingers.)
@@ -656,18 +683,37 @@ export function SshSession({
       const idx = siblings.findIndex((s) => s.path === path);
       if (idx < 0) return;
       const n = siblings.length;
+      const cap = downloadCapRef.current;
+      const mediaBudget = Math.min(
+        PREFETCH_MAX_BYTES,
+        cap > 0 ? Math.min(MEDIA_CACHE_MAX_BYTES, cap) : MEDIA_CACHE_MAX_BYTES,
+      );
       for (const delta of [1, -1]) {
         const nb = siblings[(idx + delta + n) % n];
         if (!nb || nb.path === path) continue;
-        if (filePreviewKind(nb.name) !== "image") continue;
         if (previewCacheRef.current.has(previewCacheKeyFor(nb.path))) continue;
         if (prefetchPathsRef.current.has(nb.path)) continue;
+        const kind = filePreviewKind(nb.name);
         const version = entryVersionRef.current.get(nb.path);
         const size = version ? parseInt(version.split(":")[0], 10) : 0;
-        if (size > PREFETCH_MAX_BYTES) continue;
+        if (kind === "image") {
+          if (size > PREFETCH_MAX_BYTES) continue;
+          prefetchPathsRef.current.add(nb.path);
+          // Prefetch the light WebP (the same downscaled preview open uses).
+          send({ t: "sftp-read", path: nb.path, preview: true, previewResize: true });
+          continue;
+        }
+        // Only whole-cache media that reliably plays from a blob, small enough to
+        // sit in the media-cache budget — everything else keeps streaming on open.
+        const reliablyNative =
+          kind === "audio" ||
+          (kind === "video" && /\.(mp4|m4v|webm|ogv)$/i.test(nb.name));
+        if (!reliablyNative) continue;
+        if (kind === "video" && videoNeedsTranscode(nb.name)) continue;
+        if (size <= 0 || size > mediaBudget) continue;
         prefetchPathsRef.current.add(nb.path);
-        // Neighbours are images (checked above) — prefetch the light WebP too.
-        send({ t: "sftp-read", path: nb.path, preview: true, previewResize: true });
+        // Whole-file read (no resize/cap) so the cached bytes play as a native blob.
+        send({ t: "sftp-read", path: nb.path, preview: true });
       }
     },
     [send, previewCacheKeyFor],
@@ -864,9 +910,15 @@ export function SshSession({
             // rather than the original bytes; remember it for the end frame.
             if (msg.mime) previewMimeRef.current[msg.path] = msg.mime;
             else delete previewMimeRef.current[msg.path];
+            // The original image's true dimensions (transcoded image previews
+            // only), for the true-size read-out + the large-original gate.
+            const originalDims =
+              msg.origWidth && msg.origHeight
+                ? { w: msg.origWidth, h: msg.origHeight }
+                : undefined;
             setPreview((prev) =>
               prev && prev.path === msg.path
-                ? { ...prev, received: 0, total: msg.size }
+                ? { ...prev, received: 0, total: msg.size, originalDims }
                 : prev,
             );
             break;
@@ -889,9 +941,29 @@ export function SshSession({
             if (!chunks) break;
             const bytes = base64ToBytes(msg.dataB64);
             chunks.push(bytes);
+            // Progressive text/markdown: decode what's arrived so far and paint it
+            // as the modal fills, instead of showing only a spinner until the whole
+            // (up to `TEXT_PREVIEW_MAX_BYTES`) transfer completes. A large log's head
+            // appears almost immediately. Only for the actively-viewed text/markdown
+            // preview (prefetches are images); media/PDF still buffer to a blob. Any
+            // trailing partial multi-byte char is resolved on the next chunk / end.
+            const cur = previewRef.current;
+            const progressive =
+              previewPathRef.current === msg.path &&
+              cur?.path === msg.path &&
+              (cur.kind === "text" || cur.kind === "markdown");
+            const partialText = progressive
+              ? new TextDecoder().decode(concatBytes(chunks))
+              : null;
             setPreview((prev) =>
               prev && prev.path === msg.path
-                ? { ...prev, received: (prev.received ?? 0) + bytes.length }
+                ? {
+                    ...prev,
+                    received: (prev.received ?? 0) + bytes.length,
+                    ...(partialText !== null
+                      ? { text: partialText, loading: false }
+                      : {}),
+                  }
                 : prev,
             );
             break;
@@ -1380,8 +1452,17 @@ export function SshSession({
       // so a cached small video/audio re-opens as a fully-seekable blob.
       const key = previewCacheKeyFor(path);
       const hit = previewCacheRef.current.get(key);
-      if (hit) {
-        // LRU touch: re-insert at the back so it counts as most-recently used.
+      // A hit past its TTL is dropped and re-fetched, so a stale decoded copy is
+      // never shown (and its bytes stop counting against the budget).
+      if (hit && Date.now() - hit.ts > PREVIEW_CACHE_TTL_MS) {
+        previewCacheRef.current.delete(key);
+        previewCacheBytesRef.current -= hit.bytes.length;
+      }
+      const fresh = hit && Date.now() - hit.ts <= PREVIEW_CACHE_TTL_MS ? hit : null;
+      if (fresh) {
+        const hit = fresh;
+        // LRU touch + refresh age: re-insert at the back as most-recently used.
+        hit.ts = Date.now();
         previewCacheRef.current.delete(key);
         previewCacheRef.current.set(key, hit);
         setPreview({
@@ -2140,16 +2221,28 @@ export function SshSession({
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-term-border bg-term-card">
       {/* Session header */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
-        {/* Identity + live status — takes the remaining width so the host label
-            truncates instead of shoving the controls off-screen. */}
-        <div className="flex min-w-0 flex-1 items-center gap-3">
+        {/* Identity — keeps a min-width floor so `user@host` stays readable and
+            truncates within itself; the min-width forces the controls (and, when
+            tighter, the status chips) to wrap to a new line rather than
+            collapsing the host to nothing or overlapping it. */}
+        <div className="flex min-w-[9rem] flex-1 items-center gap-2.5">
           <StatusDot status={status} />
-          <span className="min-w-0 truncate text-xs text-term-dim">
+          <span
+            className="min-w-0 flex-1 truncate text-xs text-term-dim"
+            title={target ? `${target.user}@${target.host}` : undefined}
+          >
             {target ? `${target.user}@${target.host}` : "Not connected"}
           </span>
-          {connected && connectedAt !== null && <Uptime since={connectedAt} />}
-          {connected && latency !== null && <LatencyChip ms={latency} />}
         </div>
+
+        {/* Live status chips — their own group so they wrap away from the host
+            (as a unit) before the host has to truncate. */}
+        {connected && (connectedAt !== null || latency !== null) && (
+          <div className="flex flex-none items-center gap-3">
+            {connectedAt !== null && <Uptime since={connectedAt} />}
+            {latency !== null && <LatencyChip ms={latency} />}
+          </div>
+        )}
 
         {connected && (
           // Controls, grouped so a narrow header wraps them as coherent blocks
@@ -2174,11 +2267,11 @@ export function SshSession({
                     setTab("terminal");
                     xtermRef.current?.openSearch();
                   }}
-                  className="rounded px-2 py-1 text-xs text-term-muted transition-colors hover:text-term-text"
+                  className="rounded px-2 py-1 text-term-muted transition-colors hover:text-term-text"
                   title="Search terminal (Ctrl+F)"
                   aria-label="Search terminal"
                 >
-                  🔍
+                  <SearchIcon className="h-3.5 w-3.5" />
                 </button>
               )}
               <TerminalSettings
@@ -2313,9 +2406,15 @@ export function SshSession({
                 text={preview.text}
                 received={preview.received}
                 total={preview.total}
+                streaming={
+                  preview.loading === false &&
+                  preview.received !== undefined &&
+                  preview.total !== undefined
+                }
                 truncated={preview.truncated}
                 encodingWarning={preview.encodingWarning}
                 optimized={preview.optimized}
+                originalDims={preview.originalDims}
                 loadingOriginal={preview.loadingOriginal}
                 // Only offer "load original" for images the browser can render
                 // raw — a HEIC/HEIF preview *is* a transcode with no viewable
@@ -2350,6 +2449,28 @@ export function SshSession({
                 }}
                 onPrev={() => stepPreview(-1)}
                 onNext={() => stepPreview(1)}
+                onEdit={
+                  // A read-only text/markdown preview can jump straight into the
+                  // editor without closing and re-finding the file. Only for
+                  // editable files (media/PDF/unsupported have no editor).
+                  (preview.kind === "text" || preview.kind === "markdown") &&
+                  isProbablyTextFile(preview.name)
+                    ? () => {
+                        // Stop an in-flight preview stream before switching.
+                        if (preview.loading || preview.received !== undefined) {
+                          send({ t: "sftp-download-cancel", path: preview.path });
+                          delete previewBuffersRef.current[preview.path];
+                        }
+                        closeSubtitleTrack();
+                        const version = entryVersionRef.current.get(preview.path);
+                        const size = version
+                          ? parseInt(version.split(":")[0], 10)
+                          : 0;
+                        setPreview(null);
+                        requestEdit(preview.path, preview.name, size);
+                      }
+                    : undefined
+                }
                 onDownload={() =>
                   // Reuse the held bytes only when they're the *original*; an
                   // optimized (downscaled WebP) preview — or a stream-only

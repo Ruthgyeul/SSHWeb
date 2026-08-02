@@ -6,6 +6,8 @@ import { renderMarkdown } from "@/lib/markdown";
 import { highlightToHtml } from "@/lib/syntaxHighlight";
 import { findMatches, type Match } from "@/lib/editorSearch";
 import { cn } from "@/lib/utils";
+import { FileIcon, iconKindForName, type FileIconKind } from "./FileIcon";
+import { PencilIcon, SearchIcon } from "./icons";
 
 /** Escape HTML-significant characters so file text is injected as literal text. */
 function escapeHtml(s: string): string {
@@ -42,15 +44,15 @@ function buildSearchHtml(text: string, matches: Match[], active: number): string
  * (syntax-highlighted, non-editable), or a download-only fallback. */
 export type PreviewMode = PreviewContentKind | "text" | "unsupported";
 
-/** Header icon per preview mode. */
-const MODE_ICON: Record<PreviewMode, string> = {
-  image: "🖼",
-  video: "🎞",
-  audio: "🎵",
-  pdf: "📕",
-  markdown: "📝",
-  text: "🗒",
-  unsupported: "📄",
+/** Header icon (SVG kind) per preview mode. */
+const MODE_ICON_KIND: Record<PreviewMode, FileIconKind> = {
+  image: "image",
+  video: "video",
+  audio: "audio",
+  pdf: "pdf",
+  markdown: "text",
+  text: "text",
+  unsupported: "file",
 };
 
 const MIN_ZOOM = 1;
@@ -90,9 +92,11 @@ export function FilePreview({
   text,
   received,
   total,
+  streaming = false,
   truncated = false,
   encodingWarning = false,
   optimized = false,
+  originalDims,
   loadingOriginal = false,
   onLoadOriginal,
   videoFallbackSrc,
@@ -107,6 +111,7 @@ export function FilePreview({
   onJump,
   onPrev,
   onNext,
+  onEdit,
   onDownload,
   onCancel,
   onClose,
@@ -126,6 +131,9 @@ export function FilePreview({
   received?: number;
   /** Total transfer size, once the stream has begun. */
   total?: number;
+  /** True while a text/markdown preview is still streaming in (content already
+   * painting, more bytes arriving) — drives a slim top progress strip. */
+  streaming?: boolean;
   /** True when a text preview shows only the head of a larger file. */
   truncated?: boolean;
   /** True when the decoded text looks like it isn't valid UTF-8. */
@@ -133,6 +141,10 @@ export function FilePreview({
   /** True when the shown image is a downscaled WebP preview, not the original —
    * enables the "load original" affordance (zoom / button) for pixel-perfect detail. */
   optimized?: boolean;
+  /** The ORIGINAL image's pixel dimensions (when the shown bytes are a downscaled
+   * preview), so the toolbar shows the true size and a very large original is
+   * loaded only on an explicit click (not auto-fetched on zoom). */
+  originalDims?: { w: number; h: number };
   /** True while the full-resolution original is being fetched to replace the WebP. */
   loadingOriginal?: boolean;
   /** Fetch the full-resolution original to replace an optimized preview (called
@@ -166,6 +178,8 @@ export function FilePreview({
   /** Step to the next previewable file in the view. */
   onNext?: () => void;
   onDownload: () => void;
+  /** Open this file in the editor (shown for editable text/markdown previews). */
+  onEdit?: () => void;
   /** Abort the in-flight preview transfer (only shown while loading). */
   onCancel?: () => void;
   onClose: () => void;
@@ -178,9 +192,12 @@ export function FilePreview({
   );
   // Read-only syntax-highlighted HTML for the `text` kind (a quick, non-editing
   // look at code/config/logs). Escaped in `highlightToHtml`, so safe to inject.
+  // Skipped while the file is still streaming in — re-highlighting the whole
+  // (growing) buffer on every chunk would be wasteful; a cheap escaped plain
+  // render is shown instead until the stream completes.
   const codeHtml = useMemo(
-    () => (kind === "text" ? highlightToHtml(text ?? "") : ""),
-    [kind, text],
+    () => (kind === "text" && !streaming ? highlightToHtml(text ?? "") : ""),
+    [kind, streaming, text],
   );
   const lineCount = useMemo(
     () => (kind === "text" ? (text ?? "").split("\n").length : 0),
@@ -299,11 +316,17 @@ export function FilePreview({
   }, []);
   const rotate = useCallback(() => setRotation((r) => (r + 90) % 360), []);
 
+  // A very large original (past LARGE_IMAGE_PIXELS) is NOT auto-fetched on zoom —
+  // decoding one can spike memory / crash the tab, so it loads only on an explicit
+  // "Original" click. Normal-sized originals still auto-load on zoom-in.
+  const originalIsHuge =
+    !!originalDims && originalDims.w * originalDims.h > LARGE_IMAGE_PIXELS;
+
   // Zooming past the fit view on an optimized (downscaled WebP) image pulls the
   // full-resolution original so the zoomed detail is pixel-perfect.
   useEffect(() => {
-    if (optimized && isImage && zoom > 1) requestOriginal();
-  }, [optimized, isImage, zoom, requestOriginal]);
+    if (optimized && isImage && zoom > 1 && !originalIsHuge) requestOriginal();
+  }, [optimized, isImage, zoom, originalIsHuge, requestOriginal]);
 
   // Keyboard: Esc closes, ←/→ walk the gallery, image transforms, and Ctrl/⌘+F
   // opens the text find bar.
@@ -331,8 +354,16 @@ export function FilePreview({
       }
       // While typing in the find input, leave the rest of the keys to it.
       if (typing) return;
+      // Shift+←/→ always steps the gallery, on every kind — including video/audio,
+      // where the plain arrows are reserved for seeking. Lets the keyboard step
+      // through a folder of clips without reaching for the on-screen ‹ › buttons.
+      if (hasGallery && e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        e.preventDefault();
+        (e.key === "ArrowLeft" ? onPrev : onNext)?.();
+        return;
+      }
       // Let a focused <video>/<audio> keep its own arrow-key seeking; gallery
-      // stepping for those is still available via the on-screen ‹ › buttons.
+      // stepping for those is via Shift+←/→ (above) or the on-screen ‹ › buttons.
       const mediaFocused =
         kind === "video" || kind === "audio";
       if (!mediaFocused && hasGallery && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
@@ -504,6 +535,17 @@ export function FilePreview({
   const toolBtn =
     "rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text disabled:opacity-40";
 
+  // A slim progress strip pinned to the top of a text/markdown pane while its
+  // content is still streaming in (the body already paints progressively).
+  const streamStrip = streaming && (
+    <div className="absolute inset-x-0 top-0 z-20 h-0.5 overflow-hidden bg-term-border">
+      <div
+        className="h-full bg-term-accent transition-[width]"
+        style={{ width: `${pct ?? 0}%` }}
+      />
+    </div>
+  );
+
   // Truncated / non-UTF-8 notices for text & markdown previews.
   const banner = (truncated || encodingWarning) && (
     <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-term-border bg-term-panel/60 px-4 py-1.5 text-[11px] text-term-yellow">
@@ -586,9 +628,8 @@ export function FilePreview({
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-term-card">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
-        <span className="text-xs text-term-muted" aria-hidden>
-          {MODE_ICON[kind]}
-        </span>
+        <FileIcon kind={MODE_ICON_KIND[kind]} className="text-term-muted" />
+
         <span
           className="min-w-0 flex-1 truncate text-xs text-term-dim"
           title={path}
@@ -602,31 +643,41 @@ export function FilePreview({
         )}
         {isImage && !loading && src && (
           <div className="flex flex-wrap items-center gap-1">
-            {dims && (
-              <span
-                className={cn(
-                  "mr-1 text-[11px] tabular-nums",
-                  dims.w * dims.h > LARGE_IMAGE_PIXELS
-                    ? "text-term-yellow"
-                    : "text-term-faint",
-                )}
-                title={
-                  dims.w * dims.h > LARGE_IMAGE_PIXELS
-                    ? "Very large image — may be slow to render"
-                    : undefined
-                }
-              >
-                {dims.w * dims.h > LARGE_IMAGE_PIXELS && "⚠ "}
-                {dims.w}×{dims.h}
-              </span>
-            )}
+            {(() => {
+              // Prefer the ORIGINAL's true dimensions (from the bridge) over the
+              // downscaled preview's own dimensions, so the read-out reflects the
+              // real photo size even while a light WebP is on screen.
+              const shown = originalDims ?? dims;
+              if (!shown) return null;
+              const huge = shown.w * shown.h > LARGE_IMAGE_PIXELS;
+              return (
+                <span
+                  className={cn(
+                    "mr-1 text-[11px] tabular-nums",
+                    huge ? "text-term-yellow" : "text-term-faint",
+                  )}
+                  title={
+                    huge
+                      ? "Very large image — the full-resolution original loads only on the Original button"
+                      : undefined
+                  }
+                >
+                  {huge && "⚠ "}
+                  {shown.w}×{shown.h}
+                </span>
+              );
+            })()}
             {onLoadOriginal && (optimized || loadingOriginal) && (
               <button
                 type="button"
                 onClick={requestOriginal}
                 disabled={loadingOriginal}
-                className={cn(toolBtn, "mr-1")}
-                title="Load the full-resolution original for pixel-perfect zoom"
+                className={cn(toolBtn, "mr-1", originalIsHuge && "text-term-yellow")}
+                title={
+                  originalIsHuge
+                    ? "Load the very large full-resolution original (may be slow / memory-heavy)"
+                    : "Load the full-resolution original for pixel-perfect zoom"
+                }
               >
                 {loadingOriginal ? "Original…" : "Original"}
               </button>
@@ -692,9 +743,19 @@ export function FilePreview({
               aria-label="Find (Ctrl/⌘+F)"
               title="Find (Ctrl/⌘+F)"
             >
-              🔎
+              <SearchIcon className="h-3.5 w-3.5" />
             </button>
           </div>
+        )}
+        {onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="flex items-center gap-1 rounded border border-term-border px-3 py-1 text-xs text-term-muted hover:text-term-text"
+            title="Edit this file"
+          >
+            <PencilIcon className="h-3.5 w-3.5" /> Edit
+          </button>
         )}
         <button
           type="button"
@@ -727,6 +788,7 @@ export function FilePreview({
         <>
           {!loading && banner}
           <div className="relative min-h-0 flex-1 overflow-auto bg-term-bg">
+            {streamStrip}
             {loading && spinner}
             {galleryArrows}
             {!loading && (
@@ -745,6 +807,7 @@ export function FilePreview({
             ref={textPaneRef}
             className="relative min-h-0 flex-1 overflow-auto bg-term-bg"
           >
+            {streamStrip}
             {loading && spinner}
             {galleryArrows}
             {!loading && (
@@ -757,15 +820,28 @@ export function FilePreview({
                     {Array.from({ length: lineCount }, (_, i) => i + 1).join("\n")}
                   </pre>
                 )}
-                <pre
-                  className={cn(
-                    "flex-1 px-4 py-3 text-term-text",
-                    wrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto whitespace-pre",
-                  )}
-                  dangerouslySetInnerHTML={{
-                    __html: findOpen && findQuery ? searchHtml : codeHtml,
-                  }}
-                />
+                {streaming ? (
+                  // While streaming, render cheap escaped plain text (no per-chunk
+                  // syntax highlighting); the highlighter runs once the stream ends.
+                  <pre
+                    className={cn(
+                      "flex-1 px-4 py-3 text-term-text",
+                      wrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto whitespace-pre",
+                    )}
+                  >
+                    {text ?? ""}
+                  </pre>
+                ) : (
+                  <pre
+                    className={cn(
+                      "flex-1 px-4 py-3 text-term-text",
+                      wrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto whitespace-pre",
+                    )}
+                    dangerouslySetInnerHTML={{
+                      __html: findOpen && findQuery ? searchHtml : codeHtml,
+                    }}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -876,9 +952,7 @@ export function FilePreview({
             ) : null
           ) : (
             <div className="flex flex-col items-center gap-3 text-center text-term-muted">
-              <span className="text-4xl opacity-60" aria-hidden>
-                📄
-              </span>
+              <FileIcon kind="file" className="h-12 w-12 opacity-60" />
               <p className="text-sm">This file type can’t be previewed inline.</p>
               <button
                 type="button"
@@ -919,8 +993,8 @@ export function FilePreview({
                     className="h-full w-full object-cover"
                   />
                 ) : (
-                  <span className="flex h-full w-full items-center justify-center text-sm text-term-muted">
-                    📄
+                  <span className="flex h-full w-full items-center justify-center text-term-muted">
+                    <FileIcon kind={iconKindForName(f.name)} className="h-5 w-5" />
                   </span>
                 )}
               </button>
