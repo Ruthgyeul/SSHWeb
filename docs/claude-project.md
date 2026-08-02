@@ -143,15 +143,25 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   `src/lib/serverSecurity.ts` (unit-tested) and is hand-mirrored in `server.mjs`
   — the same "two synchronized places" discipline as the wire protocol. The
   CSP's `connect-src 'self'` already authorizes the same-origin WebSocket —
-  don't widen it for this feature. Video previews stream over a same-origin
-  **HTTP Range endpoint** (`GET /api/preview`) so a `<video>` seeks without
-  buffering the whole clip: it's gated by the same access cookie as the upgrade
-  **and** an unguessable per-session capability token (minted on SSH-ready, sent
-  in `caps.streamToken`, revoked on cleanup) that scopes a request to that one
-  session's login-user SFTP — files its own WebSocket could already read — with
-  a single response bounded by `STREAM_MAX_CHUNK_BYTES` and a hardened
-  `default-src 'none'; sandbox` CSP on the media bytes; the existing
-  `media-src 'self'` already authorizes it, so don't widen the CSP. Ops surfaces: `server.mjs` emits structured,
+  don't widen it for this feature. Video **and audio** previews stream over a
+  same-origin **HTTP Range endpoint** (`GET /api/preview`) so `<video>`/`<audio>`
+  seek and start instantly without buffering the whole clip (and without any
+  transcode, so quality is untouched): it's gated by the same access cookie as
+  the upgrade **and** an unguessable per-session capability token (minted on
+  SSH-ready, sent in `caps.streamToken`, revoked on cleanup) that scopes a
+  request to that one session's login-user SFTP — files its own WebSocket could
+  already read — with a single response bounded by `STREAM_MAX_CHUNK_BYTES` and a
+  hardened `default-src 'none'; sandbox` CSP on the media bytes; the existing
+  `media-src 'self'` already authorizes it, so don't widen the CSP. **Image
+  previews are downscaled to a WebP for viewing**: clicking a photo opens a
+  `sharp`-resized WebP (`PREVIEW_IMAGE_MAX_DIM`/`PREVIEW_IMAGE_QUALITY`, mirrored
+  from `sshProtocol.ts`) that crosses the wire in KB instead of the multi-MB
+  original — which even lets a photo too large to download whole preview cheaply
+  (bounded by `PREVIEW_IMAGE_SOURCE_MAX_BYTES` decode memory) — while the
+  original is only read, never modified, and an explicit **Download** always
+  fetches the untouched original (SVG/GIF and images under `PREVIEW_IMAGE_MIN_BYTES`
+  stream as-is; when `sharp` can't decode the bytes the bridge streams the
+  original instead). Ops surfaces: `server.mjs` emits structured,
   credential-free event logs (`SSH_LOG=json|off`), serves a metrics-carrying JSON
   health probe at `GET /api/health` (session counts, cumulative shell bytes, an
   `sftp` block of file-transfer volume — completed uploads/downloads + bytes —

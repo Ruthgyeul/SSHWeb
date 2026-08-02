@@ -143,6 +143,12 @@ export type ClientMessage =
       // whole-file download cap). The reply's `sftp-download-end` carries
       // `truncated: true` when the file was longer.
       maxBytes?: number;
+      // Ask the bridge to downscale a large image to a small WebP for a fast
+      // click-to-view preview (see `PREVIEW_IMAGE_MAX_DIM`) instead of streaming
+      // the full-resolution original. The original is untouched and still fetched
+      // whole by an explicit Download. Ignored for non-image / SVG / GIF reads
+      // and when `sharp` is unavailable — those stream the original as before.
+      previewResize?: boolean;
     }
   // Write a file. When `offset` is a number the write is chunked (offset 0
   // opens the stream, `final: true` closes it) — this drives upload progress;
@@ -270,6 +276,11 @@ export type ServerMessage =
       name: string;
       size: number;
       preview?: boolean;
+      // Set only when the bridge transcoded a `previewResize` image: the content
+      // type of the bytes that follow (always `image/webp`). Its presence tells
+      // the client these are an *optimized* preview, not the original — so the
+      // modal builds its blob with this type and routes Download to the original.
+      mime?: string;
     }
   | { t: "sftp-download-chunk"; path: string; dataB64: string; preview?: boolean }
   // `truncated` is set when a capped `preview` read (`maxBytes`) stopped short
@@ -1007,6 +1018,43 @@ export function isLargeForEditor(size: number): boolean {
  * full download. Mirrored in `server.mjs`.
  */
 export const TEXT_PREVIEW_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Longest-edge pixel bound for a click-to-view image preview. The bridge
+ * downscales any larger image to a WebP fitting inside this box (see
+ * {@link PREVIEW_IMAGE_QUALITY}) so a multi-megapixel photo opens in KB instead
+ * of MB; the original file is only read, never modified, and an explicit
+ * Download still fetches it whole. High enough that the on-screen preview — and
+ * moderate zoom — stays crisp. Mirrored in `server.mjs`.
+ */
+export const PREVIEW_IMAGE_MAX_DIM = 2560;
+
+/** WebP quality (0–100) for downscaled image previews — visually lossless on
+ * screen while a fraction of the original's bytes. Mirrored in `server.mjs`. */
+export const PREVIEW_IMAGE_QUALITY = 82;
+
+/** Don't transcode an image smaller than this: the original already loads fast,
+ * so a WebP round-trip would only add latency. Below it the bridge streams the
+ * original as-is. Mirrored in `server.mjs`. */
+export const PREVIEW_IMAGE_MIN_BYTES = 512 * 1024;
+
+/** Upper bound on the *original* an image preview will read into memory to
+ * transcode. Only the tiny WebP crosses the wire, so this can safely exceed the
+ * whole-file download cap; it just bounds the bridge's decode memory. A source
+ * larger than this streams through the normal path (subject to the download cap)
+ * instead. Mirrored in `server.mjs`. */
+export const PREVIEW_IMAGE_SOURCE_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Whether a click-to-view image should be downscaled to a WebP preview (the fast
+ * path) rather than streamed as its original bytes. Excludes SVG (vector — tiny,
+ * and rasterizing it would lose scalability) and GIF (may be animated — a `sharp`
+ * WebP downscale would drop to a single frame), which stream as their originals.
+ */
+export function isResizablePreviewImage(name: string): boolean {
+  if (imageMimeType(name) === null) return false;
+  return !/\.(svg|gif)$/i.test(name);
+}
 
 /** What kind of media the preview modal should render for a file. */
 export type PreviewKind = "image" | "video" | "audio";
