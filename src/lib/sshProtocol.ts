@@ -1021,16 +1021,17 @@ export const TEXT_PREVIEW_MAX_BYTES = 4 * 1024 * 1024;
 
 /**
  * Longest-edge pixel bound for a click-to-view image preview. The bridge
- * downscales any larger image to a WebP fitting inside this box (see
- * {@link PREVIEW_IMAGE_QUALITY}) so a multi-megapixel photo opens in KB instead
- * of MB; the original file is only read, never modified, and an explicit
- * Download still fetches it whole. High enough that the on-screen preview — and
- * moderate zoom — stays crisp. Mirrored in `server.mjs`.
+ * downscales any larger image to a **lossless** WebP fitting inside this box so a
+ * multi-megapixel photo opens far faster while staying pixel-identical to the
+ * (downscaled) source; the original file is only read, never modified, and an
+ * explicit Download — or zooming past this resolution — still fetches it whole.
+ * Mirrored in `server.mjs`.
  */
 export const PREVIEW_IMAGE_MAX_DIM = 2560;
 
-/** WebP quality (0–100) for downscaled image previews — visually lossless on
- * screen while a fraction of the original's bytes. Mirrored in `server.mjs`. */
+/** Compression tightness (0–100) for the **lossless** WebP image preview — it
+ * tunes size/encode-time, not fidelity (lossless is always pixel-exact at the
+ * preview resolution). Mirrored in `server.mjs`. */
 export const PREVIEW_IMAGE_QUALITY = 82;
 
 /** Don't transcode an image smaller than this: the original already loads fast,

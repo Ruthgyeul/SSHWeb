@@ -153,15 +153,18 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   already read — with a single response bounded by `STREAM_MAX_CHUNK_BYTES` and a
   hardened `default-src 'none'; sandbox` CSP on the media bytes; the existing
   `media-src 'self'` already authorizes it, so don't widen the CSP. **Image
-  previews are downscaled to a WebP for viewing**: clicking a photo opens a
-  `sharp`-resized WebP (`PREVIEW_IMAGE_MAX_DIM`/`PREVIEW_IMAGE_QUALITY`, mirrored
-  from `sshProtocol.ts`) that crosses the wire in KB instead of the multi-MB
-  original — which even lets a photo too large to download whole preview cheaply
-  (bounded by `PREVIEW_IMAGE_SOURCE_MAX_BYTES` decode memory) — while the
-  original is only read, never modified, and an explicit **Download** always
-  fetches the untouched original (SVG/GIF and images under `PREVIEW_IMAGE_MIN_BYTES`
-  stream as-is; when `sharp` can't decode the bytes the bridge streams the
-  original instead). Ops surfaces: `server.mjs` emits structured,
+  previews are downscaled to a lossless WebP for viewing**: clicking a photo
+  opens a `sharp`-resized **lossless** WebP (`PREVIEW_IMAGE_MAX_DIM`, mirrored
+  from `sshProtocol.ts`) — pixel-identical to the downscaled source, no encode
+  artifacts — that crosses the wire far smaller than the multi-MB original, which
+  even lets a photo too large to download whole preview cheaply (bounded by
+  `PREVIEW_IMAGE_SOURCE_MAX_BYTES` decode memory). **Zooming in (or a "load
+  original" button) pulls the full-resolution original on demand** so zoomed
+  detail is pixel-perfect, and an explicit **Download** always fetches the
+  untouched original. The original is only read, never modified; SVG/GIF and
+  images under `PREVIEW_IMAGE_MIN_BYTES` stream as-is, and when `sharp` can't
+  decode the bytes (or the lossless WebP wouldn't be smaller) the bridge streams
+  the original instead. Ops surfaces: `server.mjs` emits structured,
   credential-free event logs (`SSH_LOG=json|off`), serves a metrics-carrying JSON
   health probe at `GET /api/health` (session counts, cumulative shell bytes, an
   `sftp` block of file-transfer volume — completed uploads/downloads + bytes —

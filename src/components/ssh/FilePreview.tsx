@@ -92,6 +92,9 @@ export function FilePreview({
   total,
   truncated = false,
   encodingWarning = false,
+  optimized = false,
+  loadingOriginal = false,
+  onLoadOriginal,
   getStartTime,
   onTime,
   hasGallery = false,
@@ -124,6 +127,14 @@ export function FilePreview({
   truncated?: boolean;
   /** True when the decoded text looks like it isn't valid UTF-8. */
   encodingWarning?: boolean;
+  /** True when the shown image is a downscaled WebP preview, not the original —
+   * enables the "load original" affordance (zoom / button) for pixel-perfect detail. */
+  optimized?: boolean;
+  /** True while the full-resolution original is being fetched to replace the WebP. */
+  loadingOriginal?: boolean;
+  /** Fetch the full-resolution original to replace an optimized preview (called
+   * once on first zoom-in, or via the toolbar button). */
+  onLoadOriginal?: () => void;
   /** Get the playback position (seconds) to resume a video from when it opens.
    * A getter (not a value) so the parent's ref isn't read during render. */
   getStartTime?: () => number;
@@ -182,6 +193,15 @@ export function FilePreview({
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
   // The <video> element, for keyboard transport controls & resume position.
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  // Fire the "load original" request at most once per open file (the modal is
+  // keyed by path, so this resets when stepping the gallery).
+  const originalFiredRef = useRef(false);
+  // Request the full-resolution original once (idempotent), for zoomed detail.
+  const requestOriginal = useCallback(() => {
+    if (originalFiredRef.current || !onLoadOriginal) return;
+    originalFiredRef.current = true;
+    onLoadOriginal();
+  }, [onLoadOriginal]);
   // The active filmstrip tile, scrolled into view when the gallery steps.
   const activeThumbRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
@@ -250,6 +270,12 @@ export function FilePreview({
     setOffset({ x: 0, y: 0 });
   }, []);
   const rotate = useCallback(() => setRotation((r) => (r + 90) % 360), []);
+
+  // Zooming past the fit view on an optimized (downscaled WebP) image pulls the
+  // full-resolution original so the zoomed detail is pixel-perfect.
+  useEffect(() => {
+    if (optimized && isImage && zoom > 1) requestOriginal();
+  }, [optimized, isImage, zoom, requestOriginal]);
 
   // Keyboard: Esc closes, ←/→ walk the gallery, image transforms, and Ctrl/⌘+F
   // opens the text find bar.
@@ -546,6 +572,17 @@ export function FilePreview({
                 {dims.w}×{dims.h}
               </span>
             )}
+            {(optimized || loadingOriginal) && (
+              <button
+                type="button"
+                onClick={requestOriginal}
+                disabled={loadingOriginal}
+                className={cn(toolBtn, "mr-1")}
+                title="Load the full-resolution original for pixel-perfect zoom"
+              >
+                {loadingOriginal ? "Original…" : "Original"}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => zoomBy(1 / ZOOM_STEP)}
@@ -700,6 +737,13 @@ export function FilePreview({
                 src={src}
                 controls
                 playsInline
+                // Only fetch enough to show the first frame + duration until the
+                // user hits play — a range-streamed clip then pulls ranges on
+                // demand instead of buffering ahead.
+                preload="metadata"
+                // The cached grid poster frame shows instantly (no black flash)
+                // while the stream initializes.
+                poster={placeholder}
                 onLoadedMetadata={(e) => {
                   const v = e.currentTarget;
                   // Resume from the last position (if within the clip).

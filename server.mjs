@@ -176,13 +176,15 @@ const THUMBNAIL_VIDEO_MAX_BYTES = 8 * 1024 * 1024;
 // src/lib/sshProtocol.ts. Images are downscaled to fit this box and re-encoded
 // as WebP before being sent to the grid.
 const THUMBNAIL_PIXELS = 256;
-// Click-to-view image previews are downscaled to a WebP so a big photo opens in
-// KB, not MB (the original is only read, never modified, and Download still
-// fetches it whole). These mirror src/lib/sshProtocol.ts (the "two synchronized
-// places" discipline): the preview's longest-edge bound, its WebP quality, the
+// Click-to-view image previews are downscaled to a *lossless* WebP so a big
+// photo opens far faster while staying pixel-identical to the (downscaled)
+// source; the original is only read, never modified, and Download (or zooming
+// past the preview resolution) still fetches it whole. These mirror
+// src/lib/sshProtocol.ts (the "two synchronized places" discipline): the
+// preview's longest-edge bound, its WebP lossless-compression tightness, the
 // minimum original size worth transcoding, and the largest original read into
-// memory to transcode (only the tiny WebP crosses the wire, so this can exceed
-// the download cap; it just bounds decode memory).
+// memory to transcode (only the WebP crosses the wire, so this can exceed the
+// download cap; it just bounds decode memory).
 const PREVIEW_IMAGE_MAX_DIM = 2560;
 const PREVIEW_IMAGE_QUALITY = 82;
 const PREVIEW_IMAGE_MIN_BYTES = 512 * 1024;
@@ -2398,7 +2400,10 @@ wss.on("connection", (ws, req) => {
                       fit: "inside",
                       withoutEnlargement: true,
                     })
-                    .webp({ quality: PREVIEW_IMAGE_QUALITY })
+                    // Lossless WebP: no encode artifacts, so the on-screen preview
+                    // is pixel-identical to the (downscaled) source. `quality` here
+                    // tunes the lossless compression tightness, not fidelity.
+                    .webp({ lossless: true, quality: PREVIEW_IMAGE_QUALITY })
                     .toBuffer();
                 } catch {
                   webp = null;
