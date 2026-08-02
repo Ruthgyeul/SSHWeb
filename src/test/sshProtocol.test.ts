@@ -10,6 +10,7 @@ import {
   formatSize,
   hostKeyId,
   imageMimeType,
+  isBrowserRenderableImage,
   isHostAllowed,
   isProbablyAudioFile,
   isProbablyBinaryFile,
@@ -19,6 +20,8 @@ import {
   isProbablyVideoFile,
   isResizablePreviewImage,
   isThumbnailable,
+  filePreviewKind,
+  videoNeedsTranscode,
   THUMBNAIL_MAX_BYTES,
   THUMBNAIL_VIDEO_MAX_BYTES,
   joinPath,
@@ -569,6 +572,58 @@ describe("sniffMediaKind", () => {
     expect(sniffMediaKind(ascii("#!/bin/sh\necho hi\n"))).toBeNull();
     expect(sniffMediaKind(ascii("{ \"json\": true }"))).toBeNull();
     expect(sniffMediaKind(new Uint8Array(4))).toBeNull(); // too short
+  });
+
+  it("distinguishes HEIC/AVIF (image) from MP4 (video) by ISO brand", () => {
+    const brand = (b: string) => {
+      const out = new Uint8Array(16);
+      out.set([0x66, 0x74, 0x79, 0x70], 4); // "ftyp"
+      for (let i = 0; i < b.length; i++) out[8 + i] = b.charCodeAt(i);
+      return out;
+    };
+    expect(sniffMediaKind(brand("heic"))).toBe("image");
+    expect(sniffMediaKind(brand("mif1"))).toBe("image");
+    expect(sniffMediaKind(brand("avif"))).toBe("image");
+    expect(sniffMediaKind(brand("isom"))).toBe("video"); // ordinary MP4
+    expect(sniffMediaKind(brand("qt  "))).toBe("video"); // MOV
+  });
+});
+
+describe("HEIC/HEIF handling", () => {
+  it("routes HEIC/HEIF as previewable images", () => {
+    for (const n of ["photo.heic", "IMG.HEIF", "clip.heics", "x.heifs"]) {
+      expect(imageMimeType(n)).not.toBeNull();
+      expect(isProbablyImageFile(n)).toBe(true);
+      expect(filePreviewKind(n)).toBe("image");
+      // They must be transcoded (never streamed raw to an <img>).
+      expect(isResizablePreviewImage(n)).toBe(true);
+      expect(isBrowserRenderableImage(n)).toBe(false);
+    }
+  });
+
+  it("keeps ordinary images browser-renderable", () => {
+    for (const n of ["a.png", "b.jpg", "c.webp", "d.gif", "e.avif", "f.svg"]) {
+      expect(isBrowserRenderableImage(n)).toBe(true);
+    }
+    expect(isBrowserRenderableImage("notes.txt")).toBe(false); // not an image
+  });
+});
+
+describe("videoNeedsTranscode", () => {
+  it("flags containers browsers can't play natively", () => {
+    for (const n of ["a.avi", "b.wmv", "c.flv", "d.ts", "e.m2ts", "f.mpg", "g.vob", "h.3gp"]) {
+      expect(videoNeedsTranscode(n)).toBe(true);
+      expect(isProbablyVideoFile(n)).toBe(true); // still recognised as a video
+      expect(filePreviewKind(n)).toBe("video");
+    }
+  });
+
+  it("leaves natively-playable containers alone", () => {
+    for (const n of ["a.mp4", "b.webm", "c.mov", "d.mkv", "e.m4v"]) {
+      expect(videoNeedsTranscode(n)).toBe(false);
+    }
+    expect(videoNeedsTranscode("photo.jpg")).toBe(false);
+    expect(videoNeedsTranscode("noext")).toBe(false);
   });
 });
 

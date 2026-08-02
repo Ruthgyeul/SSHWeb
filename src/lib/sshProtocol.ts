@@ -347,7 +347,10 @@ export type ServerMessage =
   // deployment allows it. `streamToken` is a per-session capability the client
   // puts in `/api/preview` URLs so a `<video>` can stream+seek over HTTP Range
   // (see `server.mjs`); absent if the deployment can't mint one.
-  | { t: "caps"; sudo: boolean; streamToken?: string }
+  // `maxDownloadBytes` echoes the whole-file download cap (`SSH_MAX_DOWNLOAD_MB`,
+  // 0 = unlimited) so the client can decide when a small clip is safe to fetch
+  // whole (and cache for instant re-open) instead of streaming it.
+  | { t: "caps"; sudo: boolean; streamToken?: string; maxDownloadBytes?: number }
   // Acknowledges an `sftp-sudo` request: `enabled` is the mode now in effect.
   // A failure to gain elevation is reported separately as an `error` (scope
   // `sftp`) and leaves the session unelevated.
@@ -866,7 +869,27 @@ const IMAGE_MIME: Record<string, string> = {
   ico: "image/x-icon",
   cur: "image/x-icon",
   avif: "image/avif",
+  // HEIC/HEIF (iPhone photos): browsers can't decode these, so they're only
+  // ever *previewed* as a bridge-transcoded WebP (never streamed raw to an
+  // <img>). Listing them here routes them to the image preview + grid thumbnail
+  // paths; `isBrowserRenderableImage` keeps the raw bytes off the <img>.
+  heic: "image/heic",
+  heif: "image/heif",
+  heics: "image/heic-sequence",
+  heifs: "image/heif-sequence",
 };
+
+/**
+ * Whether the browser can render this image format's raw bytes directly in an
+ * `<img>`. HEIC/HEIF cannot be (no browser decodes them), so those are only
+ * shown via the bridge's WebP transcode — the client must never swap their raw
+ * original into the `<img>` (that's what the zoom / "Original" affordance would
+ * otherwise do). Everything else in {@link IMAGE_MIME} renders natively.
+ */
+export function isBrowserRenderableImage(name: string): boolean {
+  if (imageMimeType(name) === null) return false;
+  return !/\.(heic|heif|heics|heifs)$/i.test(name);
+}
 
 /**
  * Heuristic: is this filename an image we can preview inline in the browser?
@@ -934,8 +957,10 @@ export function imageMimeType(name: string): string | null {
   return IMAGE_MIME[ext] ?? null;
 }
 
-/** Video extensions the browser can play inline, mapped to their MIME type. */
-const VIDEO_MIME: Record<string, string> = {
+/** Video extensions the browser can usually play inline, mapped to their MIME
+ * type. `.mkv`/`.mov` are hit-or-miss (codec-dependent) — the preview tries them
+ * natively first and falls back to a bridge transcode if playback errors. */
+const NATIVE_VIDEO_MIME: Record<string, string> = {
   mp4: "video/mp4",
   m4v: "video/mp4",
   mov: "video/quicktime",
@@ -943,6 +968,52 @@ const VIDEO_MIME: Record<string, string> = {
   ogv: "video/ogg",
   mkv: "video/x-matroska",
 };
+
+/** Video containers browsers essentially never play, mapped to their MIME type.
+ * They're still recognised as videos (grid poster frame via ffmpeg, preview
+ * routing) and *play* by streaming a bridge transcode to fragmented MP4 — see
+ * {@link videoNeedsTranscode}. */
+const TRANSCODE_VIDEO_MIME: Record<string, string> = {
+  avi: "video/x-msvideo",
+  wmv: "video/x-ms-wmv",
+  asf: "video/x-ms-asf",
+  flv: "video/x-flv",
+  f4v: "video/x-f4v",
+  mpg: "video/mpeg",
+  mpeg: "video/mpeg",
+  m2v: "video/mpeg",
+  ts: "video/mp2t",
+  mts: "video/mp2t",
+  m2ts: "video/mp2t",
+  vob: "video/mpeg",
+  "3gp": "video/3gpp",
+  "3g2": "video/3gpp2",
+  divx: "video/x-msvideo",
+  ogm: "video/ogg",
+  mxf: "application/mxf",
+  rm: "application/vnd.rn-realmedia",
+  rmvb: "application/vnd.rn-realmedia-vbr",
+};
+
+/** All recognised video extensions → MIME (native-playable ∪ transcode-only). */
+const VIDEO_MIME: Record<string, string> = {
+  ...NATIVE_VIDEO_MIME,
+  ...TRANSCODE_VIDEO_MIME,
+};
+
+/**
+ * Whether a video must be transcoded by the bridge to play in the browser: its
+ * container/codec isn't one browsers decode natively, so the preview points the
+ * `<video>` at the bridge's on-the-fly fragmented-MP4 transcode instead of the
+ * raw stream. `.mkv`/`.mov` are *not* forced here (they often play natively) —
+ * the preview retries them via transcode only if native playback errors.
+ * Mirrored in `server.mjs`.
+ */
+export function videoNeedsTranscode(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return false;
+  return name.slice(dot + 1).toLowerCase() in TRANSCODE_VIDEO_MIME;
+}
 
 /**
  * Heuristic: is this filename a video we can play inline in the browser?
@@ -1026,18 +1097,25 @@ export const TEXT_PREVIEW_MAX_BYTES = 4 * 1024 * 1024;
 
 /**
  * Longest-edge pixel bound for a click-to-view image preview. The bridge
- * downscales any larger image to a **lossless** WebP fitting inside this box so a
- * multi-megapixel photo opens far faster while staying pixel-identical to the
- * (downscaled) source; the original file is only read, never modified, and an
- * explicit Download — or zooming past this resolution — still fetches it whole.
- * Mirrored in `server.mjs`.
+ * downscales any larger image to a **high-quality lossy** WebP fitting inside
+ * this box so a multi-megapixel photo opens far faster while staying visually
+ * indistinguishable at the preview resolution; the original file is only read,
+ * never modified, and an explicit Download — or zooming past this resolution —
+ * still fetches the untouched original. Mirrored in `server.mjs`.
  */
 export const PREVIEW_IMAGE_MAX_DIM = 2560;
 
-/** Compression tightness (0–100) for the **lossless** WebP image preview — it
- * tunes size/encode-time, not fidelity (lossless is always pixel-exact at the
- * preview resolution). Mirrored in `server.mjs`. */
-export const PREVIEW_IMAGE_QUALITY = 82;
+/** Default quality (0–100) of the image preview transcode. High enough to be
+ * visually indistinguishable from the source at the preview resolution, while
+ * cutting the transfer *and* the encode time dramatically versus a lossless
+ * encode — the single biggest lever on how fast a photo opens. Pixel-perfect
+ * detail is still available on demand (zoom / "Original" / Download all fetch
+ * the untouched original). The preview *format* is selectable server-side via
+ * `SSH_PREVIEW_IMAGE_FORMAT` (`webp-lossy` — default, fastest to open;
+ * `webp-lossless` — pixel-exact but larger/slower; `avif` — smallest wire size,
+ * slower CPU encode) and this quality via `SSH_PREVIEW_IMAGE_QUALITY`; mirrored
+ * in `server.mjs`. */
+export const PREVIEW_IMAGE_QUALITY = 92;
 
 /** Don't transcode an image smaller than this: the original already loads fast,
  * so a WebP round-trip would only add latency. Below it the bridge streams the
@@ -1145,8 +1223,18 @@ export function sniffMediaKind(
   if (ascii(0, "RIFF") && ascii(8, "WEBP")) return "image"; // WEBP
   // PDF.
   if (ascii(0, "%PDF")) return "pdf";
-  // Video.
-  if (ascii(4, "ftyp")) return "video"; // MP4 / MOV / M4V (ISO base media)
+  // ISO base-media (`ftyp`): the major brand tells still-image (HEIC/AVIF) apart
+  // from moving-image (MP4/MOV). HEIC/AVIF preview as (transcoded) images.
+  if (ascii(4, "ftyp")) {
+    if (
+      ascii(8, "heic") || ascii(8, "heix") || ascii(8, "hevc") ||
+      ascii(8, "heim") || ascii(8, "heis") || ascii(8, "mif1") ||
+      ascii(8, "msf1") || ascii(8, "avif") || ascii(8, "avis")
+    ) {
+      return "image";
+    }
+    return "video"; // MP4 / MOV / M4V (ISO base media)
+  }
   if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return "video"; // Matroska/WebM
   // Audio.
   if (ascii(0, "OggS")) return "audio"; // Ogg

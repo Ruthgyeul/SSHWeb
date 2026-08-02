@@ -10,6 +10,7 @@ import {
   formatSize,
   hostKeyId,
   imageMimeType,
+  isBrowserRenderableImage,
   isLargeForEditor,
   isProbablyTextFile,
   joinPath,
@@ -21,9 +22,16 @@ import {
   suggestCopyName,
   TEXT_PREVIEW_MAX_BYTES,
   videoMimeType,
+  videoNeedsTranscode,
   type FileEntry,
   type ServerMessage,
 } from "@/lib/sshProtocol";
+import {
+  findSubtitleSidecar,
+  srtToVtt,
+  subtitleLabel,
+  subtitleNeedsConversion,
+} from "@/lib/subtitles";
 import { getThemePreset } from "@/lib/terminalTheme";
 import { fileVersionTag } from "@/lib/thumbnailCache";
 import {
@@ -108,6 +116,15 @@ interface PreviewState {
   received?: number;
   /** Total size announced by `sftp-download-begin`, for the progress bar. */
   total?: number;
+  /** For a video that the browser can't play natively, the `/api/preview`
+   * transcode URL to fall back to when native playback errors (or immediately,
+   * for a known-unplayable container). Absent for natively-playable media. */
+  videoFallbackSrc?: string;
+  /** `blob:` URL of a WebVTT subtitle track (converted from a sibling `.srt`/
+   * `.vtt`), shown on the `<video>`. Revoked when the preview closes. */
+  subtitleSrc?: string;
+  /** Short label for the subtitle track (e.g. `EN`, or `Subtitles`). */
+  subtitleLabel?: string;
   /** Previewable files in the same view (display order), so the modal can step
    * ←/→ through them like a gallery. Empty/undefined for one-off opens. */
   siblings?: { path: string; name: string }[];
@@ -129,8 +146,12 @@ const MAX_INFLIGHT_THUMBS = 12;
 /** In-memory budget for the recently-viewed preview cache (raw file bytes). A
  * revisited file re-opens instantly with no re-transfer; the LRU evicts the
  * oldest entries once the total exceeds this. Bytes (not blob URLs) are cached
- * so each open builds a fresh, independently-revoked `blob:` URL. */
-const MAX_PREVIEW_CACHE_BYTES = 48 * 1024 * 1024;
+ * so each open builds a fresh, independently-revoked `blob:` URL. Sized to hold
+ * a whole gallery: image previews are now light lossy WebP (a few hundred KB
+ * each), so this fits hundreds of them — stepping ←/→ and back re-opens with no
+ * re-transfer. Held in memory only, so it's dropped on logout / sudo toggle
+ * (nothing lingers). */
+const MAX_PREVIEW_CACHE_BYTES = 128 * 1024 * 1024;
 
 /** Don't prefetch a gallery neighbour bigger than this — prefetching is a
  * latency nicety for the common case (folders of photos), not a reason to pull
@@ -138,16 +159,32 @@ const MAX_PREVIEW_CACHE_BYTES = 48 * 1024 * 1024;
  * `size:mtime` version tag. */
 const PREFETCH_MAX_BYTES = 16 * 1024 * 1024;
 
+/** A natively-playable video/audio clip at or under this size is fetched whole
+ * and held in the in-memory preview cache instead of streamed, so stepping the
+ * gallery away and back re-opens it *instantly* and fully seekable (no re-buffer)
+ * — the cache is memory-only, dropped on logout, so nothing lingers. Larger
+ * clips keep streaming over the seekable HTTP endpoint (fast start, no whole-file
+ * transfer). Effective threshold is clamped to the bridge's download cap so a
+ * whole-file fetch can never exceed what an ordinary download would allow. */
+const MEDIA_CACHE_MAX_BYTES = 24 * 1024 * 1024;
+
 /** Server path of the seekable media-stream endpoint (mirrors `server.mjs`). A
  * `<video>` points here with the session's `streamToken` so playback ranges are
  * served over HTTP instead of buffering the whole clip into a blob. */
 const PREVIEW_STREAM_PATH = "/api/preview";
 
+/** Don't read a sidecar subtitle bigger than this — a real `.srt`/`.vtt` is tiny;
+ * anything larger is almost certainly not a subtitle track. */
+const SUBTITLE_MAX_BYTES = 4 * 1024 * 1024;
+
 /** Build the `/api/preview` URL for a media (video/audio) path with the session's
  * stream token, so a `<video>`/`<audio>` plays over HTTP Range instead of
- * buffering the whole original into a blob. */
-function mediaStreamSrc(token: string, path: string): string {
-  return `${PREVIEW_STREAM_PATH}?token=${encodeURIComponent(token)}&path=${encodeURIComponent(path)}`;
+ * buffering the whole original into a blob. With `transcode`, the bridge converts
+ * a non-natively-playable container to fragmented MP4 on the fly (progressive,
+ * no seeking) instead of range-serving the raw bytes. */
+function mediaStreamSrc(token: string, path: string, transcode = false): string {
+  const base = `${PREVIEW_STREAM_PATH}?token=${encodeURIComponent(token)}&path=${encodeURIComponent(path)}`;
+  return transcode ? `${base}&transcode=1` : base;
 }
 
 /** The preview surface for a filename by extension: a media/PDF/Markdown kind,
@@ -272,6 +309,12 @@ export function SshSession({
   // stale (it's bound once when the socket opens).
   const cwdRef = useRef("~");
   const [entries, setEntries] = useState<FileEntry[]>([]);
+  // Mirror of the current listing so callbacks (e.g. subtitle-sidecar lookup on
+  // preview open) can read it without re-binding on every listing change.
+  const entriesRef = useRef<FileEntry[]>([]);
+  useEffect(() => {
+    entriesRef.current = entries;
+  }, [entries]);
   const [filesLoading, setFilesLoading] = useState(false);
   // Active recursive subtree search (null = browsing the normal listing). The
   // query is kept so a late `sftp-find-result` for a stale query is ignored.
@@ -308,10 +351,23 @@ export function SshSession({
   // (from `caps`), read when building a video preview's `src`. Null when the
   // deployment didn't mint one — video then falls back to blob streaming.
   const streamTokenRef = useRef<string | null>(null);
+  // The bridge's whole-file download cap (bytes; 0 = unlimited), from `caps`. Used
+  // to decide when a small clip is safe to fetch whole (and cache for instant
+  // re-open) rather than stream — never fetch whole past this cap.
+  const downloadCapRef = useRef<number>(0);
   // Last playback position (seconds) per video path, so stepping the gallery
   // away from a clip and back resumes where you left off. In-memory only,
   // cleared on disconnect.
   const videoTimesRef = useRef<Map<string, number>>(new Map());
+  // In-flight sidecar-subtitle reads: subtitle path → { videoPath, name }. When
+  // a video opens we look for a matching `.srt`/`.vtt` and read it here; the
+  // download handlers convert it to a WebVTT `blob:` and attach it to the video
+  // preview (rather than treating it as its own preview). `blob:` URL revoked on
+  // preview close.
+  const subtitleReadsRef = useRef<Map<string, { videoPath: string; name: string }>>(
+    new Map(),
+  );
+  const subtitleUrlRef = useRef<string | null>(null);
   // Cached grid-view image thumbnails, keyed by remote path → `data:` URL.
   // Populated lazily as tiles scroll into view; cleared on each directory change
   // (below) to bound memory. `requestedThumbsRef` dedupes in-flight requests so
@@ -659,6 +715,7 @@ export function SshSession({
         case "caps":
           setCanElevate(msg.sudo);
           streamTokenRef.current = msg.streamToken ?? null;
+          downloadCapRef.current = msg.maxDownloadBytes ?? 0;
           break;
 
         case "sftp-sudo":
@@ -770,10 +827,12 @@ export function SshSession({
           if (msg.preview) {
             // A preview stream: buffer chunks and drive the modal's progress bar
             // instead of registering a download row. A prefetch (adjacent gallery
-            // image) buffers silently; otherwise ignore a stale begin the user
-            // already navigated away from.
+            // image) and a sidecar-subtitle read buffer silently; otherwise ignore
+            // a stale begin the user already navigated away from.
             const isPrefetch = prefetchPathsRef.current.has(msg.path);
-            if (previewPathRef.current !== msg.path && !isPrefetch) break;
+            const isSubtitle = subtitleReadsRef.current.has(msg.path);
+            if (previewPathRef.current !== msg.path && !isPrefetch && !isSubtitle)
+              break;
             previewBuffersRef.current[msg.path] = [];
             // A `mime` here means the bridge sent a transcoded (WebP) preview
             // rather than the original bytes; remember it for the end frame.
@@ -828,6 +887,44 @@ export function SshSession({
 
         case "sftp-download-end": {
           if (msg.preview) {
+            // A sidecar-subtitle read: convert to WebVTT and attach it to the
+            // open video preview (never painted as its own preview).
+            const subtitleTarget = subtitleReadsRef.current.get(msg.path);
+            if (subtitleTarget) {
+              subtitleReadsRef.current.delete(msg.path);
+              const subChunks = previewBuffersRef.current[msg.path];
+              delete previewBuffersRef.current[msg.path];
+              delete previewMimeRef.current[msg.path];
+              if (subChunks && previewPathRef.current === subtitleTarget.videoPath) {
+                try {
+                  const text = new TextDecoder().decode(concatBytes(subChunks));
+                  const vtt = subtitleNeedsConversion(subtitleTarget.name)
+                    ? srtToVtt(text)
+                    : text;
+                  const url = URL.createObjectURL(
+                    new Blob([vtt], { type: "text/vtt" }),
+                  );
+                  if (subtitleUrlRef.current)
+                    URL.revokeObjectURL(subtitleUrlRef.current);
+                  subtitleUrlRef.current = url;
+                  setPreview((prev) =>
+                    prev && prev.path === subtitleTarget.videoPath
+                      ? {
+                          ...prev,
+                          subtitleSrc: url,
+                          subtitleLabel: subtitleLabel(
+                            prev.name,
+                            subtitleTarget.name,
+                          ),
+                        }
+                      : prev,
+                  );
+                } catch {
+                  /* undecodable subtitle — silently skip */
+                }
+              }
+              break;
+            }
             const chunks = previewBuffersRef.current[msg.path];
             delete previewBuffersRef.current[msg.path];
             const serverMime = previewMimeRef.current[msg.path];
@@ -1175,6 +1272,11 @@ export function SshSession({
     originalLoadPathsRef.current.clear();
     streamTokenRef.current = null;
     videoTimesRef.current.clear();
+    if (subtitleUrlRef.current) {
+      URL.revokeObjectURL(subtitleUrlRef.current);
+      subtitleUrlRef.current = null;
+    }
+    subtitleReadsRef.current.clear();
     // Logout invalidates every cached thumbnail in the browser (they live in
     // memory only) so nothing stays viewable or downloadable after disconnect;
     // the server keeps its own cache for a future re-login. `setPreview(null)`
@@ -1192,6 +1294,42 @@ export function SshSession({
     xtermRef.current?.clear();
   }, [send]);
 
+  // Look for a sidecar subtitle (`clip.srt` / `clip.en.vtt`) next to an opening
+  // video and, if found, read it so the modal can attach it as a WebVTT track.
+  // The bytes come back over the normal preview stream and are picked up in the
+  // `sftp-download-*` handlers via `subtitleReadsRef`.
+  const requestSubtitleFor = useCallback(
+    (videoPath: string, name: string) => {
+      const list = entriesRef.current;
+      const sidecar = findSubtitleSidecar(
+        name,
+        list.map((e) => e.name),
+      );
+      if (!sidecar) return;
+      const entry = list.find((e) => e.name === sidecar);
+      if (!entry || entry.size < 0 || entry.size > SUBTITLE_MAX_BYTES) return;
+      const sidecarPath = joinPath(cwdRef.current, sidecar);
+      subtitleReadsRef.current.set(sidecarPath, { videoPath, name: sidecar });
+      send({
+        t: "sftp-read",
+        path: sidecarPath,
+        preview: true,
+        maxBytes: SUBTITLE_MAX_BYTES,
+      });
+    },
+    [send],
+  );
+
+  // Revoke the active subtitle-track blob and drop any pending sidecar reads —
+  // called when the preview modal closes.
+  const closeSubtitleTrack = useCallback(() => {
+    if (subtitleUrlRef.current) {
+      URL.revokeObjectURL(subtitleUrlRef.current);
+      subtitleUrlRef.current = null;
+    }
+    subtitleReadsRef.current.clear();
+  }, []);
+
   // Open a file in the preview modal. On a cache hit (a recently-viewed file)
   // it paints instantly from the cached bytes with no re-transfer; otherwise it
   // opens immediately in a loading state (with the cached grid thumbnail as an
@@ -1203,26 +1341,17 @@ export function SshSession({
       // seekable HTTP endpoint: no whole-file transfer, original quality, and the
       // browser can seek instantly. Elevated sessions keep the blob path (the
       // endpoint reads as the login user, so it can't reach root-only files).
-      const mediaKind = filePreviewKind(name);
-      if (
-        !elevatedRef.current &&
-        streamTokenRef.current &&
-        (mediaKind === "video" || mediaKind === "audio")
-      ) {
-        setPreview({
-          path,
-          name,
-          kind: mediaKind,
-          src: mediaStreamSrc(streamTokenRef.current, path),
-          loading: false,
-          // The cached grid thumbnail (video poster frame) shows instantly as the
-          // <video> poster while the stream initializes — no black flash.
-          placeholder: thumbnailsRef.current[path],
-          siblings,
-        });
-        prefetchNeighbors(path, siblings);
-        return;
+      // A previous preview's subtitle blob is no longer needed.
+      if (subtitleUrlRef.current) {
+        URL.revokeObjectURL(subtitleUrlRef.current);
+        subtitleUrlRef.current = null;
       }
+      subtitleReadsRef.current.clear();
+      const mediaKind = filePreviewKind(name);
+      // A recently-viewed file (image, or a small cached clip) re-opens instantly
+      // from the in-memory cache with no re-transfer — this is what makes stepping
+      // the gallery away and back snappy. Checked first, before the streaming path,
+      // so a cached small video/audio re-opens as a fully-seekable blob.
       const key = previewCacheKeyFor(path);
       const hit = previewCacheRef.current.get(key);
       if (hit) {
@@ -1238,8 +1367,56 @@ export function SshSession({
           optimized: hit.optimized,
           ...previewFieldsFromBytes(name, hit.bytes, hit.mime),
         });
+        if (mediaKind === "video") requestSubtitleFor(path, name);
         prefetchNeighbors(path, siblings);
         return;
+      }
+      if (
+        !elevatedRef.current &&
+        streamTokenRef.current &&
+        (mediaKind === "video" || mediaKind === "audio")
+      ) {
+        const token = streamTokenRef.current;
+        // A container the browser can't play natively streams as a bridge
+        // transcode from the start; a natively-playable one streams raw but keeps
+        // the transcode URL as a fallback for when a codec turns out unplayable.
+        const needsTranscode = mediaKind === "video" && videoNeedsTranscode(name);
+        // A small, natively-playable clip is fetched whole and cached (falls
+        // through below) so re-opening is instant; everything else streams. The
+        // whole-file fetch is bounded by the bridge's download cap so it can never
+        // pull more than an ordinary download would.
+        const cap = downloadCapRef.current;
+        const budget = cap > 0 ? Math.min(MEDIA_CACHE_MAX_BYTES, cap) : MEDIA_CACHE_MAX_BYTES;
+        const version = entryVersionRef.current.get(path);
+        const size = version ? parseInt(version.split(":")[0], 10) : 0;
+        // Only whole-cache formats that reliably play from a blob — audio, and the
+        // always-native video containers. `.mkv`/`.mov` are codec-dependent, so
+        // they keep streaming (which has the transcode fallback on a codec error).
+        const reliablyNative =
+          mediaKind === "audio" || /\.(mp4|m4v|webm|ogv)$/i.test(name);
+        const cacheSmallWhole = reliablyNative && size > 0 && size <= budget;
+        if (!cacheSmallWhole) {
+          setPreview({
+            path,
+            name,
+            kind: mediaKind,
+            src: mediaStreamSrc(token, path, needsTranscode),
+            videoFallbackSrc:
+              mediaKind === "video" && !needsTranscode
+                ? mediaStreamSrc(token, path, true)
+                : undefined,
+            loading: false,
+            // The cached grid thumbnail (video poster frame) shows instantly as
+            // the <video> poster while the stream initializes — no black flash.
+            placeholder: thumbnailsRef.current[path],
+            siblings,
+          });
+          if (mediaKind === "video") requestSubtitleFor(path, name);
+          prefetchNeighbors(path, siblings);
+          return;
+        }
+        // else: fall through to the whole-file read below, which caches the bytes
+        // for instant re-open and paints a native blob <video>/<audio>.
       }
       // If a prefetch for this file is already in flight, promote it rather than
       // starting a second read: show the spinner and let the in-flight stream
@@ -1256,6 +1433,9 @@ export function SshSession({
         placeholder: thumbnailsRef.current[path],
         siblings,
       });
+      // A small video reaching this path is being fetched whole to cache — still
+      // attach its sidecar subtitles once it paints as a native blob <video>.
+      if (mediaKind === "video") requestSubtitleFor(path, name);
       if (!prefetching && !previewBuffersRef.current[path]) {
         // Text previews read only the head of a large file (and so can peek past
         // the whole-file download cap); media reads the whole file for the blob.
@@ -1274,7 +1454,7 @@ export function SshSession({
         });
       }
     },
-    [send, previewCacheKeyFor, prefetchNeighbors],
+    [send, previewCacheKeyFor, prefetchNeighbors, requestSubtitleFor],
   );
 
   // Fetch the full-resolution original of an open, optimized (WebP) image preview
@@ -2110,7 +2290,17 @@ export function SshSession({
                 encodingWarning={preview.encodingWarning}
                 optimized={preview.optimized}
                 loadingOriginal={preview.loadingOriginal}
-                onLoadOriginal={() => loadPreviewOriginal(preview.path)}
+                // Only offer "load original" for images the browser can render
+                // raw — a HEIC/HEIF preview *is* a transcode with no viewable
+                // original to swap in (Download still fetches the raw file).
+                onLoadOriginal={
+                  isBrowserRenderableImage(preview.name)
+                    ? () => loadPreviewOriginal(preview.path)
+                    : undefined
+                }
+                videoFallbackSrc={preview.videoFallbackSrc}
+                subtitleSrc={preview.subtitleSrc}
+                subtitleTrackLabel={preview.subtitleLabel}
                 getStartTime={() => videoTimesRef.current.get(preview.path) ?? 0}
                 onTime={(t) => videoTimesRef.current.set(preview.path, t)}
                 hasGallery={(preview.siblings?.length ?? 0) > 1}
@@ -2146,6 +2336,7 @@ export function SshSession({
                   // Abort the in-flight preview stream and close the modal.
                   send({ t: "sftp-download-cancel", path: preview.path });
                   delete previewBuffersRef.current[preview.path];
+                  closeSubtitleTrack();
                   setPreview(null);
                 }}
                 onClose={() => {
@@ -2155,6 +2346,7 @@ export function SshSession({
                     send({ t: "sftp-download-cancel", path: preview.path });
                     delete previewBuffersRef.current[preview.path];
                   }
+                  closeSubtitleTrack();
                   setPreview(null);
                 }}
               />

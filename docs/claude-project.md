@@ -145,31 +145,50 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   CSP's `connect-src 'self'` already authorizes the same-origin WebSocket —
   don't widen it for this feature. Video **and audio** previews stream over a
   same-origin **HTTP Range endpoint** (`GET /api/preview`) so `<video>`/`<audio>`
-  seek and start instantly without buffering the whole clip (and without any
-  transcode, so quality is untouched): it's gated by the same access cookie as
-  the upgrade **and** an unguessable per-session capability token (minted on
-  SSH-ready, sent in `caps.streamToken`, revoked on cleanup) that scopes a
-  request to that one session's login-user SFTP — files its own WebSocket could
-  already read — with a single response bounded by `STREAM_MAX_CHUNK_BYTES` and a
-  hardened `default-src 'none'; sandbox` CSP on the media bytes; the existing
-  `media-src 'self'` already authorizes it, so don't widen the CSP. **Image
-  previews are downscaled to a lossless WebP for viewing**: clicking a photo
-  opens a `sharp`-resized **lossless** WebP (`PREVIEW_IMAGE_MAX_DIM`, mirrored
-  from `sshProtocol.ts`) — pixel-identical to the downscaled source, no encode
-  artifacts — that crosses the wire far smaller than the multi-MB original, which
-  even lets a photo too large to download whole preview cheaply (bounded by
+  seek and start instantly without buffering the whole clip: it's gated by the
+  same access cookie as the upgrade **and** an unguessable per-session capability
+  token (minted on SSH-ready, sent in `caps.streamToken`, revoked on cleanup)
+  that scopes a request to that one session's login-user SFTP — files its own
+  WebSocket could already read — with a single response bounded by
+  `STREAM_MAX_CHUNK_BYTES` and a hardened `default-src 'none'; sandbox` CSP on the
+  media bytes; the existing `media-src 'self'` already authorizes it, so don't
+  widen the CSP. A container/codec the browser can't play natively (e.g.
+  `.avi`/`.wmv`/`.flv`/`.ts` — `videoNeedsTranscode` in `sshProtocol.ts`) is
+  **transcoded on the fly** by the same endpoint (`?transcode=1`): the bridge
+  pipes the source through `ffmpeg` to fragmented MP4 (H.264/AAC,
+  `-movflags frag_keyframe+empty_moov+faststart`) and streams it progressively so
+  it plays without the client ever downloading it — CPU-capped by
+  `SSH_MAX_TRANSCODES` (each spawn killed when the viewer navigates away), and a
+  natively-playable clip whose codec turns out unplayable falls back to the same
+  transcode on a `<video>` error. **Small, natively-playable clips are fetched
+  whole and cached in memory instead of streamed** (bounded by the smaller of
+  `MEDIA_CACHE_MAX_BYTES` and the bridge's download cap, advertised in
+  `caps.maxDownloadBytes`) so stepping the gallery away and back re-opens them
+  instantly and fully seekable — memory-only, dropped on logout. **Image previews
+  are downscaled to a compact preview transcode for viewing**: clicking a photo
+  opens a `sharp`-resized image (`PREVIEW_IMAGE_MAX_DIM`, mirrored from
+  `sshProtocol.ts`) in a format chosen per-deployment via `SSH_PREVIEW_IMAGE_FORMAT`
+  — `webp-lossy` (default; fastest to open, visually indistinguishable at the
+  preview resolution), `webp-lossless` (pixel-exact but larger/slower), or `avif`
+  (smallest wire size, slowest CPU encode), tuned by `SSH_PREVIEW_IMAGE_QUALITY` —
+  that crosses the wire far smaller than the multi-MB original, which even lets a
+  photo too large to download whole preview cheaply (bounded by
   `PREVIEW_IMAGE_SOURCE_MAX_BYTES` decode memory). **Zooming in (or a "load
   original" button) pulls the full-resolution original on demand** so zoomed
   detail is pixel-perfect, and an explicit **Download** always fetches the
-  untouched original. The original is only read, never modified; SVG/GIF and
-  images under `PREVIEW_IMAGE_MIN_BYTES` stream as-is, and when `sharp` can't
-  decode the bytes (or the lossless WebP wouldn't be smaller) the bridge streams
-  the original instead. Ops surfaces: `server.mjs` emits structured,
+  untouched original. **HEIC/HEIF (iPhone) photos**, which browsers can't render
+  raw, are *only* ever shown as this transcode (never streamed raw), previewing
+  and thumbnailing like any other image when `sharp` has HEIF support (else they
+  degrade to the download-only card). The original is only read, never modified;
+  SVG/GIF and images under `PREVIEW_IMAGE_MIN_BYTES` stream as-is, and when
+  `sharp` can't decode the bytes (or a lossy transcode wouldn't be smaller — for
+  a browser-renderable format) the bridge streams the original instead. Ops surfaces: `server.mjs` emits structured,
   credential-free event logs (`SSH_LOG=json|off`), serves a metrics-carrying JSON
   health probe at `GET /api/health` (session counts, cumulative shell bytes, an
   `sftp` block of file-transfer volume — completed uploads/downloads + bytes —
   and a `thumbnails` block of WebP tiles served/skipped + bytes plus the
-  server-side cache's hits/entries/bytes), and shuts down
+  server-side cache's hits/entries/bytes, and a `transcodes` block of live video
+  transcodes + the per-process ceiling), and shuts down
   gracefully (drains sessions on SIGTERM/SIGINT). Grid thumbnails are **always** served as a tiny WebP and
   nothing else: images are downscaled in-memory with `sharp`
   (`THUMBNAIL_PIXELS`, mirrored from `sshProtocol.ts`) before being sent — the
