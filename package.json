@@ -4,7 +4,7 @@
   "private": true,
   "description": "Browser-based SSH client — an interactive web terminal and SFTP file access, over a WebSocket ↔ SSH bridge.",
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=24"
   },
   "scripts": {
     "dev": "node server.mjs",
