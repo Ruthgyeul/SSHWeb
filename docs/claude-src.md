@@ -57,10 +57,14 @@ src/
   The only raw-hex source is `lib/theme.ts`, kept in sync for the OG renderer.
 - **Tests** live under `src/test/` as `*.test.ts` and run under Vitest
   (`node` environment — no DOM). Import the subject via the `@/…` alias (e.g.
-  `@/lib/utils`), not a relative path. Add tests for pure logic in `lib/`. The
+  `@/lib/utils`), not a relative path. Add tests for pure logic in `lib/`.
+  **Component tests** render real UI with `@testing-library/react`: name them
+  `*.test.tsx` and opt into a DOM with a `// @vitest-environment jsdom` docblock
+  at the top (the suite default stays `node` so pure-logic tests stay fast);
+  jest-dom matchers are registered globally via `src/test/setup.dom.ts`. The
   separate end-to-end bridge smoke test (`*.integration.test.mjs`, run via
   `npm run test:integration`) boots the real `server.mjs` against an in-memory
   ssh2 target; it's excluded from the fast `npm test` (which globs only
-  `*.test.ts`) so the unit suite never starts a server.
+  `*.test.ts`/`*.test.tsx`) so the unit suite never starts a server.
 - **New route** → also register it in `app/sitemap.ts` and export page
   `metadata`.
