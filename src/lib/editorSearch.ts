@@ -11,6 +11,42 @@ export interface Match {
   end: number;
 }
 
+/** Escape HTML-significant characters so source text is injected as literal text
+ * (used when building highlighted HTML rather than setting textContent). */
+export function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Render `text` as escaped HTML with each search match wrapped in a `<mark>`; the
+ * active match is tagged `data-active="true"` (for scroll-into-view) and styled
+ * distinctly. Used by the read-only text preview's find bar in place of syntax
+ * highlighting while a search is active. Pure string building — the `class`
+ * values are the app's terminal palette utilities.
+ */
+export function buildSearchHtml(
+  text: string,
+  matches: Match[],
+  active: number,
+): string {
+  if (matches.length === 0) return escapeHtml(text);
+  let out = "";
+  let last = 0;
+  matches.forEach((m, i) => {
+    out += escapeHtml(text.slice(last, m.start));
+    const cls =
+      i === active
+        ? "bg-term-accent text-term-bg"
+        : "bg-term-accent/30 text-term-text";
+    out += `<mark class="${cls}"${i === active ? ' data-active="true"' : ""}>`;
+    out += escapeHtml(text.slice(m.start, m.end));
+    out += "</mark>";
+    last = m.end;
+  });
+  out += escapeHtml(text.slice(last));
+  return out;
+}
+
 /**
  * Find every (non-overlapping) occurrence of `query` in `text`. An empty query
  * yields no matches. Matching is literal (not a regex) and case-insensitive

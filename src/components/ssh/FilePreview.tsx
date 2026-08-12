@@ -4,41 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PreviewContentKind } from "@/lib/sshProtocol";
 import { renderMarkdown } from "@/lib/markdown";
 import { highlightToHtml } from "@/lib/syntaxHighlight";
-import { findMatches, type Match } from "@/lib/editorSearch";
+import { findMatches, buildSearchHtml, type Match } from "@/lib/editorSearch";
 import { cn } from "@/lib/utils";
 import { FileIcon, iconKindForName, type FileIconKind } from "./FileIcon";
 import { DownloadIcon, PencilIcon, RotateIcon, SearchIcon, WarningIcon } from "./icons";
-
-/** Escape HTML-significant characters so file text is injected as literal text. */
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-/** Render `text` as escaped HTML with each search match wrapped in a `<mark>`;
- * the active match is tagged `data-active` (for scroll-into-view) and styled
- * distinctly. Used by the text preview's find bar in place of the syntax
- * highlighter while a search is active. */
-function buildSearchHtml(text: string, matches: Match[], active: number): string {
-  if (matches.length === 0) return escapeHtml(text);
-  let out = "";
-  let last = 0;
-  matches.forEach((m, i) => {
-    out += escapeHtml(text.slice(last, m.start));
-    const cls =
-      i === active
-        ? "bg-term-accent text-term-bg"
-        : "bg-term-accent/30 text-term-text";
-    out += `<mark class="${cls}"${i === active ? ' data-active="true"' : ""}>`;
-    out += escapeHtml(text.slice(m.start, m.end));
-    out += "</mark>";
-    last = m.end;
-  });
-  out += escapeHtml(text.slice(last));
-  return out;
-}
 
 /** What the preview modal can show: a content kind, a read-only `text` view
  * (syntax-highlighted, non-editable), or a download-only fallback. */
