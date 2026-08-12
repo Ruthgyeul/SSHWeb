@@ -98,9 +98,18 @@ function handleSftp(sftp) {
       openFiles.set(handle.toString(), MOCK_FILE_BUF);
       return sftp.handle(reqid, handle);
     }
-    // No writable/other files in the mock.
+    // A write/create open (uploads) succeeds and just discards the bytes — the
+    // mock has no real FS, but this exercises the bridge's write handlers.
+    const writable = (flags & (OPEN_MODE.WRITE | OPEN_MODE.CREAT | OPEN_MODE.TRUNC)) !== 0;
+    if (writable) {
+      const handle = Buffer.from(`file:${handleSeq++}`);
+      openFiles.set(handle.toString(), MOCK_FILE_BUF); // placeholder, unused for writes
+      return sftp.handle(reqid, handle);
+    }
     sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE);
   });
+
+  sftp.on("WRITE", (reqid) => sftp.status(reqid, STATUS_CODE.OK));
 
   sftp.on("FSTAT", (reqid, handle) => {
     const buf = openFiles.get(handle.toString());
