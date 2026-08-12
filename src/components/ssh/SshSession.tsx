@@ -74,6 +74,7 @@ import { TerminalSettings } from "./TerminalSettings";
 import { SearchIcon } from "./icons";
 import { useTerminalPrefs } from "./hooks/useTerminalPrefs";
 import { useThumbnailQueue } from "./hooks/useThumbnailQueue";
+import { useUploadQueue, type UploadJob } from "./hooks/useUploadQueue";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -476,13 +477,18 @@ export function SshSession({
   >({});
   // Upload scheduler: paths waiting to start (each with the byte offset to begin
   // from — 0 for a fresh upload, >0 for a resume) and how many are streaming now.
-  // Bounds concurrent uploads to MAX_INFLIGHT_UPLOADS so a big batch doesn't read
-  // every file into memory or flood the single bridge socket at once.
-  const uploadQueueRef = useRef<{ path: string; startOffset: number }[]>([]);
-  const uploadInFlightRef = useRef(0);
-  // Lets the (bound-once) ws message handler kick the upload queue once the
-  // bridge reports a partial's size — `pumpUploads` is defined further down.
-  const pumpUploadsRef = useRef<() => void>(() => {});
+  // Concurrency-limited upload queue (bounds how many files a big batch reads /
+  // streams at once). The scheduler lives in a co-located, unit-tested hook; the
+  // starter that actually begins a job (`startUpload`, wrapping `runUpload`) is
+  // injected below with `setUploadStart` once it's defined, breaking the ordering
+  // cycle the old `pumpUploadsRef` worked around.
+  const {
+    enqueue: enqueueUpload,
+    onReleased: onUploadReleased,
+    remove: removeUploads,
+    reset: resetUploads,
+    setStart: setUploadStart,
+  } = useUploadQueue(MAX_INFLIGHT_UPLOADS);
 
   // Round-trip latency (ms) to the SSH bridge, sampled while connected.
   const [latency, setLatency] = useState<number | null>(null);
@@ -1051,8 +1057,7 @@ export function SshSession({
             // Continue the upload through the shared queue so a resume respects
             // the same concurrency limit as a fresh upload.
             ctl.queued = true;
-            uploadQueueRef.current.push({ path: msg.path, startOffset: offset });
-            pumpUploadsRef.current();
+            enqueueUpload({ path: msg.path, startOffset: offset });
           }
           break;
         }
@@ -1163,7 +1168,7 @@ export function SshSession({
           break;
       }
     },
-    [listDir, send, notify, onThumbReplied, resetThumbs, cachePreview, clearPreviewCache, prefetchNeighbors],
+    [listDir, send, notify, onThumbReplied, resetThumbs, enqueueUpload, cachePreview, clearPreviewCache, prefetchNeighbors],
   );
 
   // openSocket and scheduleReconnect reference each other; a ref breaks the
@@ -1297,8 +1302,7 @@ export function SshSession({
     setUploads({});
     setDownloads({});
     uploadCtlRef.current = {};
-    uploadQueueRef.current = [];
-    uploadInFlightRef.current = 0;
+    resetUploads();
     downloadBuffersRef.current = {};
     previewBuffersRef.current = {};
     previewMimeRef.current = {};
@@ -1324,7 +1328,7 @@ export function SshSession({
     setCtrlArmed(false);
     setAltArmed(false);
     xtermRef.current?.clear();
-  }, [send, resetThumbs]);
+  }, [send, resetThumbs, resetUploads]);
 
   // Look for a sidecar subtitle (`clip.srt` / `clip.en.vtt`) next to an opening
   // video and, if found, read it so the modal can attach it as a WebVTT track.
@@ -1760,17 +1764,16 @@ export function SshSession({
   // `resume: true` so the bridge reopens the partial in append-at-offset mode
   // instead of truncating. The loop stops early (marking the upload
   // "interrupted") if the socket drops, so a resume can pick up from there; it
-  // bails silently if the upload was cancelled meanwhile. Called only through
-  // `pumpUploads`, which reserves the concurrency slot this loop releases when it
-  // finishes streaming (whether it completes, interrupts, cancels, or errors).
+  // bails silently if the upload was cancelled meanwhile. Started only through
+  // the upload queue's `startUpload`, which reserves the concurrency slot this
+  // loop releases when it finishes (whether it completes, interrupts, or errors).
   const runUpload = useCallback(
     async (path: string, startOffset: number) => {
       let released = false;
       const releaseSlot = () => {
         if (released) return;
         released = true;
-        uploadInFlightRef.current = Math.max(0, uploadInFlightRef.current - 1);
-        pumpUploadsRef.current();
+        onUploadReleased();
       };
       const ctl = uploadCtlRef.current[path];
       if (!ctl) {
@@ -1852,25 +1855,21 @@ export function SshSession({
         releaseSlot();
       }
     },
-    [send, notify, clearUploadRow],
+    [send, notify, clearUploadRow, onUploadReleased],
   );
 
-  // Start as many queued uploads as the concurrency limit allows, then stop;
-  // each `runUpload` releases its slot and calls this again as it finishes, so
-  // the queue keeps draining until empty. A cancelled or already-running job is
-  // skipped without consuming a slot.
-  const pumpUploads = useCallback(() => {
-    while (
-      uploadInFlightRef.current < MAX_INFLIGHT_UPLOADS &&
-      uploadQueueRef.current.length > 0
-    ) {
-      const job = uploadQueueRef.current.shift()!;
+  // The upload queue's starter: begin one job, returning whether it consumed a
+  // concurrency slot. A cancelled or already-running job is skipped (returns
+  // false, no slot). `runUpload` releases the slot when it finishes streaming.
+  const startUpload = useCallback(
+    (job: UploadJob): boolean => {
       const ctl = uploadCtlRef.current[job.path];
-      if (!ctl || ctl.cancelled || ctl.running) continue;
-      uploadInFlightRef.current += 1;
+      if (!ctl || ctl.cancelled || ctl.running) return false;
       void runUpload(job.path, job.startOffset);
-    }
-  }, [runUpload]);
+      return true;
+    },
+    [runUpload],
+  );
 
   // Begin a fresh chunked upload. A `relPath` (folder upload) preserves
   // subdirectories; the opening chunk asks the bridge to `mkdir -p` the parents.
@@ -1895,10 +1894,9 @@ export function SshSession({
         ...u,
         [path]: { path, name: rel, sent: 0, total: file.size, status: "queued" },
       }));
-      uploadQueueRef.current.push({ path, startOffset: 0 });
-      pumpUploads();
+      enqueueUpload({ path, startOffset: 0 });
     },
-    [pumpUploads],
+    [enqueueUpload],
   );
 
   // Cancel an in-flight, queued, or interrupted upload: stop the local loop,
@@ -1908,14 +1906,12 @@ export function SshSession({
     (path: string) => {
       const ctl = uploadCtlRef.current[path];
       if (ctl) ctl.cancelled = true;
-      uploadQueueRef.current = uploadQueueRef.current.filter(
-        (job) => job.path !== path,
-      );
+      removeUploads((job) => job.path !== path);
       delete uploadCtlRef.current[path];
       send({ t: "sftp-upload-cancel", path });
       clearUploadRow(path);
     },
-    [send, clearUploadRow],
+    [send, clearUploadRow, removeUploads],
   );
 
   // Cancel every active/queued/interrupted upload at once (the aggregate
@@ -1949,12 +1945,12 @@ export function SshSession({
     },
     [send],
   );
-  // Keep the ref the ws message handler reads pointed at the latest pumpUploads,
-  // so the `sftp-write-at` resume reply can kick the queue despite being bound
-  // earlier.
+  // Inject the queue's starter once `runUpload` exists (it's defined after the
+  // ws message handler that enqueues), so a `sftp-write-at` resume reply can kick
+  // the queue. The hook holds `startUpload` in a ref, so this stays current.
   useEffect(() => {
-    pumpUploadsRef.current = pumpUploads;
-  }, [pumpUploads]);
+    setUploadStart(startUpload);
+  }, [startUpload, setUploadStart]);
   const onMkdir = () => {
     setDialog({
       title: "New directory",
