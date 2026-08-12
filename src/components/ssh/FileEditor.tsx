@@ -16,6 +16,7 @@ import {
   replaceMatch,
   type Match,
 } from "@/lib/editorSearch";
+import { PencilIcon, SearchIcon } from "./icons";
 
 // Text metrics shared by the textarea, the highlight overlay and the gutter, so
 // all three line up to the pixel. Any change here must apply to all three.
@@ -263,9 +264,7 @@ export function FileEditor({
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-term-card">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
-        <span className="text-xs text-term-muted" aria-hidden>
-          ✎
-        </span>
+        <PencilIcon className="h-4 w-4 text-term-muted" />
         <span
           className="min-w-0 flex-1 truncate text-xs text-term-dim"
           title={activeFile.path}
@@ -276,10 +275,10 @@ export function FileEditor({
         <button
           type="button"
           onClick={openFind}
-          className="rounded border border-term-border px-3 py-1 text-xs text-term-muted hover:text-term-text"
+          className="flex items-center gap-1.5 rounded border border-term-border px-3 py-1 text-xs text-term-muted hover:text-term-text"
           title="Find / replace (Ctrl+F)"
         >
-          🔍 Find
+          <SearchIcon className="h-3.5 w-3.5" /> Find
         </button>
         <button
           type="button"

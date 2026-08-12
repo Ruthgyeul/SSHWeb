@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { KbdPrompt } from "@/lib/sshProtocol";
 import { cn } from "@/lib/utils";
+import { WarningIcon } from "./icons";
 
 /** A host-key confirmation request (trust-on-first-use). */
 export interface HostKeyPromptState {
@@ -74,11 +75,12 @@ function HostKeyBody({
       <div>
         <h2
           className={cn(
-            "text-lg font-semibold",
+            "flex items-center gap-1.5 text-lg font-semibold",
             changed ? "text-term-red" : "text-term-text",
           )}
         >
-          {changed ? "⚠ Host key has changed" : "Verify host key"}
+          {changed && <WarningIcon className="h-4 w-4" />}
+          {changed ? "Host key has changed" : "Verify host key"}
         </h2>
         <p className="mt-1 text-xs leading-relaxed text-term-muted">
           {changed ? (

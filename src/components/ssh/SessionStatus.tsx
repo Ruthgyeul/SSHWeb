@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { ClockIcon } from "./icons";
 
 /** Lifecycle phase of a single SSH session. */
 export type SessionStatus =
@@ -49,10 +50,10 @@ export function Uptime({ since }: { since: number }) {
   const label = h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
   return (
     <span
-      className="flex-none tabular-nums text-[11px] text-term-faint"
+      className="flex flex-none items-center gap-1 tabular-nums text-[11px] text-term-faint"
       title="Connected for"
     >
-      ⏱ {label}
+      <ClockIcon className="h-3 w-3" /> {label}
     </span>
   );
 }

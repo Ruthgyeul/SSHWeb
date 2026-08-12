@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { CheckIcon, XMarkIcon } from "./icons";
 
 /**
  * Lightweight toast notifications for the SSH client. Their whole reason to
@@ -87,10 +88,10 @@ const KIND_STYLES: Record<ToastKind, string> = {
   success: "border-term-green/45 bg-term-green/12 text-term-green",
 };
 
-const KIND_ICON: Record<ToastKind, string> = {
-  error: "✗",
-  info: "•",
-  success: "✓",
+const KIND_ICON: Record<ToastKind, React.ReactNode> = {
+  error: <XMarkIcon className="h-3.5 w-3.5" />,
+  info: <span className="font-mono leading-none">•</span>,
+  success: <CheckIcon className="h-3.5 w-3.5" />,
 };
 
 /** One toast row: an icon, the message, and a dismiss button. */
@@ -109,7 +110,7 @@ function ToastItem({
         KIND_STYLES[toast.kind],
       )}
     >
-      <span aria-hidden className="mt-px font-mono leading-none">
+      <span aria-hidden className="mt-px flex-none">
         {KIND_ICON[toast.kind]}
       </span>
       <span className="min-w-0 flex-1 break-words leading-relaxed">

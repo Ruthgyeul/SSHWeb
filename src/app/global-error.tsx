@@ -56,6 +56,9 @@ export default function GlobalError({
           <button
             onClick={reset}
             style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
               background: "#0d1119",
               border: "1px solid rgba(255,255,255,0.12)",
               borderRadius: 6,
@@ -65,7 +68,23 @@ export default function GlobalError({
               cursor: "pointer",
             }}
           >
-            ↻ Try again
+            {/* Inline SVG (explicit size) — this boundary renders when global CSS
+                may be unavailable, so it can't rely on utility classes. */}
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <path d="M21 3v5h-5" />
+            </svg>
+            Try again
           </button>
         </div>
       </body>
