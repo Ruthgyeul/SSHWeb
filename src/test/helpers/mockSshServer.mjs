@@ -15,14 +15,19 @@
 import ssh2 from "ssh2";
 
 const { Server, utils } = ssh2;
-const { STATUS_CODE } = ssh2.utils.sftp;
+const { OPEN_MODE, STATUS_CODE } = ssh2.utils.sftp;
 
 export const MOCK_USER = "testuser";
 export const MOCK_PASSWORD = "testpass";
 
+/** The one readable file the mock serves (for an edit/download round-trip). */
+export const MOCK_FILE_PATH = "/home/testuser/readme.txt";
+export const MOCK_FILE_CONTENT = "hello from the mock ssh target\n";
+const MOCK_FILE_BUF = Buffer.from(MOCK_FILE_CONTENT);
+
 /** The fixed listing `sftp-list` will see for any directory. */
 const DIR_ENTRIES = [
-  { filename: "readme.txt", isDir: false, size: 12 },
+  { filename: "readme.txt", isDir: false, size: MOCK_FILE_BUF.length },
   { filename: "projects", isDir: true, size: 4096 },
 ];
 
@@ -81,11 +86,55 @@ function handleSftp(sftp) {
   sftp.on("STAT", statByName);
   sftp.on("LSTAT", statByName);
 
-  sftp.on("OPEN", (reqid) => {
-    // No file reads needed for the smoke test; refuse politely.
-    sftp.status(reqid, STATUS_CODE.PERMISSION_DENIED);
+  // Minimal read-only file support (OPEN 'r' → FSTAT/READ → CLOSE) so an
+  // edit/download round-trip against MOCK_FILE_PATH exercises the read handlers.
+  const openFiles = new Map();
+  let handleSeq = 0;
+
+  sftp.on("OPEN", (reqid, filename, flags) => {
+    const readable = (flags & OPEN_MODE.READ) !== 0;
+    if (readable && filename === MOCK_FILE_PATH) {
+      const handle = Buffer.from(`file:${handleSeq++}`);
+      openFiles.set(handle.toString(), MOCK_FILE_BUF);
+      return sftp.handle(reqid, handle);
+    }
+    // No writable/other files in the mock.
+    sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE);
   });
-  sftp.on("CLOSE", (reqid) => sftp.status(reqid, STATUS_CODE.OK));
+
+  sftp.on("FSTAT", (reqid, handle) => {
+    const buf = openFiles.get(handle.toString());
+    if (!buf) return sftp.status(reqid, STATUS_CODE.FAILURE);
+    sftp.attrs(reqid, {
+      mode: 0o100644,
+      size: buf.length,
+      uid: 1000,
+      gid: 1000,
+      atime: 0,
+      mtime: 0,
+    });
+  });
+
+  sftp.on("READ", (reqid, handle, offset, length) => {
+    const buf = openFiles.get(handle.toString());
+    if (!buf) return sftp.status(reqid, STATUS_CODE.FAILURE);
+    if (offset >= buf.length) return sftp.status(reqid, STATUS_CODE.EOF);
+    sftp.data(reqid, buf.subarray(offset, Math.min(offset + length, buf.length)));
+  });
+
+  sftp.on("CLOSE", (reqid, handle) => {
+    openFiles.delete(handle.toString());
+    sftp.status(reqid, STATUS_CODE.OK);
+  });
+
+  // Metadata ops the bridge issues for mkdir / rename / rm / chmod — acknowledge
+  // success so the bridge replies with `sftp-ok` (the mock has no real FS).
+  const ok = (reqid) => sftp.status(reqid, STATUS_CODE.OK);
+  sftp.on("MKDIR", ok);
+  sftp.on("RENAME", ok);
+  sftp.on("REMOVE", ok);
+  sftp.on("RMDIR", ok);
+  sftp.on("SETSTAT", ok);
 }
 
 /**

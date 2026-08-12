@@ -28,6 +28,8 @@ import {
   startMockSshServer,
   MOCK_USER,
   MOCK_PASSWORD,
+  MOCK_FILE_PATH,
+  MOCK_FILE_CONTENT,
 } from "./helpers/mockSshServer.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -210,5 +212,37 @@ describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
     const byName = Object.fromEntries(list.entries.map((e) => [e.name, e.type]));
     expect(byName["readme.txt"]).toBe("file");
     expect(byName["projects"]).toBe("dir");
+  });
+
+  it("reads a file's bytes for the editor (single-frame edit read)", async () => {
+    client.send({ t: "sftp-read", path: MOCK_FILE_PATH, edit: true });
+    const read = await client.waitFor((m) => m.t === "sftp-read" && m.edit);
+    expect(Buffer.from(read.dataB64, "base64").toString()).toBe(
+      MOCK_FILE_CONTENT,
+    );
+  });
+
+  it("acknowledges mkdir with sftp-ok", async () => {
+    client.send({ t: "sftp-mkdir", path: "/home/testuser/newdir" });
+    const ok = await client.waitFor((m) => m.t === "sftp-ok" && m.op === "mkdir");
+    expect(ok.path).toBe("/home/testuser/newdir");
+  });
+
+  it("acknowledges rename with sftp-ok (reporting the new path)", async () => {
+    client.send({
+      t: "sftp-rename",
+      from: "/home/testuser/a.txt",
+      to: "/home/testuser/b.txt",
+    });
+    const ok = await client.waitFor(
+      (m) => m.t === "sftp-ok" && m.op === "rename",
+    );
+    expect(ok.path).toBe("/home/testuser/b.txt");
+  });
+
+  it("acknowledges rm with sftp-ok", async () => {
+    client.send({ t: "sftp-rm", path: "/home/testuser/gone.txt" });
+    const ok = await client.waitFor((m) => m.t === "sftp-ok" && m.op === "rm");
+    expect(ok.path).toBe("/home/testuser/gone.txt");
   });
 });
