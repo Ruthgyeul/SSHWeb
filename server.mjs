@@ -2559,6 +2559,309 @@ wss.on("connection", (ws, req) => {
     send({ t: "forward-closed", id: String(id) });
   }
 
+  // The file-read handler: thumbnails, previews (streamed/optimized),
+  // edit reads and streamed downloads/transcodes. Extracted verbatim from the
+  // message switch to keep the dispatcher thin.
+  function handleRead(msg) {
+    withSftp((s) =>
+      s.stat(msg.path, (statErr, stats) => {
+        const name = msg.path.split("/").pop() || "download";
+
+        // Thumbnails feed the grid view. A grid renders many at once, so this
+        // path is optimised for volume: what crosses the wire is ALWAYS a tiny
+        // WebP (never a full-size original), so a folder of hundreds of photos
+        // or videos sends KB per tile instead of MB. Images are decoded and
+        // downscaled to WebP in-memory (the original is only read, never
+        // modified); videos have a poster frame extracted by ffmpeg and
+        // downscaled to WebP the same way. WebP needs `sharp` (and, for a
+        // video, `ffmpeg`): if either is missing or the bytes can't be decoded
+        // we skip the tile (empty payload → client keeps its icon) rather than
+        // ever falling back to a non-WebP or full-size original.
+        //
+        // A `thumb` request ALWAYS gets a reply — even a skip or error sends
+        // an empty payload — so the client can drop the tile back to its icon
+        // and, crucially, advance its bounded request queue (no dead slot).
+        if (msg.thumb === true) {
+          const skipThumb = () => {
+            thumbsSkipped += 1;
+            send({
+              t: "sftp-read",
+              path: msg.path,
+              name,
+              dataB64: "",
+              thumb: true,
+            });
+          };
+          // Send a produced WebP tile, metering it for the health probe.
+          const sendThumb = (out) => {
+            thumbsServed += 1;
+            thumbBytesOut += out.length;
+            send({
+              t: "sftp-read",
+              path: msg.path,
+              name,
+              dataB64: out.toString("base64"),
+              thumb: true,
+              mime: "image/webp",
+            });
+          };
+          // Downscale any decodable image bytes (a photo, or an ffmpeg poster
+          // frame) to a small WebP; returns null if sharp can't decode them.
+          const toWebpThumb = async (bytes, rotate) => {
+            try {
+              let pipe = sharp(bytes);
+              if (rotate) pipe = pipe.rotate(); // honour EXIF orientation
+              const out = await pipe
+                .resize(THUMBNAIL_PIXELS, THUMBNAIL_PIXELS, {
+                  fit: "inside",
+                  withoutEnlargement: true,
+                })
+                .webp({ quality: 70 })
+                .toBuffer();
+              return out;
+            } catch {
+              return null;
+            }
+          };
+          // No sharp = no WebP = no thumbnails at all (icons only).
+          if (statErr || stats.size > THUMBNAIL_VIDEO_MAX_BYTES || !sharp) {
+            return skipThumb();
+          }
+          // Serve straight from the in-memory cache when we already hold this
+          // exact tile (same identity + path + size:mtime): no SSH read, no
+          // sharp/ffmpeg transcode, so a re-visited or re-logged-in grid
+          // paints as fast as the bytes can be sent. Elevated (root) reads
+          // are scoped under `#root` so they never mix with login-user tiles.
+          const scope = elevated ? `${sessionScope}#root` : sessionScope;
+          const cacheKey = thumbCacheKey(
+            scope,
+            msg.path,
+            `${stats.size}:${stats.mtime}`,
+          );
+          const cached = thumbCacheGet(cacheKey);
+          if (cached) return sendThumb(cached);
+          s.readFile(msg.path, async (err, buffer) => {
+            if (err) return skipThumb();
+            // Image: decode + downscale straight to WebP.
+            const imageThumb = await toWebpThumb(buffer, true);
+            if (imageThumb) {
+              thumbCachePut(cacheKey, imageThumb);
+              return sendThumb(imageThumb);
+            }
+            // Not a sharp-decodable image (video, or corrupt): extract a poster
+            // frame with ffmpeg and downscale that to WebP too.
+            if (ffmpegAvailable) {
+              const frame = await extractVideoFrame(buffer);
+              if (frame) {
+                const videoThumb = await toWebpThumb(frame, false);
+                if (videoThumb) {
+                  thumbCachePut(cacheKey, videoThumb);
+                  return sendThumb(videoThumb);
+                }
+              }
+            }
+            // Couldn't produce a WebP thumbnail — keep the icon rather than
+            // send the original bytes whole.
+            return skipThumb();
+          });
+          return;
+        }
+
+        if (statErr) return sendError(statErr.message, "sftp");
+        const isPreview = msg.preview === true;
+
+        // Stream a file (optionally head-only via `cap`) as download/preview
+        // frames, pausing on WebSocket backpressure so a big file never
+        // balloons the send buffer. Preview frames are tagged `preview: true`
+        // so the client routes the bytes into the modal (as a blob/text)
+        // instead of saving a file. Cancellable via the `downloads` map.
+        const streamOriginal = (cap) => {
+          // A capped read only pulls the file's head (`{ start, end }`), so a
+          // huge log previews as text without transferring the whole thing.
+          const truncated = cap > 0 && stats.size > cap;
+          const stream = truncated
+            ? s.createReadStream(msg.path, { start: 0, end: cap - 1 })
+            : s.createReadStream(msg.path);
+          downloads.set(msg.path, stream);
+          send({
+            t: "sftp-download-begin",
+            path: msg.path,
+            name,
+            size: truncated ? cap : stats.size,
+            preview: isPreview,
+          });
+          stream.on("data", (chunk) => {
+            bytesDown += chunk.length;
+            sftpBytesDown += chunk.length;
+            send({
+              t: "sftp-download-chunk",
+              path: msg.path,
+              dataB64: chunk.toString("base64"),
+              preview: isPreview,
+            });
+            if (ws.bufferedAmount > 8 * 1024 * 1024) {
+              stream.pause();
+              const resume = setInterval(() => {
+                if (ws.readyState !== ws.OPEN) {
+                  clearInterval(resume);
+                  stream.destroy();
+                } else if (ws.bufferedAmount < 1 * 1024 * 1024) {
+                  clearInterval(resume);
+                  stream.resume();
+                }
+              }, 25);
+            }
+          });
+          stream.on("error", (err) => {
+            // A cancel (`sftp-download-cancel`) removes the map entry before
+            // destroying the stream, so a still-present entry here means a
+            // genuine read error (worth a toast); a missing one means we tore
+            // the stream down on purpose and should stay silent.
+            if (downloads.has(msg.path)) {
+              downloads.delete(msg.path);
+              sendError(err.message, "sftp");
+            }
+          });
+          stream.on("end", () => {
+            downloads.delete(msg.path);
+            sftpFilesDown += 1;
+            send({
+              t: "sftp-download-end",
+              path: msg.path,
+              preview: isPreview,
+              truncated,
+            });
+          });
+        };
+
+        // Fast image preview: downscale a (possibly large) original to a
+        // small transcode (see PREVIEW_IMAGE_FORMAT) so click-to-view loads
+        // in KB, not MB. Only the transcode crosses the wire, so this may read
+        // a source past the whole-file download cap — bounded by
+        // PREVIEW_IMAGE_SOURCE_MAX_BYTES to cap decode memory. The `mime` on
+        // the begin frame tells the client these are an optimized preview
+        // (Download still fetches the original). The original is only read,
+        // never modified. HEIC/HEIF are forced through this path regardless
+        // of size — the browser can't render them raw, so a transcode is the
+        // *only* way to preview them.
+        const mustTranscode = !isBrowserRenderableImage(name);
+        if (
+          isPreview &&
+          msg.previewResize === true &&
+          sharp &&
+          isResizablePreviewImage(name) &&
+          (stats.size >= PREVIEW_IMAGE_MIN_BYTES || mustTranscode) &&
+          stats.size <= PREVIEW_IMAGE_SOURCE_MAX_BYTES
+        ) {
+          s.readFile(msg.path, async (err, buffer) => {
+            if (err) return sendError(err.message, "sftp");
+            const encoded = await encodePreviewImage(buffer);
+            // Send the transcode when it saved bytes, or whenever the raw
+            // bytes can't be rendered by the browser (HEIC/HEIF) — there the
+            // transcode is the only viewable form, size regardless.
+            if (encoded && (mustTranscode || encoded.bytes.length < buffer.length)) {
+              const webp = encoded.bytes;
+              const CHUNK = 256 * 1024;
+              send({
+                t: "sftp-download-begin",
+                path: msg.path,
+                name,
+                size: webp.length,
+                preview: true,
+                mime: encoded.mime,
+                // The ORIGINAL's dimensions (not the downscaled preview's), so
+                // the client shows the true size and can gate loading a very
+                // large original on demand.
+                origWidth: encoded.srcWidth,
+                origHeight: encoded.srcHeight,
+              });
+              for (let off = 0; off < webp.length; off += CHUNK) {
+                const chunk = webp.subarray(
+                  off,
+                  Math.min(off + CHUNK, webp.length),
+                );
+                bytesDown += chunk.length;
+                sftpBytesDown += chunk.length;
+                send({
+                  t: "sftp-download-chunk",
+                  path: msg.path,
+                  dataB64: chunk.toString("base64"),
+                  preview: true,
+                });
+              }
+              sftpFilesDown += 1;
+              send({
+                t: "sftp-download-end",
+                path: msg.path,
+                preview: true,
+                truncated: false,
+              });
+              return;
+            }
+            // A non-renderable image we couldn't transcode (sharp missing
+            // HEIF support, or corrupt bytes) can't be shown raw — surface an
+            // error so the client degrades to the download-only card rather
+            // than piping unrenderable bytes into an <img>.
+            if (mustTranscode) {
+              return sendError(
+                "Can't preview this image (unsupported format).",
+                "sftp",
+              );
+            }
+            if (MAX_DOWNLOAD_BYTES > 0 && stats.size > MAX_DOWNLOAD_BYTES) {
+              return sendError(
+                `File too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
+                "sftp",
+              );
+            }
+            streamOriginal(0);
+          });
+          return;
+        }
+
+        // A capped preview (text head-read) transfers at most `cap` bytes, so
+        // it may peek at a file past the whole-file download cap. Clamp the
+        // client-supplied cap to the download cap so `maxBytes` can never be
+        // abused to stream more than an ordinary download would allow.
+        let cap =
+          isPreview &&
+          typeof msg.maxBytes === "number" &&
+          msg.maxBytes > 0
+            ? msg.maxBytes
+            : 0;
+        if (cap && MAX_DOWNLOAD_BYTES > 0 && cap > MAX_DOWNLOAD_BYTES) {
+          cap = MAX_DOWNLOAD_BYTES;
+        }
+        if (!cap && MAX_DOWNLOAD_BYTES > 0 && stats.size > MAX_DOWNLOAD_BYTES) {
+          return sendError(
+            `File too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
+            "sftp",
+          );
+        }
+
+        // Edit reads need the whole file in one message (they build an editor
+        // buffer); it's already size-capped above.
+        if (msg.edit === true) {
+          s.readFile(msg.path, (err, buffer) => {
+            if (err) return sendError(err.message, "sftp");
+            send({
+              t: "sftp-read",
+              path: msg.path,
+              name,
+              dataB64: buffer.toString("base64"),
+              edit: true,
+            });
+          });
+          return;
+        }
+
+        // Plain downloads AND previews stream in chunks so the browser can
+        // show a progress bar (and cancel).
+        streamOriginal(cap);
+      }),
+    );
+  }
+
   ws.on("message", (raw) => {
     let msg;
     try {
@@ -2650,303 +2953,7 @@ wss.on("connection", (ws, req) => {
         break;
 
       case "sftp-read":
-        withSftp((s) =>
-          s.stat(msg.path, (statErr, stats) => {
-            const name = msg.path.split("/").pop() || "download";
-
-            // Thumbnails feed the grid view. A grid renders many at once, so this
-            // path is optimised for volume: what crosses the wire is ALWAYS a tiny
-            // WebP (never a full-size original), so a folder of hundreds of photos
-            // or videos sends KB per tile instead of MB. Images are decoded and
-            // downscaled to WebP in-memory (the original is only read, never
-            // modified); videos have a poster frame extracted by ffmpeg and
-            // downscaled to WebP the same way. WebP needs `sharp` (and, for a
-            // video, `ffmpeg`): if either is missing or the bytes can't be decoded
-            // we skip the tile (empty payload → client keeps its icon) rather than
-            // ever falling back to a non-WebP or full-size original.
-            //
-            // A `thumb` request ALWAYS gets a reply — even a skip or error sends
-            // an empty payload — so the client can drop the tile back to its icon
-            // and, crucially, advance its bounded request queue (no dead slot).
-            if (msg.thumb === true) {
-              const skipThumb = () => {
-                thumbsSkipped += 1;
-                send({
-                  t: "sftp-read",
-                  path: msg.path,
-                  name,
-                  dataB64: "",
-                  thumb: true,
-                });
-              };
-              // Send a produced WebP tile, metering it for the health probe.
-              const sendThumb = (out) => {
-                thumbsServed += 1;
-                thumbBytesOut += out.length;
-                send({
-                  t: "sftp-read",
-                  path: msg.path,
-                  name,
-                  dataB64: out.toString("base64"),
-                  thumb: true,
-                  mime: "image/webp",
-                });
-              };
-              // Downscale any decodable image bytes (a photo, or an ffmpeg poster
-              // frame) to a small WebP; returns null if sharp can't decode them.
-              const toWebpThumb = async (bytes, rotate) => {
-                try {
-                  let pipe = sharp(bytes);
-                  if (rotate) pipe = pipe.rotate(); // honour EXIF orientation
-                  const out = await pipe
-                    .resize(THUMBNAIL_PIXELS, THUMBNAIL_PIXELS, {
-                      fit: "inside",
-                      withoutEnlargement: true,
-                    })
-                    .webp({ quality: 70 })
-                    .toBuffer();
-                  return out;
-                } catch {
-                  return null;
-                }
-              };
-              // No sharp = no WebP = no thumbnails at all (icons only).
-              if (statErr || stats.size > THUMBNAIL_VIDEO_MAX_BYTES || !sharp) {
-                return skipThumb();
-              }
-              // Serve straight from the in-memory cache when we already hold this
-              // exact tile (same identity + path + size:mtime): no SSH read, no
-              // sharp/ffmpeg transcode, so a re-visited or re-logged-in grid
-              // paints as fast as the bytes can be sent. Elevated (root) reads
-              // are scoped under `#root` so they never mix with login-user tiles.
-              const scope = elevated ? `${sessionScope}#root` : sessionScope;
-              const cacheKey = thumbCacheKey(
-                scope,
-                msg.path,
-                `${stats.size}:${stats.mtime}`,
-              );
-              const cached = thumbCacheGet(cacheKey);
-              if (cached) return sendThumb(cached);
-              s.readFile(msg.path, async (err, buffer) => {
-                if (err) return skipThumb();
-                // Image: decode + downscale straight to WebP.
-                const imageThumb = await toWebpThumb(buffer, true);
-                if (imageThumb) {
-                  thumbCachePut(cacheKey, imageThumb);
-                  return sendThumb(imageThumb);
-                }
-                // Not a sharp-decodable image (video, or corrupt): extract a poster
-                // frame with ffmpeg and downscale that to WebP too.
-                if (ffmpegAvailable) {
-                  const frame = await extractVideoFrame(buffer);
-                  if (frame) {
-                    const videoThumb = await toWebpThumb(frame, false);
-                    if (videoThumb) {
-                      thumbCachePut(cacheKey, videoThumb);
-                      return sendThumb(videoThumb);
-                    }
-                  }
-                }
-                // Couldn't produce a WebP thumbnail — keep the icon rather than
-                // send the original bytes whole.
-                return skipThumb();
-              });
-              return;
-            }
-
-            if (statErr) return sendError(statErr.message, "sftp");
-            const isPreview = msg.preview === true;
-
-            // Stream a file (optionally head-only via `cap`) as download/preview
-            // frames, pausing on WebSocket backpressure so a big file never
-            // balloons the send buffer. Preview frames are tagged `preview: true`
-            // so the client routes the bytes into the modal (as a blob/text)
-            // instead of saving a file. Cancellable via the `downloads` map.
-            const streamOriginal = (cap) => {
-              // A capped read only pulls the file's head (`{ start, end }`), so a
-              // huge log previews as text without transferring the whole thing.
-              const truncated = cap > 0 && stats.size > cap;
-              const stream = truncated
-                ? s.createReadStream(msg.path, { start: 0, end: cap - 1 })
-                : s.createReadStream(msg.path);
-              downloads.set(msg.path, stream);
-              send({
-                t: "sftp-download-begin",
-                path: msg.path,
-                name,
-                size: truncated ? cap : stats.size,
-                preview: isPreview,
-              });
-              stream.on("data", (chunk) => {
-                bytesDown += chunk.length;
-                sftpBytesDown += chunk.length;
-                send({
-                  t: "sftp-download-chunk",
-                  path: msg.path,
-                  dataB64: chunk.toString("base64"),
-                  preview: isPreview,
-                });
-                if (ws.bufferedAmount > 8 * 1024 * 1024) {
-                  stream.pause();
-                  const resume = setInterval(() => {
-                    if (ws.readyState !== ws.OPEN) {
-                      clearInterval(resume);
-                      stream.destroy();
-                    } else if (ws.bufferedAmount < 1 * 1024 * 1024) {
-                      clearInterval(resume);
-                      stream.resume();
-                    }
-                  }, 25);
-                }
-              });
-              stream.on("error", (err) => {
-                // A cancel (`sftp-download-cancel`) removes the map entry before
-                // destroying the stream, so a still-present entry here means a
-                // genuine read error (worth a toast); a missing one means we tore
-                // the stream down on purpose and should stay silent.
-                if (downloads.has(msg.path)) {
-                  downloads.delete(msg.path);
-                  sendError(err.message, "sftp");
-                }
-              });
-              stream.on("end", () => {
-                downloads.delete(msg.path);
-                sftpFilesDown += 1;
-                send({
-                  t: "sftp-download-end",
-                  path: msg.path,
-                  preview: isPreview,
-                  truncated,
-                });
-              });
-            };
-
-            // Fast image preview: downscale a (possibly large) original to a
-            // small transcode (see PREVIEW_IMAGE_FORMAT) so click-to-view loads
-            // in KB, not MB. Only the transcode crosses the wire, so this may read
-            // a source past the whole-file download cap — bounded by
-            // PREVIEW_IMAGE_SOURCE_MAX_BYTES to cap decode memory. The `mime` on
-            // the begin frame tells the client these are an optimized preview
-            // (Download still fetches the original). The original is only read,
-            // never modified. HEIC/HEIF are forced through this path regardless
-            // of size — the browser can't render them raw, so a transcode is the
-            // *only* way to preview them.
-            const mustTranscode = !isBrowserRenderableImage(name);
-            if (
-              isPreview &&
-              msg.previewResize === true &&
-              sharp &&
-              isResizablePreviewImage(name) &&
-              (stats.size >= PREVIEW_IMAGE_MIN_BYTES || mustTranscode) &&
-              stats.size <= PREVIEW_IMAGE_SOURCE_MAX_BYTES
-            ) {
-              s.readFile(msg.path, async (err, buffer) => {
-                if (err) return sendError(err.message, "sftp");
-                const encoded = await encodePreviewImage(buffer);
-                // Send the transcode when it saved bytes, or whenever the raw
-                // bytes can't be rendered by the browser (HEIC/HEIF) — there the
-                // transcode is the only viewable form, size regardless.
-                if (encoded && (mustTranscode || encoded.bytes.length < buffer.length)) {
-                  const webp = encoded.bytes;
-                  const CHUNK = 256 * 1024;
-                  send({
-                    t: "sftp-download-begin",
-                    path: msg.path,
-                    name,
-                    size: webp.length,
-                    preview: true,
-                    mime: encoded.mime,
-                    // The ORIGINAL's dimensions (not the downscaled preview's), so
-                    // the client shows the true size and can gate loading a very
-                    // large original on demand.
-                    origWidth: encoded.srcWidth,
-                    origHeight: encoded.srcHeight,
-                  });
-                  for (let off = 0; off < webp.length; off += CHUNK) {
-                    const chunk = webp.subarray(
-                      off,
-                      Math.min(off + CHUNK, webp.length),
-                    );
-                    bytesDown += chunk.length;
-                    sftpBytesDown += chunk.length;
-                    send({
-                      t: "sftp-download-chunk",
-                      path: msg.path,
-                      dataB64: chunk.toString("base64"),
-                      preview: true,
-                    });
-                  }
-                  sftpFilesDown += 1;
-                  send({
-                    t: "sftp-download-end",
-                    path: msg.path,
-                    preview: true,
-                    truncated: false,
-                  });
-                  return;
-                }
-                // A non-renderable image we couldn't transcode (sharp missing
-                // HEIF support, or corrupt bytes) can't be shown raw — surface an
-                // error so the client degrades to the download-only card rather
-                // than piping unrenderable bytes into an <img>.
-                if (mustTranscode) {
-                  return sendError(
-                    "Can't preview this image (unsupported format).",
-                    "sftp",
-                  );
-                }
-                if (MAX_DOWNLOAD_BYTES > 0 && stats.size > MAX_DOWNLOAD_BYTES) {
-                  return sendError(
-                    `File too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
-                    "sftp",
-                  );
-                }
-                streamOriginal(0);
-              });
-              return;
-            }
-
-            // A capped preview (text head-read) transfers at most `cap` bytes, so
-            // it may peek at a file past the whole-file download cap. Clamp the
-            // client-supplied cap to the download cap so `maxBytes` can never be
-            // abused to stream more than an ordinary download would allow.
-            let cap =
-              isPreview &&
-              typeof msg.maxBytes === "number" &&
-              msg.maxBytes > 0
-                ? msg.maxBytes
-                : 0;
-            if (cap && MAX_DOWNLOAD_BYTES > 0 && cap > MAX_DOWNLOAD_BYTES) {
-              cap = MAX_DOWNLOAD_BYTES;
-            }
-            if (!cap && MAX_DOWNLOAD_BYTES > 0 && stats.size > MAX_DOWNLOAD_BYTES) {
-              return sendError(
-                `File too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
-                "sftp",
-              );
-            }
-
-            // Edit reads need the whole file in one message (they build an editor
-            // buffer); it's already size-capped above.
-            if (msg.edit === true) {
-              s.readFile(msg.path, (err, buffer) => {
-                if (err) return sendError(err.message, "sftp");
-                send({
-                  t: "sftp-read",
-                  path: msg.path,
-                  name,
-                  dataB64: buffer.toString("base64"),
-                  edit: true,
-                });
-              });
-              return;
-            }
-
-            // Plain downloads AND previews stream in chunks so the browser can
-            // show a progress bar (and cancel).
-            streamOriginal(cap);
-          }),
-        );
+        handleRead(msg);
         break;
 
       case "sftp-write":
