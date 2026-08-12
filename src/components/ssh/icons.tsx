@@ -110,12 +110,14 @@ export function RefreshIcon({ className }: { className?: string }) {
   );
 }
 
-/** Rotate-clockwise — the image-preview rotate control. */
+/** Framed image with a corner rotate arrow — the image-preview rotate control
+ * (distinct from the full-circle RefreshIcon). */
 export function RotateIcon({ className }: { className?: string }) {
   return (
     <Svg className={className}>
-      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-      <path d="M21 3v5h-5" />
+      <rect x="3" y="9" width="12" height="12" rx="2" />
+      <path d="M14 4a6 6 0 0 1 6 6" />
+      <path d="M20 4v3h-3" />
     </Svg>
   );
 }

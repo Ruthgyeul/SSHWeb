@@ -1671,6 +1671,19 @@ wss.on("connection", (ws, req) => {
     // Invoked by ssh2 once the channel is confirmed; `chan` is a ready-made SFTP
     // protocol instance because we tag the request with type `sftp`.
     const onChannel = (err, chan) => {
+      // The channel may open *after* the timeout already settled the request. If
+      // so, don't drive the exec/SFTP handshake (which would leave a stray
+      // sudo/sftp-server running) — just close the late channel and bail.
+      if (settled) {
+        if (!err && chan) {
+          try {
+            chan.end?.();
+          } catch {
+            /* channel already gone */
+          }
+        }
+        return;
+      }
       if (err) return done(err);
       channel = chan;
       // Equivalent of ssh2's reqExec: queue the channel-request reply handler,
