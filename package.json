@@ -3,8 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "description": "Browser-based SSH client — an interactive web terminal and SFTP file access, over a WebSocket ↔ SSH bridge.",
+  "//engines": "Minimum runtime we support, NOT a pin. `.nvmrc` (24) is the recommended dev/CI version; the app runs on Node 22+ (Next 16's floor), so keep this at the true minimum to avoid EBADENGINE warnings on 22.x deployments.",
   "engines": {
-    "node": ">=24"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "node server.mjs",
