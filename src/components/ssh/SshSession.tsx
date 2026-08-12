@@ -34,6 +34,7 @@ import {
 } from "@/lib/subtitles";
 import { getThemePreset } from "@/lib/terminalTheme";
 import { fileVersionTag } from "@/lib/thumbnailCache";
+import { ByteLruCache } from "@/lib/byteLruCache";
 import {
   KNOWN_HOSTS_KEY,
   parseKnownHosts,
@@ -166,6 +167,18 @@ const MAX_PREVIEW_CACHE_BYTES = 64 * 1024 * 1024;
  * thumbnail cache uses (30 min). A re-open within the window still paints
  * instantly and refreshes the entry's age. */
 const PREVIEW_CACHE_TTL_MS = 30 * 60 * 1000;
+
+/** One entry in the recently-viewed preview cache: the raw file bytes plus the
+ * metadata needed to re-open them (the display name, and — when the bytes are a
+ * downscaled WebP preview rather than the original — an `optimized` flag + the
+ * WebP content type so Download re-fetches the untouched original). The LRU's
+ * age/eviction bookkeeping lives in {@link ByteLruCache}, not here. */
+interface PreviewCacheEntry {
+  name: string;
+  bytes: Uint8Array<ArrayBuffer>;
+  optimized?: boolean;
+  mime?: string;
+}
 
 /** Don't prefetch a gallery neighbour bigger than this — prefetching is a
  * latency nicety for the common case (folders of photos), not a reason to pull
@@ -426,27 +439,18 @@ export function SshSession({
   // preview so Download re-fetches the original.
   const previewMimeRef = useRef<Record<string, string>>({});
   // LRU cache of recently-viewed preview file bytes, keyed by path + version
-  // (size:mtime) so an edited file re-fetches. A `Map` keeps insertion order for
-  // eviction; `previewCacheBytesRef` tracks the running total against the budget.
-  // Elevated (root) reads are never cached — they must not linger after de-elevate.
-  const previewCacheRef = useRef<
-    Map<
-      string,
-      {
-        name: string;
-        bytes: Uint8Array<ArrayBuffer>;
-        // Set when `bytes` are a downscaled WebP preview (not the original), with
-        // the WebP content type for building the blob. Download re-fetches the
-        // original in that case.
-        optimized?: boolean;
-        mime?: string;
-        /** Last-used timestamp (ms) — an entry older than PREVIEW_CACHE_TTL_MS is
-         * dropped so decoded file bytes don't linger in memory indefinitely. */
-        ts: number;
-      }
-    >
-  >(new Map());
-  const previewCacheBytesRef = useRef(0);
+  // (size:mtime) so an edited file re-fetches. The byte-bounded, TTL-aware LRU
+  // primitive lives in `@/lib/byteLruCache` (unit-tested); it tracks the running
+  // byte total and eviction/TTL internally so this component just calls
+  // get/set/has/clear. Elevated (root) reads are cached here too, so it's dropped
+  // on every `sudo` toggle and on logout — nothing lingers after de-elevate.
+  const previewCacheRef = useRef(
+    new ByteLruCache<PreviewCacheEntry>({
+      maxBytes: MAX_PREVIEW_CACHE_BYTES,
+      ttlMs: PREVIEW_CACHE_TTL_MS,
+      sizeOf: (e) => e.bytes.length,
+    }),
+  );
   // Text captured at save time per path, so `sftp-ok` can reconcile the editor's
   // saved content (marking that file clean) without a re-read.
   const editorSaveTextRef = useRef<Record<string, string>>({});
@@ -581,7 +585,6 @@ export function SshSession({
   // (clearing `requestedThumbsRef` un-blocks their intersection observers).
   const clearPreviewCache = useCallback(() => {
     previewCacheRef.current.clear();
-    previewCacheBytesRef.current = 0;
     prefetchPathsRef.current.clear();
   }, []);
 
@@ -598,7 +601,7 @@ export function SshSession({
   // grid thumbnails + the recently-viewed preview LRU. Surfaced next to the
   // settings "Clear thumbnail cache" action so the RAM residual is visible.
   const clientCacheBytes = useCallback(() => {
-    let total = previewCacheBytesRef.current;
+    let total = previewCacheRef.current.bytes;
     for (const url of Object.values(thumbnailsRef.current)) {
       total += dataUrlBytes(url);
     }
@@ -637,31 +640,13 @@ export function SshSession({
       optimized?: boolean,
       mime?: string,
     ) => {
-      if (bytes.length > MAX_PREVIEW_CACHE_BYTES) return;
-      const key = previewCacheKeyFor(path);
-      const cache = previewCacheRef.current;
-      const now = Date.now();
-      // Opportunistically drop entries that have aged out (TTL), so stale decoded
-      // bytes don't sit in memory just because nothing pushed the LRU over budget.
-      for (const [k, v] of cache) {
-        if (now - v.ts > PREVIEW_CACHE_TTL_MS) {
-          cache.delete(k);
-          previewCacheBytesRef.current -= v.bytes.length;
-        }
-      }
-      const existing = cache.get(key);
-      if (existing) previewCacheBytesRef.current -= existing.bytes.length;
-      cache.delete(key);
-      cache.set(key, { name, bytes, optimized, mime, ts: now });
-      previewCacheBytesRef.current += bytes.length;
-      // Evict oldest (front of the Map) until back within budget.
-      while (previewCacheBytesRef.current > MAX_PREVIEW_CACHE_BYTES) {
-        const oldest = cache.keys().next().value;
-        if (oldest === undefined) break;
-        const dropped = cache.get(oldest);
-        cache.delete(oldest);
-        if (dropped) previewCacheBytesRef.current -= dropped.bytes.length;
-      }
+      // TTL sweep, over-budget skip, and LRU eviction all live in ByteLruCache.
+      previewCacheRef.current.set(previewCacheKeyFor(path), {
+        name,
+        bytes,
+        optimized,
+        mime,
+      });
     },
     [previewCacheKeyFor],
   );
@@ -1365,7 +1350,6 @@ export function SshSession({
     previewBuffersRef.current = {};
     previewMimeRef.current = {};
     previewCacheRef.current.clear();
-    previewCacheBytesRef.current = 0;
     prefetchPathsRef.current.clear();
     originalLoadPathsRef.current.clear();
     streamTokenRef.current = null;
@@ -1450,21 +1434,10 @@ export function SshSession({
       // from the in-memory cache with no re-transfer — this is what makes stepping
       // the gallery away and back snappy. Checked first, before the streaming path,
       // so a cached small video/audio re-opens as a fully-seekable blob.
-      const key = previewCacheKeyFor(path);
-      const hit = previewCacheRef.current.get(key);
-      // A hit past its TTL is dropped and re-fetched, so a stale decoded copy is
-      // never shown (and its bytes stop counting against the budget).
-      if (hit && Date.now() - hit.ts > PREVIEW_CACHE_TTL_MS) {
-        previewCacheRef.current.delete(key);
-        previewCacheBytesRef.current -= hit.bytes.length;
-      }
-      const fresh = hit && Date.now() - hit.ts <= PREVIEW_CACHE_TTL_MS ? hit : null;
-      if (fresh) {
-        const hit = fresh;
-        // LRU touch + refresh age: re-insert at the back as most-recently used.
-        hit.ts = Date.now();
-        previewCacheRef.current.delete(key);
-        previewCacheRef.current.set(key, hit);
+      // A fresh hit (within TTL) re-opens instantly; the cache drops an expired
+      // entry and refreshes/touches a live one for us, returning null on a miss.
+      const hit = previewCacheRef.current.get(previewCacheKeyFor(path));
+      if (hit) {
         setPreview({
           path,
           name,
