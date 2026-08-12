@@ -46,7 +46,7 @@ import { resumeUploadStart } from "@/lib/serverSecurity";
 import { SITE_NAME, SSH_WS_PATH } from "@/config/siteConfig";
 import { base64ToBytes, bytesToBase64, concatBytes } from "@/lib/bytes";
 import { cn } from "@/lib/utils";
-import { triggerDownload } from "./download";
+import { triggerDownload } from "./dom/download";
 import {
   StatusDot,
   Uptime,
@@ -72,7 +72,7 @@ import { SnippetsBar } from "./SnippetsBar";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TerminalSettings } from "./TerminalSettings";
 import { SearchIcon } from "./icons";
-import { useTerminalPrefs } from "./useTerminalPrefs";
+import { useTerminalPrefs } from "./hooks/useTerminalPrefs";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
 

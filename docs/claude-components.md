@@ -42,10 +42,12 @@ that actually talks SSH is [`server.mjs`](../server.mjs).
 
 The terminal also has a built-in **scrollback search** bar (Ctrl/Cmd+F, `@xterm/addon-search`) that lives inside `XtermView`, and a **latency read-out** + **uptime clock** in the session header (latency fed by a `ping`/`pong` round-trip). The terminal color theme is shared across sessions via the `useTerminalPrefs` hook (localStorage-backed); the presets are defined and unit-tested in `src/lib/terminalTheme.ts`. Plain SFTP **downloads and previews stream in chunks** (`sftp-download-begin`/`chunk`/`end`; preview frames carry `preview: true` so the client accumulates them into a modal blob/text and shows a progress bar + Cancel instead of saving a file; a text preview also sets `maxBytes` on the `sftp-read` so the bridge streams only the file's head — bypassing the whole-file download cap and marking the closing frame `truncated: true`) so the browser can show a progress bar; only edit reads still arrive as a single `sftp-read`.
 
-Alongside the components, a few small **DOM helper modules** keep the big
-components lean: `download.ts` (`triggerDownload` — save bytes as a file) and
-`dropUpload.ts` (`droppedEntries` + `collectDroppedFiles` — walk a dropped
-folder tree into relative-path files). Pure, DOM-free helpers stay in `src/lib`
+Alongside the components, a few small **DOM helper modules** in `ssh/dom/` keep
+the big components lean: `download.ts` (`triggerDownload` — save bytes as a file)
+and `dropUpload.ts` (`droppedEntries` + `collectDroppedFiles` — walk a dropped
+folder tree into relative-path files). Co-located hooks live in `ssh/hooks/`
+(`useFileSort`, `useFileViewMode`, `useSnippets`, `useTerminalPrefs`). Pure,
+DOM-free helpers stay in `src/lib`
 instead — the base64 ↔ byte codec used across the wire is `src/lib/bytes.ts`
 (unit-tested in `bytes.test.ts`).
 

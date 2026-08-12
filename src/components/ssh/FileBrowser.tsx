@@ -33,9 +33,9 @@ import {
   UploadIcon,
   WarningIcon,
 } from "./icons";
-import { collectDroppedFiles, droppedEntries } from "./dropUpload";
-import { useFileViewMode } from "./useFileViewMode";
-import { useFileSort } from "./useFileSort";
+import { collectDroppedFiles, droppedEntries } from "./dom/dropUpload";
+import { useFileViewMode } from "./hooks/useFileViewMode";
+import { useFileSort } from "./hooks/useFileSort";
 
 /** One in-flight upload's progress, shown in the progress panel. */
 export interface UploadItem {
