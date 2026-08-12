@@ -30,12 +30,14 @@ npm run build      # production build (fails on type errors)
 npm run start      # serve the production build + SSH bridge (server.mjs)
 npm run lint       # ESLint (eslint-config-next)
 npm run typecheck  # tsc --noEmit
-npm run test       # Vitest (run once)
+npm run test       # Vitest unit tests (run once)
 npm run test:watch # Vitest (watch)
+npm run test:integration # end-to-end bridge smoke test (boots server.mjs vs. an in-memory ssh2 target)
 ```
 
 Before committing, run `npm run lint && npm run typecheck && npm run test`.
-CI (`.github/workflows/ci.yml`) runs all of these plus a full build.
+CI (`.github/workflows/ci.yml`) runs all of these plus a full build **and**
+`npm run test:integration` (after the build, so it exercises the production server).
 
 ## Architecture & conventions
 
