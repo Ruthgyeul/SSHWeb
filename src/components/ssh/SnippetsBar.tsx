@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { useSnippets } from "./useSnippets";
+import { useSnippets } from "./hooks/useSnippets";
 
 /**
  * A horizontally-scrolling bar of saved command snippets. Clicking a snippet

@@ -12,7 +12,7 @@ import {
 } from "@/lib/knownHosts";
 import { cn } from "@/lib/utils";
 import { CheckIcon, SettingsIcon } from "./icons";
-import type { TerminalPrefs } from "./useTerminalPrefs";
+import type { TerminalPrefs } from "./hooks/useTerminalPrefs";
 
 /**
  * Gear button + popover that picks the terminal's color theme. Fully

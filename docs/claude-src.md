@@ -19,9 +19,10 @@ src/
 │   ├── opengraph-image.tsx  # /opengraph-image (dynamic)
 │   └── twitter-image.tsx    # /twitter-image (dynamic)
 ├── components/          # reusable UI (see docs/claude-components.md)
-│   └── ssh/             # web SSH client UI (client components) — also holds
-│                        #   co-located hooks (use*.ts) + DOM helpers
-│                        #   (download.ts, dropUpload.ts)
+│   └── ssh/             # web SSH client UI (client components), plus:
+│       ├── hooks/       #   co-located hooks (useFileSort, useFileViewMode,
+│       │                #     useSnippets, useTerminalPrefs)
+│       └── dom/         #   DOM helpers (download.ts, dropUpload.ts)
 ├── config/
 │   └── siteConfig.ts    # ★ all env-driven site identity — single source
 ├── lib/                 # pure, DOM-free logic (unit-tested under src/test/)
