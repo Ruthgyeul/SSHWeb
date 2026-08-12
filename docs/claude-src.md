@@ -19,19 +19,32 @@ src/
 │   ├── opengraph-image.tsx  # /opengraph-image (dynamic)
 │   └── twitter-image.tsx    # /twitter-image (dynamic)
 ├── components/          # reusable UI (see docs/claude-components.md)
-│   └── ssh/             # web SSH client UI (client components)
+│   └── ssh/             # web SSH client UI (client components) — also holds
+│                        #   co-located hooks (use*.ts) + DOM helpers
+│                        #   (download.ts, dropUpload.ts)
 ├── config/
 │   └── siteConfig.ts    # ★ all env-driven site identity — single source
-├── lib/
+├── lib/                 # pure, DOM-free logic (unit-tested under src/test/)
 │   ├── theme.ts         # palette as TS tokens (OG image only)
 │   ├── og.tsx           # shared OG/Twitter image renderer
 │   ├── sshProtocol.ts   # web-SSH wire types + pure helpers
 │   ├── serverSecurity.ts # origin check / rate limiter / IP + upload cap (mirrored in server.mjs)
+│   ├── thumbnailCache.ts # thumbnail cache key + LRU-eviction (mirrored in server.mjs)
+│   ├── byteLruCache.ts  # generic byte-bounded TTL LRU (browser preview cache)
 │   ├── bytes.ts         # pure base64 ↔ byte helpers (web-SSH data plane)
-│   └── utils.ts         # cn() classname helper
+│   ├── editorSearch.ts  # find/replace match logic (editor + text preview)
+│   ├── knownHosts.ts    # TOFU known-hosts parse/compare (localStorage)
+│   ├── markdown.ts      # Markdown → sanitized HTML (preview)
+│   ├── subtitles.ts     # sidecar subtitle discovery + SRT→VTT
+│   ├── syntaxHighlight.ts # lightweight syntax highlighting
+│   ├── terminalTheme.ts # terminal color-theme presets
+│   └── utils.ts         # cn() classname helper + toJsonLd
 ├── styles/
 │   └── globals.css      # Tailwind import + @theme palette + terminal utilities
-└── test/                # ★ all Vitest unit tests (*.test.ts), import subjects via "@/…"
+└── test/                # ★ Vitest tests, import subjects via "@/…"
+    ├── *.test.ts        #   unit tests of pure lib logic (`npm test`)
+    ├── *.integration.test.mjs # end-to-end bridge smoke test (`npm run test:integration`)
+    └── helpers/         #   shared test fixtures (e.g. the in-memory ssh2 target)
 ```
 
 ## Rules of thumb
@@ -43,6 +56,10 @@ src/
   The only raw-hex source is `lib/theme.ts`, kept in sync for the OG renderer.
 - **Tests** live under `src/test/` as `*.test.ts` and run under Vitest
   (`node` environment — no DOM). Import the subject via the `@/…` alias (e.g.
-  `@/lib/utils`), not a relative path. Add tests for pure logic in `lib/`.
+  `@/lib/utils`), not a relative path. Add tests for pure logic in `lib/`. The
+  separate end-to-end bridge smoke test (`*.integration.test.mjs`, run via
+  `npm run test:integration`) boots the real `server.mjs` against an in-memory
+  ssh2 target; it's excluded from the fast `npm test` (which globs only
+  `*.test.ts`) so the unit suite never starts a server.
 - **New route** → also register it in `app/sitemap.ts` and export page
   `metadata`.
