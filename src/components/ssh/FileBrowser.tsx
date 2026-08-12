@@ -21,7 +21,18 @@ import {
 } from "@/lib/sshProtocol";
 import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcon";
-import { EyeIcon, FolderOpenIcon, PencilIcon, SearchIcon } from "./icons";
+import {
+  EyeIcon,
+  FolderOpenIcon,
+  GridIcon,
+  ListIcon,
+  PencilIcon,
+  DownloadIcon,
+  RefreshIcon,
+  SearchIcon,
+  UploadIcon,
+  WarningIcon,
+} from "./icons";
 import { collectDroppedFiles, droppedEntries } from "./dropUpload";
 import { useFileViewMode } from "./useFileViewMode";
 import { useFileSort } from "./useFileSort";
@@ -141,7 +152,7 @@ function SortHeader({
  * A grid-tile thumbnail: shows the file-type icon until the tile scrolls into
  * view, then lazily requests the media (once) and swaps in the returned WebP
  * `data:` URL as an `<img>` — the bridge always downscales both photos and
- * video poster frames to WebP, so a tile is always a small image (a ▶ badge
+ * video poster frames to WebP, so a tile is always a small image (a play badge
  * marks video tiles). Non-media / oversized entries just keep showing `fallback`.
  */
 function Thumbnail({
@@ -552,8 +563,9 @@ export function FileBrowser({
           disabled={loading}
           className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
           title="Refresh"
+          aria-label="Refresh"
         >
-          ⟳
+          <RefreshIcon />
         </button>
         <button
           type="button"
@@ -587,8 +599,9 @@ export function FileBrowser({
                 : "text-term-muted hover:text-term-text",
             )}
             title="List view"
+            aria-label="List view"
           >
-            ☰
+            <ListIcon className="h-4 w-4" />
           </button>
           <button
             type="button"
@@ -601,8 +614,9 @@ export function FileBrowser({
                 : "text-term-muted hover:text-term-text",
             )}
             title="Grid view"
+            aria-label="Grid view"
           >
-            ▦
+            <GridIcon className="h-4 w-4" />
           </button>
         </div>
         {/* Sort control — grid view has no column headers to click, so it gets a
@@ -725,7 +739,7 @@ export function FileBrowser({
       {/* Elevated-mode banner: a persistent reminder that actions run as root. */}
       {elevated && (
         <div className="flex items-center gap-2 border-b border-term-yellow/30 bg-term-yellow/10 px-3 py-1.5 text-xs text-term-yellow">
-          <span aria-hidden>⚠</span>
+          <WarningIcon className="h-3.5 w-3.5 flex-none" />
           <span>
             Elevated access: file operations run as <strong>root</strong> via
             sudo.
@@ -1052,9 +1066,7 @@ export function FileBrowser({
       >
         {dragging && (
           <div className="pointer-events-none absolute inset-0 z-10 m-2 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-term-accent bg-term-bg/80 text-sm text-term-accent">
-            <span className="text-3xl" aria-hidden>
-              ↥
-            </span>
+            <UploadIcon className="h-8 w-8" />
             <span>Drop to upload to</span>
             <code className="rounded bg-term-panel px-2 py-0.5 text-xs">
               {cwd}
@@ -1336,8 +1348,9 @@ export function FileBrowser({
                       }
                       className={cn(actionBtn, "hover:text-term-accent")}
                       title={isDir ? "Download as zip" : "Download"}
+                      aria-label={isDir ? "Download as zip" : "Download"}
                     >
-                      ↓
+                      <DownloadIcon className="h-4 w-4" />
                     </button>
                     <button
                       type="button"
@@ -1522,8 +1535,9 @@ export function FileBrowser({
                         }
                         className={cn(actionBtn, "hover:text-term-accent")}
                         title={isDir ? "Download as zip" : "Download"}
+                        aria-label={isDir ? "Download as zip" : "Download"}
                       >
-                        ↓
+                        <DownloadIcon className="h-4 w-4" />
                       </button>
                       <button
                         type="button"

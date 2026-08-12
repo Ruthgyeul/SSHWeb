@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { ErrorScreen } from "@/components/ErrorScreen";
+import { RefreshIcon } from "@/components/ssh/icons";
 
 /**
  * Route-level error boundary (500). Next.js renders this when a runtime error
@@ -42,9 +43,9 @@ export default function Error({
       <div className="pointer-events-none fixed inset-x-0 bottom-8 flex justify-center">
         <button
           onClick={reset}
-          className="pointer-events-auto rounded-md border border-term-border bg-term-panel px-4 py-2.5 text-sm text-term-text hover:border-term-accent hover:text-term-accent"
+          className="pointer-events-auto flex items-center gap-1.5 rounded-md border border-term-border bg-term-panel px-4 py-2.5 text-sm text-term-text hover:border-term-accent hover:text-term-accent"
         >
-          ↻ Try again
+          <RefreshIcon className="h-4 w-4" /> Try again
         </button>
       </div>
     </div>

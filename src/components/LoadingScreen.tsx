@@ -1,5 +1,6 @@
 import { PromptLabel } from "@/components/PromptLabel";
 import { cn } from "@/lib/utils";
+import { CheckIcon } from "@/components/ssh/icons";
 
 /**
  * Shared terminal-styled loading UI. Renders a fake shell session: the command
@@ -47,8 +48,8 @@ export function LoadingScreen({
         {steps.length > 0 && (
           <ul className="mt-4 space-y-1 text-sm leading-7 text-term-muted">
             {steps.map((step) => (
-              <li key={step}>
-                <span className="text-term-green">✓</span>{" "}
+              <li key={step} className="flex items-center gap-2">
+                <CheckIcon className="h-3.5 w-3.5 text-term-green" />
                 <span className="text-term-dim">{step}</span>
               </li>
             ))}

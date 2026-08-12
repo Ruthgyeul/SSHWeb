@@ -1163,7 +1163,7 @@ export function previewKind(name: string): PreviewKind | null {
 
 /**
  * Heuristic: can this filename be shown in the inline preview modal (image,
- * video, or audio)? Used by the file browser to decide the click-to-open/👁
+ * video, or audio)? Used by the file browser to decide the click-to-open
  * action so opening a media file views it in place instead of downloading it.
  */
 export function isProbablyPreviewableFile(name: string): boolean {

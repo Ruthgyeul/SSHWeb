@@ -7,7 +7,7 @@ import { highlightToHtml } from "@/lib/syntaxHighlight";
 import { findMatches, type Match } from "@/lib/editorSearch";
 import { cn } from "@/lib/utils";
 import { FileIcon, iconKindForName, type FileIconKind } from "./FileIcon";
-import { PencilIcon, SearchIcon } from "./icons";
+import { DownloadIcon, PencilIcon, RotateIcon, SearchIcon, WarningIcon } from "./icons";
 
 /** Escape HTML-significant characters so file text is injected as literal text. */
 function escapeHtml(s: string): string {
@@ -60,7 +60,7 @@ const MAX_ZOOM = 8;
 const ZOOM_STEP = 1.4;
 
 /** Pixel count (W×H) above which an image is flagged as very large — decoding
- * one this big can spike memory, so we surface a ⚠ hint next to its dimensions
+ * one this big can spike memory, so we surface a warning hint next to its dimensions
  * rather than silently risk a tab crash. 60 MP ≈ a 8000×7500 photo. */
 const LARGE_IMAGE_PIXELS = 60_000_000;
 
@@ -217,7 +217,7 @@ export function FilePreview({
   // during render) — used to drop the CSS transition so panning tracks 1:1.
   const [dragging, setDragging] = useState(false);
   // Natural pixel dimensions of the loaded image (from `<img onLoad>`), shown as
-  // a WxH chip in the toolbar; also drives the very-large-image ⚠ hint.
+  // a WxH chip in the toolbar; also drives the very-large-image warning hint.
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
   // The <video> element, for keyboard transport controls & resume position.
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -550,10 +550,16 @@ export function FilePreview({
   const banner = (truncated || encodingWarning) && (
     <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-term-border bg-term-panel/60 px-4 py-1.5 text-[11px] text-term-yellow">
       {truncated && (
-        <span>⚠ Showing the first part of a large file — download for the full contents.</span>
+        <span className="flex items-center gap-1.5">
+          <WarningIcon className="h-3.5 w-3.5 flex-none" />
+          Showing the first part of a large file — download for the full contents.
+        </span>
       )}
       {encodingWarning && (
-        <span>⚠ This file may not be UTF-8 — some characters may be garbled.</span>
+        <span className="flex items-center gap-1.5">
+          <WarningIcon className="h-3.5 w-3.5 flex-none" />
+          This file may not be UTF-8 — some characters may be garbled.
+        </span>
       )}
     </div>
   );
@@ -653,7 +659,7 @@ export function FilePreview({
               return (
                 <span
                   className={cn(
-                    "mr-1 text-[11px] tabular-nums",
+                    "mr-1 inline-flex items-center gap-1 text-[11px] tabular-nums",
                     huge ? "text-term-yellow" : "text-term-faint",
                   )}
                   title={
@@ -662,7 +668,7 @@ export function FilePreview({
                       : undefined
                   }
                 >
-                  {huge && "⚠ "}
+                  {huge && <WarningIcon className="h-3 w-3" />}
                   {shown.w}×{shown.h}
                 </span>
               );
@@ -706,10 +712,10 @@ export function FilePreview({
             <button
               type="button"
               onClick={rotate}
-              className={toolBtn}
+              className={cn(toolBtn, "inline-flex items-center")}
               aria-label="Rotate"
             >
-              ⟳
+              <RotateIcon className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
@@ -760,9 +766,9 @@ export function FilePreview({
         <button
           type="button"
           onClick={onDownload}
-          className="rounded border border-term-border px-3 py-1 text-xs text-term-muted hover:text-term-text"
+          className="flex items-center gap-1.5 rounded border border-term-border px-3 py-1 text-xs text-term-muted hover:text-term-text"
         >
-          ↓ Download
+          <DownloadIcon className="h-3.5 w-3.5" /> Download
         </button>
         <button
           type="button"
@@ -957,9 +963,9 @@ export function FilePreview({
               <button
                 type="button"
                 onClick={onDownload}
-                className="rounded border border-term-accent/40 bg-term-accent/10 px-3 py-1.5 text-xs text-term-accent hover:bg-term-accent/20"
+                className="flex items-center gap-1.5 rounded border border-term-accent/40 bg-term-accent/10 px-3 py-1.5 text-xs text-term-accent hover:bg-term-accent/20"
               >
-                ↓ Download to open it locally
+                <DownloadIcon className="h-3.5 w-3.5" /> Download to open it locally
               </button>
             </div>
           )}

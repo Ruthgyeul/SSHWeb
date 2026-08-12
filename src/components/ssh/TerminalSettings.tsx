@@ -11,6 +11,7 @@ import {
   type KnownHostMap,
 } from "@/lib/knownHosts";
 import { cn } from "@/lib/utils";
+import { CheckIcon, SettingsIcon } from "./icons";
 import type { TerminalPrefs } from "./useTerminalPrefs";
 
 /**
@@ -125,7 +126,7 @@ export function TerminalSettings({
         aria-label="Terminal theme"
         aria-expanded={open}
       >
-        ⚙
+        <SettingsIcon className="h-4 w-4" />
       </button>
 
       {open && (
@@ -161,7 +162,7 @@ export function TerminalSettings({
                       />
                     </span>
                     <span className="flex-1 truncate">{preset.label}</span>
-                    {selected && <span aria-hidden>✓</span>}
+                    {selected && <CheckIcon className="h-3.5 w-3.5" />}
                   </button>
                 );
               })}

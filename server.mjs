@@ -779,6 +779,15 @@ function buildSudoSftpCommand(hasPassword, paths = SFTP_SERVER_PATHS) {
 const SFTP_CHAN_WINDOW = 2 * 1024 * 1024;
 const SFTP_CHAN_PACKET = 32 * 1024;
 
+// How long to wait for a `sudo sftp-server` handshake to complete before giving
+// up. A *wrong* sudo password makes `sudo -S` print its error and then block
+// re-reading stdin (which we never send more of / EOF, since a correct password
+// needs the channel kept open for the SFTP protocol) — so without this bound the
+// elevate request would hang forever and the client's sudo button would stay
+// disabled until disconnect. A correct elevation becomes ready near-instantly,
+// so this only ever trips on failure.
+const SUDO_ELEVATE_TIMEOUT_MS = 6000;
+
 /** Largest WebSocket frame to accept, from the upload cap (serverSecurity.ts). */
 function computeMaxPayloadBytes(maxUploadBytes) {
   if (maxUploadBytes <= 0) return 0;
@@ -1631,16 +1640,52 @@ wss.on("connection", (ws, req) => {
     const hasPassword = password !== "";
     const command = buildSudoSftpCommand(hasPassword);
     let settled = false;
+    let channel = null;
+    let timer = null;
     const done = (err, s) => {
       if (settled) return;
       settled = true;
+      if (timer) clearTimeout(timer);
       cb(err, s);
     };
+    // A wrong sudo password leaves `sudo -S` blocked re-reading stdin forever, so
+    // the handshake never completes and no `ready`/`exit`/`error` ever fires.
+    // Bound the wait: on timeout, tear the channel down (its stdin EOF makes the
+    // stuck sudo exit) and report a failure so the client re-enables its button.
+    // A correct elevation becomes ready near-instantly, so this only trips on
+    // failure.
+    timer = setTimeout(() => {
+      try {
+        channel?.end?.();
+      } catch {
+        /* channel already gone */
+      }
+      done(
+        new Error(
+          "Timed out starting sudo (wrong sudo password, or sudoers policy?).",
+        ),
+      );
+    }, SUDO_ELEVATE_TIMEOUT_MS);
+    if (typeof timer.unref === "function") timer.unref();
 
     // Invoked by ssh2 once the channel is confirmed; `chan` is a ready-made SFTP
     // protocol instance because we tag the request with type `sftp`.
     const onChannel = (err, chan) => {
+      // The channel may open *after* the timeout already settled the request. If
+      // so, don't drive the exec/SFTP handshake (which would leave a stray
+      // sudo/sftp-server running) — just close the late channel and bail.
+      if (settled) {
+        if (!err && chan) {
+          try {
+            chan.end?.();
+          } catch {
+            /* channel already gone */
+          }
+        }
+        return;
+      }
       if (err) return done(err);
+      channel = chan;
       // Equivalent of ssh2's reqExec: queue the channel-request reply handler,
       // then send the exec request for our sudo command.
       chan._callbacks.push((hadErr) => {
