@@ -33,3 +33,6 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # End-to-end smoke test of the WS↔SSH bridge. Runs after the build so it
+      # exercises the production server against an in-memory ssh2 target.
+      - run: npm run test:integration
