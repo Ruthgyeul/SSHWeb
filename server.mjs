@@ -2862,6 +2862,47 @@ wss.on("connection", (ws, req) => {
     );
   }
 
+  // Directory listing: resolve the path, read entries, and resolve any
+  // symlink targets. Extracted from the message switch to keep it thin.
+  function handleList(msg) {
+    withSftp((s) => {
+      // Resolve to an absolute path first so the UI breadcrumb is clean and
+      // "." maps to the user's home directory on first load.
+      const requested = msg.path || ".";
+      s.realpath(requested, (rpErr, resolved) => {
+        const dir = rpErr ? requested : resolved;
+        s.readdir(dir, (err, list) => {
+          if (err) return sendError(err.message, "sftp");
+          const entries = list.map((item) => ({
+            name: item.filename,
+            type: toEntryType(item.attrs),
+            size: item.attrs.size || 0,
+            mtime: (item.attrs.mtime || 0) * 1000,
+            mode: (item.attrs.mode || 0) & 0o777,
+          }));
+          // Resolve each symlink's target with `readlink` (no follow — this
+          // only reads link metadata, never the pointed-at file) so the UI
+          // can show `name → target`. Non-links need no extra round-trip.
+          const links = entries.filter((e) => e.type === "link");
+          if (links.length === 0) {
+            return send({ t: "sftp-list", path: dir, entries });
+          }
+          const join = (name) =>
+            (dir.endsWith("/") ? dir : `${dir}/`) + name;
+          let pending = links.length;
+          for (const entry of links) {
+            s.readlink(join(entry.name), (lErr, target) => {
+              if (!lErr && typeof target === "string") entry.target = target;
+              if (--pending === 0) {
+                send({ t: "sftp-list", path: dir, entries });
+              }
+            });
+          }
+        });
+      });
+    });
+  }
+
   ws.on("message", (raw) => {
     let msg;
     try {
@@ -2914,42 +2955,7 @@ wss.on("connection", (ws, req) => {
         break;
 
       case "sftp-list":
-        withSftp((s) => {
-          // Resolve to an absolute path first so the UI breadcrumb is clean and
-          // "." maps to the user's home directory on first load.
-          const requested = msg.path || ".";
-          s.realpath(requested, (rpErr, resolved) => {
-            const dir = rpErr ? requested : resolved;
-            s.readdir(dir, (err, list) => {
-              if (err) return sendError(err.message, "sftp");
-              const entries = list.map((item) => ({
-                name: item.filename,
-                type: toEntryType(item.attrs),
-                size: item.attrs.size || 0,
-                mtime: (item.attrs.mtime || 0) * 1000,
-                mode: (item.attrs.mode || 0) & 0o777,
-              }));
-              // Resolve each symlink's target with `readlink` (no follow — this
-              // only reads link metadata, never the pointed-at file) so the UI
-              // can show `name → target`. Non-links need no extra round-trip.
-              const links = entries.filter((e) => e.type === "link");
-              if (links.length === 0) {
-                return send({ t: "sftp-list", path: dir, entries });
-              }
-              const join = (name) =>
-                (dir.endsWith("/") ? dir : `${dir}/`) + name;
-              let pending = links.length;
-              for (const entry of links) {
-                s.readlink(join(entry.name), (lErr, target) => {
-                  if (!lErr && typeof target === "string") entry.target = target;
-                  if (--pending === 0) {
-                    send({ t: "sftp-list", path: dir, entries });
-                  }
-                });
-              }
-            });
-          });
-        });
+        handleList(msg);
         break;
 
       case "sftp-read":
