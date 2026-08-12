@@ -4,6 +4,8 @@ import {
   nextMatchIndex,
   replaceAll,
   replaceMatch,
+  escapeHtml,
+  buildSearchHtml,
 } from "@/lib/editorSearch";
 
 describe("findMatches", () => {
@@ -93,5 +95,48 @@ describe("replaceAll", () => {
 
   it("honors case sensitivity", () => {
     expect(replaceAll("Aa", "a", "x", true)).toEqual({ text: "Ax", count: 1 });
+  });
+});
+
+describe("escapeHtml", () => {
+  it("escapes the HTML-significant characters &, <, >", () => {
+    expect(escapeHtml("a & b < c > d")).toBe("a &amp; b &lt; c &gt; d");
+  });
+
+  it("leaves plain text untouched", () => {
+    expect(escapeHtml("hello world")).toBe("hello world");
+  });
+
+  it("escapes & before < and > so entities aren't double-escaped", () => {
+    expect(escapeHtml("<")).toBe("&lt;");
+    expect(escapeHtml("&lt;")).toBe("&amp;lt;");
+  });
+});
+
+describe("buildSearchHtml", () => {
+  it("returns fully escaped text when there are no matches", () => {
+    expect(buildSearchHtml("a<b>c", [], 0)).toBe("a&lt;b&gt;c");
+  });
+
+  it("wraps each match in a <mark>, tagging only the active one", () => {
+    // "abab", query "ab" → matches at [0,2) and [2,4); active = index 1.
+    const html = buildSearchHtml("abab", [
+      { start: 0, end: 2 },
+      { start: 2, end: 4 },
+    ], 1);
+    const marks = html.match(/<mark/g) ?? [];
+    expect(marks).toHaveLength(2);
+    expect(html.match(/data-active="true"/g) ?? []).toHaveLength(1);
+    // The active mark carries the highlighted (bg-term-accent) class.
+    expect(html).toContain('class="bg-term-accent text-term-bg" data-active="true"');
+    expect(html).toContain('class="bg-term-accent/30 text-term-text"');
+  });
+
+  it("escapes text inside and around matches", () => {
+    // Match the "<" so the marked slice itself needs escaping.
+    const html = buildSearchHtml("x<y", [{ start: 1, end: 2 }], 0);
+    expect(html).toBe(
+      'x<mark class="bg-term-accent text-term-bg" data-active="true">&lt;</mark>y',
+    );
   });
 });
