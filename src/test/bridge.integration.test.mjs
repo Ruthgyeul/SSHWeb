@@ -245,4 +245,17 @@ describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
     const ok = await client.waitFor((m) => m.t === "sftp-ok" && m.op === "rm");
     expect(ok.path).toBe("/home/testuser/gone.txt");
   });
+
+  it("writes an uploaded chunk and acks with sftp-ok", async () => {
+    // A single-chunk chunked upload (offset 0, final) → open, write, close, ack.
+    client.send({
+      t: "sftp-write",
+      path: "/home/testuser/upload.txt",
+      offset: 0,
+      final: true,
+      dataB64: Buffer.from("uploaded bytes").toString("base64"),
+    });
+    const ok = await client.waitFor((m) => m.t === "sftp-ok" && m.op === "write");
+    expect(ok.path).toBe("/home/testuser/upload.txt");
+  });
 });

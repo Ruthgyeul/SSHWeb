@@ -2903,6 +2903,79 @@ wss.on("connection", (ws, req) => {
     });
   }
 
+  // Write handler: a chunked upload (offset present) or a whole-file write.
+  function handleWrite(msg) {
+    withSftp((s) => {
+      const buffer = Buffer.from(msg.dataB64 || "", "base64");
+      if (typeof msg.offset === "number") {
+        // Chunked upload: open on the first chunk, append (in order) on the
+        // rest, close on the final one — this is what drives progress.
+        handleChunkedWrite(s, msg, buffer);
+      } else {
+        // Whole-file write (inline-edit save / empty-file touch).
+        if (MAX_UPLOAD_BYTES > 0 && buffer.length > MAX_UPLOAD_BYTES) {
+          return sendError(
+            `File too large to save (> ${MAX_UPLOAD_MB} MB).`,
+            "sftp",
+          );
+        }
+        s.writeFile(msg.path, buffer, (err) => {
+          if (err) return sendError(err.message, "sftp");
+          send({ t: "sftp-ok", op: "write", path: msg.path });
+        });
+      }
+    });
+  }
+
+  // Zip up a whole directory and send it as one download.
+  function handleDownloadDir(msg) {
+    withSftp((s) => {
+      collectDirFiles(s, msg.path, (err, files) => {
+        if (err) return sendError(err.message, "sftp");
+        const total = files.reduce((n, f) => n + f.data.length, 0);
+        if (MAX_DOWNLOAD_BYTES > 0 && total > MAX_DOWNLOAD_BYTES) {
+          return sendError(
+            `Folder too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
+            "sftp",
+          );
+        }
+        const zip = buildStoreZip(files);
+        const name = (msg.path.split("/").filter(Boolean).pop() || "download") + ".zip";
+        send({
+          t: "sftp-read",
+          path: msg.path,
+          name,
+          dataB64: zip.toString("base64"),
+        });
+      });
+    });
+  }
+
+  // Zip up a set of selected files and send them as one download.
+  function handleDownloadMany(msg) {
+    withSftp((s) => {
+      const paths = Array.isArray(msg.paths) ? msg.paths.filter(Boolean) : [];
+      if (paths.length === 0) return sendError("Nothing selected.", "sftp");
+      collectPaths(s, paths, (err, files) => {
+        if (err) return sendError(err.message, "sftp");
+        const total = files.reduce((n, f) => n + f.data.length, 0);
+        if (MAX_DOWNLOAD_BYTES > 0 && total > MAX_DOWNLOAD_BYTES) {
+          return sendError(
+            `Selection too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
+            "sftp",
+          );
+        }
+        const zip = buildStoreZip(files);
+        send({
+          t: "sftp-read",
+          path: paths[0],
+          name: "download.zip",
+          dataB64: zip.toString("base64"),
+        });
+      });
+    });
+  }
+
   ws.on("message", (raw) => {
     let msg;
     try {
@@ -2963,26 +3036,7 @@ wss.on("connection", (ws, req) => {
         break;
 
       case "sftp-write":
-        withSftp((s) => {
-          const buffer = Buffer.from(msg.dataB64 || "", "base64");
-          if (typeof msg.offset === "number") {
-            // Chunked upload: open on the first chunk, append (in order) on the
-            // rest, close on the final one — this is what drives progress.
-            handleChunkedWrite(s, msg, buffer);
-          } else {
-            // Whole-file write (inline-edit save / empty-file touch).
-            if (MAX_UPLOAD_BYTES > 0 && buffer.length > MAX_UPLOAD_BYTES) {
-              return sendError(
-                `File too large to save (> ${MAX_UPLOAD_MB} MB).`,
-                "sftp",
-              );
-            }
-            s.writeFile(msg.path, buffer, (err) => {
-              if (err) return sendError(err.message, "sftp");
-              send({ t: "sftp-ok", op: "write", path: msg.path });
-            });
-          }
-        });
+        handleWrite(msg);
         break;
 
       case "sftp-write-resume":
@@ -3052,50 +3106,11 @@ wss.on("connection", (ws, req) => {
         break;
 
       case "sftp-download-dir":
-        withSftp((s) => {
-          collectDirFiles(s, msg.path, (err, files) => {
-            if (err) return sendError(err.message, "sftp");
-            const total = files.reduce((n, f) => n + f.data.length, 0);
-            if (MAX_DOWNLOAD_BYTES > 0 && total > MAX_DOWNLOAD_BYTES) {
-              return sendError(
-                `Folder too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
-                "sftp",
-              );
-            }
-            const zip = buildStoreZip(files);
-            const name = (msg.path.split("/").filter(Boolean).pop() || "download") + ".zip";
-            send({
-              t: "sftp-read",
-              path: msg.path,
-              name,
-              dataB64: zip.toString("base64"),
-            });
-          });
-        });
+        handleDownloadDir(msg);
         break;
 
       case "sftp-download-many":
-        withSftp((s) => {
-          const paths = Array.isArray(msg.paths) ? msg.paths.filter(Boolean) : [];
-          if (paths.length === 0) return sendError("Nothing selected.", "sftp");
-          collectPaths(s, paths, (err, files) => {
-            if (err) return sendError(err.message, "sftp");
-            const total = files.reduce((n, f) => n + f.data.length, 0);
-            if (MAX_DOWNLOAD_BYTES > 0 && total > MAX_DOWNLOAD_BYTES) {
-              return sendError(
-                `Selection too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
-                "sftp",
-              );
-            }
-            const zip = buildStoreZip(files);
-            send({
-              t: "sftp-read",
-              path: paths[0],
-              name: "download.zip",
-              dataB64: zip.toString("base64"),
-            });
-          });
-        });
+        handleDownloadMany(msg);
         break;
 
       case "sftp-sudo":
