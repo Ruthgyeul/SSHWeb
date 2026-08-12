@@ -591,6 +591,11 @@ let activeSessions = 0;
 // Cumulative operational counters surfaced by the health probe (process-wide).
 let totalConnections = 0; // SSH sessions that reached "ready"
 let rejectedConnections = 0; // connection attempts refused (any reason)
+// Refused attempts broken down by reason (bad-origin, unauthorized, rate-limit,
+// at-capacity, host-not-allowed, bad-access-token, …), tallied centrally in
+// logEvent so every reject path is counted uniformly.
+const rejectionsByReason = Object.create(null);
+let sshErrors = 0; // ssh2 connection/auth errors after an accepted upgrade
 let bytesUp = 0; // bytes relayed browser → remote (shell input + uploads)
 let bytesDown = 0; // bytes relayed remote → browser (shell output + downloads)
 // SFTP transfer counters (a subset of bytesUp/bytesDown): file-browser uploads
@@ -624,6 +629,13 @@ const ACCESS_COOKIE_VALUE = ACCESS_TOKEN
  * usernames, passwords and private keys are deliberately never logged.
  */
 function logEvent(event, fields = {}) {
+  // Tally every rejection centrally so no reject path is missed, regardless of
+  // whether structured logging is enabled below.
+  if (event === "reject") {
+    rejectedConnections += 1;
+    const reason = fields.reason || "unknown";
+    rejectionsByReason[reason] = (rejectionsByReason[reason] || 0) + 1;
+  }
   if (LOG_MODE === "off") return;
   process.stdout.write(
     JSON.stringify({ ts: new Date().toISOString(), event, ...fields }) + "\n",
@@ -853,6 +865,12 @@ const server = createServer((req, res) => {
       maxSessions: MAX_SESSIONS,
       totalConnections,
       rejectedConnections,
+      // Failure counters for ops diagnostics: refused upgrades broken down by
+      // reason, plus ssh2 connection/auth errors after an accepted upgrade.
+      errors: {
+        sshErrors,
+        rejections: { ...rejectionsByReason },
+      },
       bytesUp,
       bytesDown,
       // SFTP data-plane volume (a subset of bytesUp/bytesDown), so ops can see
@@ -1095,10 +1113,26 @@ const server = createServer((req, res) => {
           stream.pipe(res);
           return;
         }
-        // No (valid) Range header: a plain 200 with the full length, advertising
-        // range support so a media player immediately switches to ranged reads.
-        // (A `<video>`/`<audio>` element always sends `Range: bytes=0-` first, so
-        // this whole-file path is only hit by direct navigation.)
+        // No (valid) Range header. A `<video>`/`<audio>` element always sends
+        // `Range: bytes=0-` first, so this whole-file path is only hit by direct
+        // navigation. Bound it to the same per-response cap as a ranged read so
+        // one un-ranged request can never pull an unbounded whole file; advertise
+        // the true length (via a 206) so any player switches to ranged reads for
+        // the rest. A file within the cap still gets a plain 200.
+        if (size > STREAM_MAX_CHUNK_BYTES) {
+          const end = STREAM_MAX_CHUNK_BYTES - 1;
+          res.writeHead(206, {
+            ...baseHeaders,
+            "Content-Range": `bytes 0-${end}/${size}`,
+            "Content-Length": STREAM_MAX_CHUNK_BYTES,
+          });
+          if (req.method === "HEAD") return res.end();
+          const capped = s.createReadStream(filePath, { start: 0, end });
+          capped.on("error", () => res.destroy());
+          res.on("close", () => capped.destroy());
+          capped.pipe(res);
+          return;
+        }
         res.writeHead(200, { ...baseHeaders, "Content-Length": size });
         if (req.method === "HEAD") return res.end();
         const stream = s.createReadStream(filePath);
@@ -1147,7 +1181,6 @@ server.on("upgrade", (req, socket, head) => {
     }
     // Enforce the optional access gate before spending a session on the upgrade.
     if (!requestIsAuthorized(req)) {
-      rejectedConnections += 1;
       logEvent("reject", { ip: clientIpFromReq(req), reason: "unauthorized" });
       socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       socket.destroy();
@@ -1969,19 +2002,16 @@ wss.on("connection", (ws, req) => {
       return ws.close();
     }
     if (!isHostAllowed(host)) {
-      rejectedConnections += 1;
       logEvent("reject", { ip: clientIp, host, reason: "host-not-allowed" });
       sendError(`Host not allowed by this server: ${host}`, "auth");
       return ws.close();
     }
     if (!rateLimitAllow(clientIp, Date.now())) {
-      rejectedConnections += 1;
       logEvent("reject", { ip: clientIp, host, reason: "rate-limit" });
       sendError("Too many connection attempts. Please slow down.", "auth");
       return ws.close();
     }
     if (activeSessions >= MAX_SESSIONS) {
-      rejectedConnections += 1;
       logEvent("reject", { ip: clientIp, host, reason: "at-capacity" });
       sendError("Server is at capacity. Try again shortly.", "auth");
       return ws.close();
@@ -2105,6 +2135,7 @@ wss.on("connection", (ws, req) => {
       })
       .on("error", (err) => {
         // ssh2 surfaces auth failures and network errors here.
+        sshErrors += 1;
         send({ t: "status", state: "error", message: err.message });
         sendError(err.message, "auth");
         cleanup();
