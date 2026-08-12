@@ -90,6 +90,12 @@ export const viewport: Viewport = {
   themeColor: THEME_COLOR,
   width: "device-width",
   initialScale: 1,
+  // Draw edge-to-edge so `env(safe-area-inset-*)` (applied via `.safe-area-inset`
+  // on the app shell) can keep content clear of notches / the home indicator.
+  viewportFit: "cover",
+  // Resize the layout when the on-screen keyboard opens so the terminal and its
+  // input stay visible above it instead of being covered on mobile.
+  interactiveWidget: "resizes-content",
 };
 
 /**

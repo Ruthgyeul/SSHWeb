@@ -104,6 +104,19 @@ input:focus-visible,
    Terminal chrome & background utilities
 --------------------------------------------------------------------------- */
 
+/* Keep app content clear of device notches / rounded corners / the home
+   indicator when the viewport is drawn edge-to-edge (viewport-fit=cover, set in
+   the layout's viewport export). `env(safe-area-inset-*)` resolves to 0 on
+   desktops and non-notched screens, so applying this to the full-screen shell
+   is a no-op there and only insets content on devices that actually have safe
+   areas — never a regression on ordinary viewports. */
+.safe-area-inset {
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+}
+
 /* Subtle CRT scanline grid + top glow, applied to a page/section root. */
 .terminal-bg {
   background-color: var(--color-term-bg);
