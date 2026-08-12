@@ -6,6 +6,12 @@ import { renderMarkdown } from "@/lib/markdown";
 import { highlightToHtml } from "@/lib/syntaxHighlight";
 import { findMatches, buildSearchHtml, type Match } from "@/lib/editorSearch";
 import { cn } from "@/lib/utils";
+import {
+  useImageTransform,
+  MIN_ZOOM,
+  MAX_ZOOM,
+  ZOOM_STEP,
+} from "./hooks/useImageTransform";
 import { FileIcon, iconKindForName, type FileIconKind } from "./FileIcon";
 import { DownloadIcon, PencilIcon, RotateIcon, SearchIcon, WarningIcon } from "./icons";
 
@@ -23,10 +29,6 @@ const MODE_ICON_KIND: Record<PreviewMode, FileIconKind> = {
   text: "text",
   unsupported: "file",
 };
-
-const MIN_ZOOM = 1;
-const MAX_ZOOM = 8;
-const ZOOM_STEP = 1.4;
 
 /** Pixel count (W×H) above which an image is flagged as very large — decoding
  * one this big can spike memory, so we surface a warning hint next to its dimensions
@@ -173,18 +175,24 @@ export function FilePreview({
     [kind, text],
   );
 
-  // Image view transform: zoom, rotation (°), and pan offset (px). The parent
-  // remounts this modal on file change (`key={path}`), so these reset to their
-  // initial fitted/upright values automatically when stepping the gallery.
-  const [zoom, setZoom] = useState(1);
-  const [rotation, setRotation] = useState(0);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(
-    null,
-  );
-  // Mirror of "is a pan drag active" for render (the ref itself can't be read
-  // during render) — used to drop the CSS transition so panning tracks 1:1.
-  const [dragging, setDragging] = useState(false);
+  const isImage = kind === "image";
+  // Image view transform: zoom, rotation (°), and pan offset (px), plus the
+  // wheel/pointer-drag handlers that drive them. The parent remounts this modal
+  // on file change (`key={path}`), so these reset to their initial fitted/upright
+  // values automatically when stepping the gallery.
+  const {
+    zoom,
+    rotation,
+    offset,
+    dragging,
+    zoomBy,
+    resetView,
+    rotate,
+    onWheel,
+    onPointerDown,
+    onPointerMove,
+    endDrag,
+  } = useImageTransform(isImage);
   // Natural pixel dimensions of the loaded image (from `<img onLoad>`), shown as
   // a WxH chip in the toolbar; also drives the very-large-image warning hint.
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
@@ -269,21 +277,6 @@ export function FilePreview({
     },
     [matches.length],
   );
-
-  const isImage = kind === "image";
-  const zoomBy = useCallback((factor: number) => {
-    setZoom((z) => {
-      const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z * factor));
-      if (next <= 1) setOffset({ x: 0, y: 0 }); // recenter when back to fit
-      return next;
-    });
-  }, []);
-  const resetView = useCallback(() => {
-    setZoom(1);
-    setRotation(0);
-    setOffset({ x: 0, y: 0 });
-  }, []);
-  const rotate = useCallback(() => setRotation((r) => (r + 90) % 360), []);
 
   // A very large original (past LARGE_IMAGE_PIXELS) is NOT auto-fetched on zoom —
   // decoding one can spike memory / crash the tab, so it loads only on an explicit
@@ -423,27 +416,6 @@ export function FilePreview({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [kind, isImage, isText, findOpen, hasGallery, onPrev, onNext, onClose, zoomBy, resetView, rotate, setSpeed]);
-
-  const onWheel = (e: React.WheelEvent) => {
-    if (!isImage) return;
-    e.preventDefault();
-    zoomBy(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP);
-  };
-  const onPointerDown = (e: React.PointerEvent) => {
-    if (!isImage || zoom <= 1) return;
-    dragRef.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
-    setDragging(true);
-    (e.target as Element).setPointerCapture?.(e.pointerId);
-  };
-  const onPointerMove = (e: React.PointerEvent) => {
-    const d = dragRef.current;
-    if (!d) return;
-    setOffset({ x: d.ox + (e.clientX - d.x), y: d.oy + (e.clientY - d.y) });
-  };
-  const endDrag = () => {
-    dragRef.current = null;
-    setDragging(false);
-  };
 
   const pct =
     total && total > 0
