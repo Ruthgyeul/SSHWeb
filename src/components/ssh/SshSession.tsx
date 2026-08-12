@@ -73,6 +73,7 @@ import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TerminalSettings } from "./TerminalSettings";
 import { SearchIcon } from "./icons";
 import { useTerminalPrefs } from "./hooks/useTerminalPrefs";
+import { useThumbnailQueue } from "./hooks/useThumbnailQueue";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -407,15 +408,11 @@ export function SshSession({
   useEffect(() => {
     thumbnailsRef.current = thumbnails;
   }, [thumbnails]);
-  const requestedThumbsRef = useRef<Set<string>>(new Set());
-  // Paths whose grid tiles are currently in/near the viewport, so `pumpThumbs`
-  // serves visible tiles before ones that have scrolled out of view.
-  const visibleThumbsRef = useRef<Set<string>>(new Set());
-  // Bound how many thumbnail reads are outstanding at once so a directory of
-  // hundreds of images loads the visible tiles first instead of flooding the
-  // bridge with every request the moment they scroll near the viewport.
-  const thumbInFlightRef = useRef(0);
-  const thumbQueueRef = useRef<string[]>([]);
+  // The thumbnail request scheduler (dedupe + concurrency + visible-first) lives
+  // in a co-located hook, unit-tested in isolation. `requestThumbnail` /
+  // `setThumbVisible` are passed to FileBrowser; `onThumbReplied` frees a slot
+  // when a `thumb` reply lands; `resetThumbs` drops the queue on dir change /
+  // sudo toggle / logout. (The hook is instantiated below, once `send` exists.)
   // path → `size:mtime` version tag for the current listing, for cache keys.
   const entryVersionRef = useRef<Map<string, string>>(new Map());
   // Mirrors, for the (bound-once) ws message handler, whether we're elevated
@@ -531,6 +528,13 @@ export function SshSession({
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(encodeMessage(msg));
   }, []);
 
+  const {
+    request: requestThumbnail,
+    setVisible: setThumbVisible,
+    onReplied: onThumbReplied,
+    reset: resetThumbs,
+  } = useThumbnailQueue(send, MAX_INFLIGHT_THUMBS);
+
   const listDir = useCallback(
     (path: string) => {
       setFilesLoading(true);
@@ -538,47 +542,6 @@ export function SshSession({
     },
     [send],
   );
-
-  // Drain the thumbnail queue up to the concurrency limit. Each `thumb` reply
-  // (success, skip, or error — the server always replies) frees a slot and calls
-  // this again, so the queue keeps flowing until it empties. Tiles currently in
-  // (or near) the viewport are served first — so after a fast scroll the visible
-  // tiles paint before the ones that scrolled past — falling back to FIFO order
-  // when nothing queued is visible.
-  const pumpThumbs = useCallback(() => {
-    while (
-      thumbInFlightRef.current < MAX_INFLIGHT_THUMBS &&
-      thumbQueueRef.current.length > 0
-    ) {
-      const q = thumbQueueRef.current;
-      let idx = q.findIndex((p) => visibleThumbsRef.current.has(p));
-      if (idx < 0) idx = 0;
-      const path = q.splice(idx, 1)[0];
-      thumbInFlightRef.current += 1;
-      send({ t: "sftp-read", path, thumb: true });
-    }
-  }, [send]);
-
-  // Lazily fetch a grid thumbnail for `path`, at most once (the ref dedupes so a
-  // tile scrolling in and out never re-requests). The request is queued behind a
-  // concurrency limit; the reply arrives as an `sftp-read` with `thumb: true` and
-  // lands in the in-memory `thumbnails` map (the persistent cache is server-side).
-  const requestThumbnail = useCallback(
-    (path: string) => {
-      if (requestedThumbsRef.current.has(path)) return;
-      requestedThumbsRef.current.add(path);
-      thumbQueueRef.current.push(path);
-      pumpThumbs();
-    },
-    [pumpThumbs],
-  );
-
-  // A grid tile reports whether it's currently in/near the viewport, feeding the
-  // visible-first priority in `pumpThumbs`. Cheap ref mutation (no re-render).
-  const setThumbVisible = useCallback((path: string, visible: boolean) => {
-    if (visible) visibleThumbsRef.current.add(path);
-    else visibleThumbsRef.current.delete(path);
-  }, []);
 
   // "Clear thumbnail cache" (settings): ask the bridge to evict this
   // connection's cached tiles (the cache lives server-side now), then drop the
@@ -611,15 +574,12 @@ export function SshSession({
 
   const clearThumbnails = useCallback(() => {
     send({ t: "thumb-purge" });
-    requestedThumbsRef.current = new Set();
-    visibleThumbsRef.current.clear();
-    thumbQueueRef.current = [];
-    thumbInFlightRef.current = 0;
+    resetThumbs();
     setThumbnails({});
     // Also drop the recently-viewed preview bytes held in this browser, so
     // "clear" empties the whole in-memory media cache, not just grid tiles.
     clearPreviewCache();
-  }, [send, clearPreviewCache]);
+  }, [send, clearPreviewCache, resetThumbs]);
 
   // Cache key for a path: path + its version tag (size:mtime) so an edited file
   // misses and re-fetches. Falls back to the bare path when the version is
@@ -786,10 +746,7 @@ export function SshSession({
           // an image only root could read must not linger after dropping root
           // (nor should a user-visible one be assumed still readable as root).
           // The re-list below re-fetches thumbnails under the new identity.
-          requestedThumbsRef.current = new Set();
-          visibleThumbsRef.current.clear();
-          thumbQueueRef.current = [];
-          thumbInFlightRef.current = 0;
+          resetThumbs();
           setThumbnails({});
           // Drop cached preview bytes too: content only root could read must not
           // linger after de-elevate (and a user-visible file shouldn't be assumed
@@ -804,10 +761,7 @@ export function SshSession({
           // (a plain refresh of the same directory keeps it, so re-listing after
           // a file op doesn't re-fetch every image).
           if (msg.path !== cwdRef.current) {
-            requestedThumbsRef.current = new Set();
-            visibleThumbsRef.current.clear();
-            thumbQueueRef.current = [];
-            thumbInFlightRef.current = 0;
+            resetThumbs();
             setThumbnails({});
           }
           cwdRef.current = msg.path;
@@ -860,8 +814,7 @@ export function SshSession({
           } else if (msg.thumb) {
             // Free the concurrency slot and let the next queued tile go, whether
             // this one produced a thumbnail or not.
-            thumbInFlightRef.current = Math.max(0, thumbInFlightRef.current - 1);
-            pumpThumbs();
+            onThumbReplied();
             // Empty payload = server skipped it (too big / not decodable): keep
             // the generic icon. `requestedThumbsRef` already blocks a re-request.
             if (msg.dataB64) {
@@ -1210,7 +1163,7 @@ export function SshSession({
           break;
       }
     },
-    [listDir, send, notify, pumpThumbs, cachePreview, clearPreviewCache, prefetchNeighbors],
+    [listDir, send, notify, onThumbReplied, resetThumbs, cachePreview, clearPreviewCache, prefetchNeighbors],
   );
 
   // openSocket and scheduleReconnect reference each other; a ref breaks the
@@ -1364,17 +1317,14 @@ export function SshSession({
     // the server keeps its own cache for a future re-login. `setPreview(null)`
     // above already revokes any open preview blob.
     setThumbnails({});
-    requestedThumbsRef.current = new Set();
-    visibleThumbsRef.current.clear();
-    thumbQueueRef.current = [];
-    thumbInFlightRef.current = 0;
+    resetThumbs();
     setHasLast(false);
     ctrlRef.current = false;
     altRef.current = false;
     setCtrlArmed(false);
     setAltArmed(false);
     xtermRef.current?.clear();
-  }, [send]);
+  }, [send, resetThumbs]);
 
   // Look for a sidecar subtitle (`clip.srt` / `clip.en.vtt`) next to an opening
   // video and, if found, read it so the modal can attach it as a WebVTT track.
