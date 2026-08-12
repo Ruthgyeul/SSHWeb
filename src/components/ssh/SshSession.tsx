@@ -35,6 +35,7 @@ import {
 import { getThemePreset } from "@/lib/terminalTheme";
 import { fileVersionTag } from "@/lib/thumbnailCache";
 import { ByteLruCache } from "@/lib/byteLruCache";
+import { planReconnect } from "@/lib/reconnect";
 import {
   KNOWN_HOSTS_KEY,
   parseKnownHosts,
@@ -1218,21 +1219,20 @@ export function SshSession({
   const openSocketRef = useRef<((details: ConnectDetails) => void) | null>(null);
 
   const scheduleReconnect = useCallback(() => {
-    const next = attemptRef.current + 1;
-    if (next > MAX_RECONNECT || !lastDetailsRef.current) {
+    const plan = planReconnect(attemptRef.current, MAX_RECONNECT);
+    if (!plan.reconnect || !lastDetailsRef.current) {
       reconnectingRef.current = false;
       setStatus("dropped");
       setStatusMessage("Connection lost.");
       return;
     }
-    attemptRef.current = next;
+    attemptRef.current = plan.attempt;
     reconnectingRef.current = true;
     setStatus("reconnecting");
-    setStatusMessage(`Reconnecting… (attempt ${next}/${MAX_RECONNECT})`);
-    const delay = Math.min(1000 * 2 ** (next - 1), 8000);
+    setStatusMessage(`Reconnecting… (attempt ${plan.attempt}/${MAX_RECONNECT})`);
     reconnectTimerRef.current = window.setTimeout(() => {
       if (lastDetailsRef.current) openSocketRef.current?.(lastDetailsRef.current);
-    }, delay);
+    }, plan.delayMs);
   }, []);
 
   // Open a socket and start the handshake. Used for both the first connect and
