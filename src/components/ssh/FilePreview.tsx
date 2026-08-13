@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PreviewContentKind } from "@/lib/sshProtocol";
 import { renderMarkdown } from "@/lib/markdown";
 import { highlightToHtml } from "@/lib/syntaxHighlight";
-import { findMatches, buildSearchHtml, type Match } from "@/lib/editorSearch";
 import { cn } from "@/lib/utils";
 import {
   useImageTransform,
@@ -12,6 +11,7 @@ import {
   MAX_ZOOM,
   ZOOM_STEP,
 } from "./hooks/useImageTransform";
+import { useTextFind } from "./hooks/useTextFind";
 import { FileIcon, iconKindForName, type FileIconKind } from "./FileIcon";
 import { DownloadIcon, PencilIcon, RotateIcon, SearchIcon, WarningIcon } from "./icons";
 
@@ -230,35 +230,25 @@ export function FilePreview({
     activeThumbRef.current?.scrollIntoView({ block: "nearest", inline: "center" });
   }, [path]);
 
-  // Text-preview view options: soft-wrap long lines, and an in-modal find bar.
+  const isText = kind === "text";
+  // Text-preview view options: soft-wrap long lines, and an in-modal find bar
+  // (open/query/case + derived matches state owned by `useTextFind`).
   const [wrap, setWrap] = useState(false);
-  const [findOpen, setFindOpen] = useState(false);
-  const [findQuery, setFindQuery] = useState("");
-  const [findCase, setFindCase] = useState(false);
-  const [findActive, setFindActive] = useState(0);
+  const {
+    open: findOpen,
+    setOpen: setFindOpen,
+    query: findQuery,
+    setQuery: setFindQuery,
+    matchCase: findCase,
+    toggleCase: toggleFindCase,
+    matches,
+    activeIdx,
+    searchHtml,
+    searching,
+    step: stepMatch,
+  } = useTextFind(text ?? "", isText);
   const findInputRef = useRef<HTMLInputElement | null>(null);
   const textPaneRef = useRef<HTMLDivElement | null>(null);
-
-  const isText = kind === "text";
-  // Matches for the find bar (only while it's open with a query).
-  const matches = useMemo<Match[]>(
-    () =>
-      isText && findOpen && findQuery
-        ? findMatches(text ?? "", findQuery, findCase)
-        : [],
-    [isText, findOpen, findQuery, findCase, text],
-  );
-  // Clamp the active index whenever the match set changes.
-  const activeIdx = matches.length ? findActive % matches.length : 0;
-  // Escaped text with matches marked, used in place of syntax highlighting while
-  // searching so the highlight can be layered on and stepped through.
-  const searchHtml = useMemo(
-    () =>
-      isText && findOpen && findQuery
-        ? buildSearchHtml(text ?? "", matches, activeIdx)
-        : "",
-    [isText, findOpen, findQuery, text, matches, activeIdx],
-  );
   // Scroll the active match into view as the user steps through results.
   useEffect(() => {
     if (!findOpen || matches.length === 0) return;
@@ -266,17 +256,6 @@ export function FilePreview({
       ?.querySelector("[data-active]")
       ?.scrollIntoView({ block: "center" });
   }, [findOpen, activeIdx, matches.length]);
-
-  const stepMatch = useCallback(
-    (dir: 1 | -1) => {
-      setFindActive((a) => {
-        const n = matches.length;
-        if (n === 0) return 0;
-        return (a + dir + n) % n;
-      });
-    },
-    [matches.length],
-  );
 
   // A very large original (past LARGE_IMAGE_PIXELS) is NOT auto-fetched on zoom —
   // decoding one can spike memory / crash the tab, so it loads only on an explicit
@@ -415,7 +394,7 @@ export function FilePreview({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [kind, isImage, isText, findOpen, hasGallery, onPrev, onNext, onClose, zoomBy, resetView, rotate, setSpeed]);
+  }, [kind, isImage, isText, findOpen, setFindOpen, hasGallery, onPrev, onNext, onClose, zoomBy, resetView, rotate, setSpeed]);
 
   const pct =
     total && total > 0
@@ -511,10 +490,7 @@ export function FilePreview({
       <input
         ref={findInputRef}
         value={findQuery}
-        onChange={(e) => {
-          setFindQuery(e.target.value);
-          setFindActive(0);
-        }}
+        onChange={(e) => setFindQuery(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -554,7 +530,7 @@ export function FilePreview({
       </button>
       <button
         type="button"
-        onClick={() => setFindCase((c) => !c)}
+        onClick={toggleFindCase}
         className={cn(toolBtn, findCase && "text-term-accent")}
         aria-pressed={findCase}
         title="Match case"
@@ -785,7 +761,7 @@ export function FilePreview({
                       wrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto whitespace-pre",
                     )}
                     dangerouslySetInnerHTML={{
-                      __html: findOpen && findQuery ? searchHtml : codeHtml,
+                      __html: searching ? searchHtml : codeHtml,
                     }}
                   />
                 )}
