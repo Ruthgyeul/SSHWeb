@@ -45,9 +45,15 @@ The terminal also has a built-in **scrollback search** bar (Ctrl/Cmd+F, `@xterm/
 Alongside the components, a few small **DOM helper modules** in `ssh/dom/` keep
 the big components lean: `download.ts` (`triggerDownload` — save bytes as a file)
 and `dropUpload.ts` (`droppedEntries` + `collectDroppedFiles` — walk a dropped
-folder tree into relative-path files). Co-located hooks live in `ssh/hooks/`
-(`useFileSort`, `useFileViewMode`, `useSnippets`, `useTerminalPrefs`). Pure,
-DOM-free helpers stay in `src/lib`
+folder tree into relative-path files). Co-located hooks live in `ssh/hooks/`:
+the file-browser view hooks (`useFileSort`, `useFileViewMode`, `useSnippets`,
+`useTerminalPrefs`), the `SshSession` data-plane/lifecycle hooks
+(`useThumbnailQueue`, `useUploadQueue`, and the socket lifecycle —
+`useReconnect` for the auto-reconnect state machine + `useSshSocket` for the
+bridge WebSocket), and the `FilePreview` modal hooks (`useImageTransform`,
+`useTextFind`, `usePreviewKeyboard`) — each unit-tested via `renderHook`. The
+`FilePreview` view JSX is split into `ssh/preview/` components (`PreviewMedia`,
+`PreviewFilmstrip`). Pure, DOM-free helpers stay in `src/lib`
 instead — the base64 ↔ byte codec used across the wire is `src/lib/bytes.ts`
 (unit-tested in `bytes.test.ts`).
 

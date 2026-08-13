@@ -21,7 +21,10 @@ src/
 ├── components/          # reusable UI (see docs/claude-components.md)
 │   └── ssh/             # web SSH client UI (client components), plus:
 │       ├── hooks/       #   co-located hooks (useFileSort, useFileViewMode,
-│       │                #     useSnippets, useTerminalPrefs)
+│       │                #     useSnippets, useTerminalPrefs, useThumbnailQueue,
+│       │                #     useUploadQueue, useReconnect, useSshSocket,
+│       │                #     useImageTransform, useTextFind, usePreviewKeyboard)
+│       ├── preview/     #   FilePreview view components (PreviewMedia, PreviewFilmstrip)
 │       └── dom/         #   DOM helpers (download.ts, dropUpload.ts)
 ├── config/
 │   └── siteConfig.ts    # ★ all env-driven site identity — single source
