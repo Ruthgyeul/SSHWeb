@@ -12,6 +12,7 @@ import {
   ZOOM_STEP,
 } from "./hooks/useImageTransform";
 import { useTextFind } from "./hooks/useTextFind";
+import { usePreviewKeyboard } from "./hooks/usePreviewKeyboard";
 import { FileIcon, iconKindForName, type FileIconKind } from "./FileIcon";
 import { DownloadIcon, PencilIcon, RotateIcon, SearchIcon, WarningIcon } from "./icons";
 
@@ -269,132 +270,25 @@ export function FilePreview({
     if (optimized && isImage && zoom > 1 && !originalIsHuge) requestOriginal();
   }, [optimized, isImage, zoom, originalIsHuge, requestOriginal]);
 
-  // Keyboard: Esc closes, ←/→ walk the gallery, image transforms, and Ctrl/⌘+F
-  // opens the text find bar.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const typing =
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement;
-      // Ctrl/⌘+F opens (and focuses) the find bar for a text preview.
-      if (isText && (e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
-        e.preventDefault();
-        setFindOpen(true);
-        requestAnimationFrame(() => findInputRef.current?.focus());
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        // Esc dismisses the find bar first, only then the whole modal.
-        if (findOpen) {
-          setFindOpen(false);
-          return;
-        }
-        onClose();
-        return;
-      }
-      // While typing in the find input, leave the rest of the keys to it.
-      if (typing) return;
-      // Shift+←/→ always steps the gallery, on every kind — including video/audio,
-      // where the plain arrows are reserved for seeking. Lets the keyboard step
-      // through a folder of clips without reaching for the on-screen ‹ › buttons.
-      if (hasGallery && e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-        e.preventDefault();
-        (e.key === "ArrowLeft" ? onPrev : onNext)?.();
-        return;
-      }
-      // Let a focused <video>/<audio> keep its own arrow-key seeking; gallery
-      // stepping for those is via Shift+←/→ (above) or the on-screen ‹ › buttons.
-      const mediaFocused =
-        kind === "video" || kind === "audio";
-      if (!mediaFocused && hasGallery && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-        e.preventDefault();
-        (e.key === "ArrowLeft" ? onPrev : onNext)?.();
-        return;
-      }
-      // Video transport controls (Space/k play-pause, ←/→ or j/l seek ±5s,
-      // ↑/↓ volume, m mute, f fullscreen). Gallery stepping for video is on the
-      // ‹ › buttons instead, so the arrows are free to seek here.
-      if (kind === "video" && videoRef.current) {
-        const v = videoRef.current;
-        switch (e.key) {
-          case " ":
-          case "k":
-            e.preventDefault();
-            if (v.paused) void v.play();
-            else v.pause();
-            return;
-          case "ArrowLeft":
-          case "j":
-            e.preventDefault();
-            v.currentTime = Math.max(0, v.currentTime - 5);
-            return;
-          case "ArrowRight":
-          case "l":
-            e.preventDefault();
-            v.currentTime = Math.min(v.duration || Infinity, v.currentTime + 5);
-            return;
-          case "ArrowUp":
-            e.preventDefault();
-            v.volume = Math.min(1, v.volume + 0.1);
-            return;
-          case "ArrowDown":
-            e.preventDefault();
-            v.volume = Math.max(0, v.volume - 0.1);
-            return;
-          case "m":
-          case "M":
-            e.preventDefault();
-            v.muted = !v.muted;
-            return;
-          case "f":
-          case "F":
-            e.preventDefault();
-            if (document.fullscreenElement) void document.exitFullscreen();
-            else void v.requestFullscreen?.();
-            return;
-          case "]":
-          case ">":
-            e.preventDefault(); // speed up
-            setSpeed(v.playbackRate + 0.25);
-            return;
-          case "[":
-          case "<":
-            e.preventDefault(); // slow down
-            setSpeed(v.playbackRate - 0.25);
-            return;
-          case ".":
-            e.preventDefault(); // step one frame forward
-            v.pause();
-            v.currentTime = v.currentTime + 1 / 30;
-            return;
-          case ",":
-            e.preventDefault(); // step one frame back
-            v.pause();
-            v.currentTime = Math.max(0, v.currentTime - 1 / 30);
-            return;
-          default:
-            return;
-        }
-      }
-      if (!isImage) return;
-      if (e.key === "+" || e.key === "=") {
-        e.preventDefault();
-        zoomBy(ZOOM_STEP);
-      } else if (e.key === "-" || e.key === "_") {
-        e.preventDefault();
-        zoomBy(1 / ZOOM_STEP);
-      } else if (e.key === "0") {
-        e.preventDefault();
-        resetView();
-      } else if (e.key === "r" || e.key === "R") {
-        e.preventDefault();
-        rotate();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [kind, isImage, isText, findOpen, setFindOpen, hasGallery, onPrev, onNext, onClose, zoomBy, resetView, rotate, setSpeed]);
+  // Keyboard: Esc closes, ←/→ walk the gallery, video transport, image
+  // transforms, and Ctrl/⌘+F opens the text find bar (see usePreviewKeyboard).
+  usePreviewKeyboard({
+    kind,
+    isImage,
+    isText,
+    findOpen,
+    hasGallery,
+    videoRef,
+    findInputRef,
+    setFindOpen,
+    onClose,
+    onPrev,
+    onNext,
+    zoomBy,
+    resetView,
+    rotate,
+    setSpeed,
+  });
 
   const pct =
     total && total > 0
