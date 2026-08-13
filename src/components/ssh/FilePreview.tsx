@@ -13,7 +13,9 @@ import {
 } from "./hooks/useImageTransform";
 import { useTextFind } from "./hooks/useTextFind";
 import { usePreviewKeyboard } from "./hooks/usePreviewKeyboard";
-import { FileIcon, iconKindForName, type FileIconKind } from "./FileIcon";
+import { PreviewMedia } from "./preview/PreviewMedia";
+import { PreviewFilmstrip } from "./preview/PreviewFilmstrip";
+import { FileIcon, type FileIconKind } from "./FileIcon";
 import { DownloadIcon, PencilIcon, RotateIcon, SearchIcon, WarningIcon } from "./icons";
 
 /** What the preview modal can show: a content kind, a read-only `text` view
@@ -181,19 +183,10 @@ export function FilePreview({
   // wheel/pointer-drag handlers that drive them. The parent remounts this modal
   // on file change (`key={path}`), so these reset to their initial fitted/upright
   // values automatically when stepping the gallery.
-  const {
-    zoom,
-    rotation,
-    offset,
-    dragging,
-    zoomBy,
-    resetView,
-    rotate,
-    onWheel,
-    onPointerDown,
-    onPointerMove,
-    endDrag,
-  } = useImageTransform(isImage);
+  const transform = useImageTransform(isImage);
+  // The parent still reads these for the toolbar/keyboard; the pointer/wheel
+  // handlers travel to PreviewMedia via the whole `transform` object.
+  const { zoom, rotation, offset, zoomBy, resetView, rotate } = transform;
   // Natural pixel dimensions of the loaded image (from `<img onLoad>`), shown as
   // a WxH chip in the toolbar; also drives the very-large-image warning hint.
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
@@ -664,160 +657,40 @@ export function FilePreview({
           </div>
         </>
       ) : (
-      <div
-        className="relative min-h-0 flex-1 overflow-hidden bg-term-bg"
-        onWheel={onWheel}
-      >
-        <div className="absolute inset-0 flex items-center justify-center p-4">
-          {loading && spinner}
-          {galleryArrows}
-          {kind === "video" ? (
-            videoSrc ? (
-              <>
-                {rate !== 1 && (
-                  <span className="absolute right-3 top-3 z-20 rounded bg-term-panel/80 px-1.5 py-0.5 text-[11px] tabular-nums text-term-muted">
-                    {rate}×
-                  </span>
-                )}
-                <video
-                  ref={videoRef}
-                  src={videoSrc}
-                  controls
-                  playsInline
-                  // Only fetch enough to show the first frame + duration until the
-                  // user hits play — a range-streamed clip then pulls ranges on
-                  // demand instead of buffering ahead.
-                  preload="metadata"
-                  // The cached grid poster frame shows instantly (no black flash)
-                  // while the stream initializes.
-                  poster={placeholder}
-                  onLoadedMetadata={(e) => {
-                    const v = e.currentTarget;
-                    v.playbackRate = rate;
-                    // Resume from the last position (if within the clip).
-                    const start = getStartTime?.() ?? 0;
-                    if (start > 0 && start < v.duration) {
-                      v.currentTime = start;
-                    }
-                  }}
-                  onError={() => {
-                    // A codec the browser can't decode: retry via the bridge
-                    // transcode (progressive MP4) if we haven't already.
-                    if (videoFallbackSrc && !usingFallback) setUsingFallback(true);
-                  }}
-                  onTimeUpdate={(e) => onTime?.(e.currentTarget.currentTime)}
-                  className="max-h-full max-w-full"
-                >
-                  {subtitleSrc && (
-                    <track
-                      default
-                      kind="subtitles"
-                      src={subtitleSrc}
-                      label={subtitleTrackLabel ?? "Subtitles"}
-                    />
-                  )}
-                  Your browser cannot play this video.
-                </video>
-              </>
-            ) : null
-          ) : kind === "audio" ? (
-            src ? (
-              <audio src={src} controls className="w-full max-w-md">
-                Your browser cannot play this audio.
-              </audio>
-            ) : null
-          ) : kind === "image" ? (
-            src || placeholder ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={src || placeholder}
-                alt={name}
-                draggable={false}
-                onLoad={(e) => {
-                  // Only record real dimensions from the full image, not the
-                  // low-res placeholder painted while loading.
-                  if (!src) return;
-                  const el = e.currentTarget;
-                  if (el.naturalWidth && el.naturalHeight) {
-                    setDims({ w: el.naturalWidth, h: el.naturalHeight });
-                  }
-                }}
-                onDoubleClick={() => (zoom > 1 ? resetView() : zoomBy(ZOOM_STEP * 1.5))}
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={endDrag}
-                onPointerCancel={endDrag}
-                className={cn(
-                  "max-h-full max-w-full object-contain",
-                  loading && !src && "blur-md", // blur the low-res placeholder
-                  zoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in",
-                  !dragging && "transition-transform",
-                )}
-                style={{
-                  transform: `translate(${offset.x}px, ${offset.y}px) scale(${
-                    loading && !src ? 0.95 : zoom
-                  }) rotate(${rotation}deg)`,
-                  // Honour the JPEG's embedded EXIF orientation so phone photos
-                  // that record a rotation flag show upright, not sideways.
-                  imageOrientation: "from-image",
-                  // Checkerboard so transparent PNGs stay legible.
-                  backgroundImage:
-                    "conic-gradient(#ffffff10 25%, transparent 0 50%, #ffffff10 0 75%, transparent 0)",
-                  backgroundSize: "16px 16px",
-                }}
-              />
-            ) : null
-          ) : (
-            <div className="flex flex-col items-center gap-3 text-center text-term-muted">
-              <FileIcon kind="file" className="h-12 w-12 opacity-60" />
-              <p className="text-sm">This file type can’t be previewed inline.</p>
-              <button
-                type="button"
-                onClick={onDownload}
-                className="flex items-center gap-1.5 rounded border border-term-accent/40 bg-term-accent/10 px-3 py-1.5 text-xs text-term-accent hover:bg-term-accent/20"
-              >
-                <DownloadIcon className="h-3.5 w-3.5" /> Download to open it locally
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
+        <PreviewMedia
+          kind={kind}
+          name={name}
+          src={src}
+          placeholder={placeholder}
+          loading={loading}
+          spinner={spinner}
+          galleryArrows={galleryArrows}
+          transform={transform}
+          onImageLoad={setDims}
+          onDownload={onDownload}
+          videoRef={videoRef}
+          video={{
+            src: videoSrc,
+            rate,
+            subtitleSrc,
+            subtitleTrackLabel,
+            getStartTime,
+            onTime,
+            onError: () => {
+              // A codec the browser can't decode: retry via the bridge
+              // transcode (progressive MP4) if we haven't already.
+              if (videoFallbackSrc && !usingFallback) setUsingFallback(true);
+            },
+          }}
+        />
       )}
       {filmstrip && filmstrip.length > 1 && (
-        <div className="flex shrink-0 gap-1.5 overflow-x-auto border-t border-term-border bg-term-panel/90 px-3 py-2">
-          {filmstrip.map((f) => {
-            const activeTile = f.path === path;
-            return (
-              <button
-                key={f.path}
-                ref={activeTile ? activeThumbRef : undefined}
-                type="button"
-                onClick={() => onJump?.(f.path)}
-                title={f.name}
-                aria-current={activeTile}
-                className={cn(
-                  "h-12 w-12 shrink-0 overflow-hidden rounded border",
-                  activeTile
-                    ? "border-term-accent"
-                    : "border-term-border opacity-60 hover:opacity-100",
-                )}
-              >
-                {f.thumb ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={f.thumb}
-                    alt={f.name}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <span className="flex h-full w-full items-center justify-center text-term-muted">
-                    <FileIcon kind={iconKindForName(f.name)} className="h-5 w-5" />
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
+        <PreviewFilmstrip
+          entries={filmstrip}
+          activePath={path}
+          activeRef={activeThumbRef}
+          onJump={onJump}
+        />
       )}
     </div>
   );
