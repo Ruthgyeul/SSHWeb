@@ -16,7 +16,6 @@ import {
   joinPath,
   modeToOctal,
   parentPath,
-  parseMessage,
   parseOctalMode,
   sniffMediaKind,
   suggestCopyName,
@@ -42,7 +41,7 @@ import {
   type KnownHostMap,
 } from "@/lib/knownHosts";
 import { resumeUploadStart } from "@/lib/serverSecurity";
-import { SITE_NAME, SSH_WS_PATH } from "@/config/siteConfig";
+import { SITE_NAME } from "@/config/siteConfig";
 import { base64ToBytes, bytesToBase64, concatBytes } from "@/lib/bytes";
 import { cn } from "@/lib/utils";
 import { triggerDownload } from "./dom/download";
@@ -75,6 +74,7 @@ import { useTerminalPrefs } from "./hooks/useTerminalPrefs";
 import { useThumbnailQueue } from "./hooks/useThumbnailQueue";
 import { useUploadQueue, type UploadJob } from "./hooks/useUploadQueue";
 import { useReconnect } from "./hooks/useReconnect";
+import { useSshSocket } from "./hooks/useSshSocket";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -1178,68 +1178,40 @@ export function SshSession({
     [listDir, send, notify, onThumbReplied, resetThumbs, enqueueUpload, cachePreview, clearPreviewCache, prefetchNeighbors, reconnect],
   );
 
-  // openSocket and the reconnect timer reference each other; a ref breaks the
-  // cycle (the backoff timer retries via the latest openSocket through this ref).
-  const openSocketRef = useRef<((details: ConnectDetails) => void) | null>(null);
-
-  // Schedule the next auto-reconnect attempt (or give up), retrying via the
-  // latest openSocket only while we still hold connection details.
-  const scheduleReconnect = useCallback(() => {
-    reconnect.schedule(() => {
-      if (lastDetailsRef.current) openSocketRef.current?.(lastDetailsRef.current);
-    }, !!lastDetailsRef.current);
-  }, [reconnect]);
-
-  // Open a socket and start the handshake. Used for both the first connect and
-  // each auto-reconnect attempt; `connect` (below) wraps it with fresh state.
-  const openSocket = useCallback(
+  // Send the `connect` handshake once the socket opens (with the current
+  // terminal size). Passed to useSshSocket as its onOpen.
+  const sendConnect = useCallback(
     (details: ConnectDetails) => {
-      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(
-        `${scheme}://${window.location.host}${SSH_WS_PATH}`,
-      );
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        const size = xtermRef.current?.fit() ?? { cols: 80, rows: 24 };
-        send({
-          t: "connect",
-          host: details.host,
-          port: details.port,
-          username: details.username,
-          password: details.password,
-          privateKey: details.privateKey,
-          passphrase: details.passphrase,
-          cols: size.cols,
-          rows: size.rows,
-        });
-      };
-      ws.onmessage = (event) => {
-        const msg = parseMessage<ServerMessage>(String(event.data));
-        if (msg) handleServerMessage(msg);
-      };
-      ws.onclose = () => {
-        wsRef.current = null;
-        if (userClosedRef.current) return; // disconnect() owns the state
-        if (reconnect.beginReconnectAfterDrop()) {
-          // A live session dropped — try to bring it back.
-          scheduleReconnect();
-        } else {
-          // Never reached "connected" → auth/host failure; don't loop.
-          setStatus("error");
-        }
-      };
-      ws.onerror = () => {
-        setStatusMessage("WebSocket error — is the SSH bridge running?");
-      };
+      const size = xtermRef.current?.fit() ?? { cols: 80, rows: 24 };
+      send({
+        t: "connect",
+        host: details.host,
+        port: details.port,
+        username: details.username,
+        password: details.password,
+        privateKey: details.privateKey,
+        passphrase: details.passphrase,
+        cols: size.cols,
+        rows: size.rows,
+      });
     },
-    [handleServerMessage, send, scheduleReconnect, reconnect],
+    [send],
   );
 
-  // Keep the ref pointing at the latest openSocket for scheduleReconnect.
-  useEffect(() => {
-    openSocketRef.current = openSocket;
-  }, [openSocket]);
+  // The bridge WebSocket lifecycle: open + handler wiring + reconnect-on-drop.
+  // The socket hook keeps no session state — it calls back in for the handshake,
+  // messages, and the hard-failure / transport-error statuses.
+  const { openSocket } = useSshSocket({
+    wsRef,
+    reconnect,
+    userClosedRef,
+    lastDetailsRef,
+    onMessage: handleServerMessage,
+    onOpen: sendConnect,
+    onNeverConnected: () => setStatus("error"),
+    onSocketError: () =>
+      setStatusMessage("WebSocket error — is the SSH bridge running?"),
+  });
 
   // Fresh, user-initiated connect: reset all reconnection state.
   const connect = useCallback(
