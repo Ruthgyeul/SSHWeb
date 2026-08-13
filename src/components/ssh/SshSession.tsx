@@ -35,7 +35,6 @@ import {
 import { getThemePreset } from "@/lib/terminalTheme";
 import { fileVersionTag } from "@/lib/thumbnailCache";
 import { ByteLruCache } from "@/lib/byteLruCache";
-import { planReconnect } from "@/lib/reconnect";
 import {
   KNOWN_HOSTS_KEY,
   parseKnownHosts,
@@ -75,6 +74,7 @@ import { SearchIcon } from "./icons";
 import { useTerminalPrefs } from "./hooks/useTerminalPrefs";
 import { useThumbnailQueue } from "./hooks/useThumbnailQueue";
 import { useUploadQueue, type UploadJob } from "./hooks/useUploadQueue";
+import { useReconnect } from "./hooks/useReconnect";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -524,10 +524,19 @@ export function SshSession({
   // Reconnection bookkeeping (refs so the ws close handler sees fresh values).
   const lastDetailsRef = useRef<ConnectDetails | null>(null);
   const userClosedRef = useRef(false);
-  const wasConnectedRef = useRef(false);
-  const reconnectingRef = useRef(false);
-  const attemptRef = useRef(0);
-  const reconnectTimerRef = useRef<number | null>(null);
+  // The attempt counter, in-flight/was-connected flags, and backoff timer live
+  // in useReconnect; this hook decides whether/when to retry a dropped socket.
+  const reconnect = useReconnect({
+    max: MAX_RECONNECT,
+    onReconnecting: (attempt, max) => {
+      setStatus("reconnecting");
+      setStatusMessage(`Reconnecting… (attempt ${attempt}/${max})`);
+    },
+    onGaveUp: () => {
+      setStatus("dropped");
+      setStatusMessage("Connection lost.");
+    },
+  });
 
   const send = useCallback((msg: Parameters<typeof encodeMessage>[0]) => {
     const ws = wsRef.current;
@@ -676,9 +685,7 @@ export function SshSession({
       switch (msg.t) {
         case "status":
           if (msg.state === "connected") {
-            wasConnectedRef.current = true;
-            reconnectingRef.current = false;
-            attemptRef.current = 0;
+            reconnect.markConnected();
             setStatus("connected");
             setConnectedAt((at) => at ?? Date.now());
             setStatusMessage("");
@@ -1168,30 +1175,20 @@ export function SshSession({
           break;
       }
     },
-    [listDir, send, notify, onThumbReplied, resetThumbs, enqueueUpload, cachePreview, clearPreviewCache, prefetchNeighbors],
+    [listDir, send, notify, onThumbReplied, resetThumbs, enqueueUpload, cachePreview, clearPreviewCache, prefetchNeighbors, reconnect],
   );
 
-  // openSocket and scheduleReconnect reference each other; a ref breaks the
-  // cycle (openSocket calls scheduleReconnect directly; scheduleReconnect calls
-  // the latest openSocket via the ref).
+  // openSocket and the reconnect timer reference each other; a ref breaks the
+  // cycle (the backoff timer retries via the latest openSocket through this ref).
   const openSocketRef = useRef<((details: ConnectDetails) => void) | null>(null);
 
+  // Schedule the next auto-reconnect attempt (or give up), retrying via the
+  // latest openSocket only while we still hold connection details.
   const scheduleReconnect = useCallback(() => {
-    const plan = planReconnect(attemptRef.current, MAX_RECONNECT);
-    if (!plan.reconnect || !lastDetailsRef.current) {
-      reconnectingRef.current = false;
-      setStatus("dropped");
-      setStatusMessage("Connection lost.");
-      return;
-    }
-    attemptRef.current = plan.attempt;
-    reconnectingRef.current = true;
-    setStatus("reconnecting");
-    setStatusMessage(`Reconnecting… (attempt ${plan.attempt}/${MAX_RECONNECT})`);
-    reconnectTimerRef.current = window.setTimeout(() => {
+    reconnect.schedule(() => {
       if (lastDetailsRef.current) openSocketRef.current?.(lastDetailsRef.current);
-    }, plan.delayMs);
-  }, []);
+    }, !!lastDetailsRef.current);
+  }, [reconnect]);
 
   // Open a socket and start the handshake. Used for both the first connect and
   // each auto-reconnect attempt; `connect` (below) wraps it with fresh state.
@@ -1224,9 +1221,8 @@ export function SshSession({
       ws.onclose = () => {
         wsRef.current = null;
         if (userClosedRef.current) return; // disconnect() owns the state
-        if (wasConnectedRef.current || reconnectingRef.current) {
+        if (reconnect.beginReconnectAfterDrop()) {
           // A live session dropped — try to bring it back.
-          wasConnectedRef.current = false;
           scheduleReconnect();
         } else {
           // Never reached "connected" → auth/host failure; don't loop.
@@ -1237,7 +1233,7 @@ export function SshSession({
         setStatusMessage("WebSocket error — is the SSH bridge running?");
       };
     },
-    [handleServerMessage, send, scheduleReconnect],
+    [handleServerMessage, send, scheduleReconnect, reconnect],
   );
 
   // Keep the ref pointing at the latest openSocket for scheduleReconnect.
@@ -1248,13 +1244,10 @@ export function SshSession({
   // Fresh, user-initiated connect: reset all reconnection state.
   const connect = useCallback(
     (details: ConnectDetails) => {
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      reconnect.resetForConnect();
       lastDetailsRef.current = details;
       setHasLast(true);
       userClosedRef.current = false;
-      wasConnectedRef.current = false;
-      reconnectingRef.current = false;
-      attemptRef.current = 0;
       setStatus("connecting");
       setStatusMessage("");
       setAuthPrompt(null);
@@ -1263,19 +1256,18 @@ export function SshSession({
       setTarget({ user: details.username, host: details.host });
       openSocket(details);
     },
-    [openSocket],
+    [openSocket, reconnect],
   );
 
   const reconnectNow = useCallback(() => {
     if (!lastDetailsRef.current) return;
-    attemptRef.current = 0;
+    reconnect.resetAttempts();
     connect(lastDetailsRef.current);
-  }, [connect]);
+  }, [connect, reconnect]);
 
   const disconnect = useCallback(() => {
     userClosedRef.current = true;
-    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-    reconnectingRef.current = false;
+    reconnect.cancelPending();
     send({ t: "disconnect" });
     wsRef.current?.close();
     wsRef.current = null;
@@ -1328,7 +1320,7 @@ export function SshSession({
     setCtrlArmed(false);
     setAltArmed(false);
     xtermRef.current?.clear();
-  }, [send, resetThumbs, resetUploads]);
+  }, [send, resetThumbs, resetUploads, reconnect]);
 
   // Look for a sidecar subtitle (`clip.srt` / `clip.en.vtt`) next to an opening
   // video and, if found, read it so the modal can attach it as a WebVTT track.
@@ -1536,10 +1528,10 @@ export function SshSession({
   useEffect(
     () => () => {
       userClosedRef.current = true;
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      reconnect.cancelPending();
       wsRef.current?.close();
     },
-    [],
+    [reconnect],
   );
 
   const connected = status === "connected";
