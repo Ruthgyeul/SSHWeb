@@ -193,9 +193,17 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   health probe at `GET /api/health` (session counts, cumulative shell bytes, an
   `sftp` block of file-transfer volume — completed uploads/downloads + bytes —
   and a `thumbnails` block of WebP tiles served/skipped + bytes plus the
-  server-side cache's hits/entries/bytes, and a `transcodes` block of live video
-  transcodes + the per-process ceiling), and shuts down
-  gracefully (drains sessions on SIGTERM/SIGINT). Grid thumbnails are **always** served as a tiny WebP and
+  server-side cache's hits/entries/bytes, a `transcodes` block of live video
+  transcodes + the per-process ceiling, and a `limits` block of the
+  thumbnail/search concurrency limiters' active/queued/max), and shuts down
+  gracefully (drains sessions on SIGTERM/SIGINT). Expensive client-triggered
+  work is concurrency-capped process-wide so a burst can't exhaust the shared
+  process: grid thumbnails (`SSH_MAX_THUMBNAIL_JOBS`, each reads a whole file +
+  sharp/ffmpeg) and recursive find/grep searches (`SSH_MAX_SEARCH_JOBS`, grep
+  scans file contents) run through a small async limiter (pure logic in
+  `src/lib/concurrencyLimiter.ts`, unit-tested, hand-mirrored in `server.mjs`)
+  that queues the rest and sheds load past a bounded queue (a skipped thumbnail
+  keeps its icon; a shed search replies empty+truncated). Grid thumbnails are **always** served as a tiny WebP and
   nothing else: images are downscaled in-memory with `sharp`
   (`THUMBNAIL_PIXELS`, mirrored from `sshProtocol.ts`) before being sent — the
   original file is only read, never modified — and video tiles get a poster
