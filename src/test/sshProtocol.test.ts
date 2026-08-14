@@ -25,7 +25,6 @@ import {
   THUMBNAIL_MAX_BYTES,
   THUMBNAIL_VIDEO_MAX_BYTES,
   joinPath,
-  forwardLabel,
   previewKind,
   sniffMediaKind,
   videoMimeType,
@@ -44,7 +43,6 @@ import {
   EDITOR_WARN_BYTES,
   suggestCopyName,
   validateConnectInput,
-  validateForward,
   type FileEntry,
 } from "@/lib/sshProtocol";
 
@@ -108,107 +106,6 @@ describe("validateConnectInput", () => {
       privateKey: "",
     });
     expect(errors).toContain("A private key is required.");
-  });
-});
-
-describe("validateForward", () => {
-  const base = {
-    kind: "local" as const,
-    bindHost: "127.0.0.1",
-    bindPort: 8080,
-    destHost: "db.internal",
-    destPort: 5432,
-  };
-
-  it("accepts a complete forward", () => {
-    expect(validateForward(base)).toEqual([]);
-  });
-
-  it("flags out-of-range ports and a missing destination host", () => {
-    const errors = validateForward({
-      ...base,
-      bindPort: 0,
-      destHost: "  ",
-      destPort: 70000,
-    });
-    expect(errors).toHaveLength(3);
-  });
-
-  it("rejects non-numeric ports", () => {
-    expect(validateForward({ ...base, bindPort: "abc" })).toContain(
-      "Local port must be an integer between 1 and 65535.",
-    );
-  });
-
-  it("labels the port error 'Remote port' for a remote forward", () => {
-    expect(
-      validateForward({ ...base, kind: "remote", bindPort: 0 }),
-    ).toContain("Remote port must be an integer between 1 and 65535.");
-  });
-
-  it("only requires a listen port for a dynamic (SOCKS) forward", () => {
-    expect(
-      validateForward({
-        kind: "dynamic",
-        bindHost: "127.0.0.1",
-        bindPort: 1080,
-        destHost: "",
-        destPort: "",
-      }),
-    ).toEqual([]);
-    expect(
-      validateForward({
-        kind: "dynamic",
-        bindHost: "127.0.0.1",
-        bindPort: 0,
-        destHost: "",
-        destPort: "",
-      }),
-    ).toHaveLength(1);
-  });
-});
-
-describe("forwardLabel", () => {
-  it("renders a bind→dest label, normalizing loopback to localhost", () => {
-    expect(
-      forwardLabel({
-        kind: "local",
-        bindHost: "127.0.0.1",
-        bindPort: 8080,
-        destHost: "db",
-        destPort: 5432,
-      }),
-    ).toBe("localhost:8080 → db:5432");
-    expect(
-      forwardLabel({
-        kind: "local",
-        bindHost: "0.0.0.0",
-        bindPort: 80,
-        destHost: "web",
-        destPort: 8080,
-      }),
-    ).toBe("0.0.0.0:80 → web:8080");
-  });
-
-  it("labels remote and dynamic forwards distinctly", () => {
-    expect(
-      forwardLabel({
-        kind: "remote",
-        bindHost: "127.0.0.1",
-        bindPort: 9000,
-        destHost: "localhost",
-        destPort: 3000,
-      }),
-    ).toBe("remote localhost:9000 → localhost:3000");
-    expect(
-      forwardLabel({
-        kind: "dynamic",
-        bindHost: "127.0.0.1",
-        bindPort: 1080,
-        destHost: "",
-        destPort: 0,
-      }),
-    ).toBe("SOCKS localhost:1080");
   });
 });
 

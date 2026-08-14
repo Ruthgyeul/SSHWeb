@@ -209,28 +209,6 @@ export type ClientMessage =
   // Download several selected entries (files and/or directories) as a single
   // (store-only) zip archive. The server replies with a one-shot `sftp-read`.
   | { t: "sftp-download-many"; paths: string[] }
-  // Open a port-forward. `kind` selects the direction:
-  //   • "local"   (`ssh -L`): the bridge listens on `bindHost:bindPort` and
-  //     tunnels each accepted TCP connection to `destHost:destPort` *through the
-  //     SSH session* (reached from the SSH server's network).
-  //   • "remote"  (`ssh -R`): the SSH *server* listens on `bindHost:bindPort`
-  //     and each connection there is tunnelled back to `destHost:destPort`
-  //     reached from the bridge.
-  //   • "dynamic" (`ssh -D`): the bridge runs a SOCKS5 proxy on
-  //     `bindHost:bindPort`; each SOCKS request is tunnelled through the session
-  //     to the address the client asked for (`destHost`/`destPort` unused).
-  // `id` is a client-generated handle the two ends use to correlate status.
-  | {
-      t: "forward-open";
-      id: string;
-      kind: ForwardKind;
-      bindHost: string;
-      bindPort: number;
-      destHost: string;
-      destPort: number;
-    }
-  // Tear down a previously opened forward and close its listener.
-  | { t: "forward-close"; id: string }
   // Evict this connection's cached grid thumbnails from the bridge's in-memory
   // cache (the settings "Clear thumbnail cache" action). Drops both the
   // login-user and elevated (`#root`) entries for this `user@host`.
@@ -360,23 +338,6 @@ export type ServerMessage =
   // A failure to gain elevation is reported separately as an `error` (scope
   // `sftp`) and leaves the session unelevated.
   | { t: "sftp-sudo"; enabled: boolean }
-  // A port-forward that is now listening (echoes the resolved kind/bind/
-  // destination so the UI can show exactly what was opened).
-  | {
-      t: "forward-opened";
-      id: string;
-      kind: ForwardKind;
-      bindHost: string;
-      bindPort: number;
-      destHost: string;
-      destPort: number;
-    }
-  // A forward's listener has been torn down (by the user or on disconnect).
-  | { t: "forward-closed"; id: string }
-  // A forward could not be opened, or failed while running.
-  | { t: "forward-error"; id: string; message: string }
-  // Live count of connections currently tunnelled through a forward.
-  | { t: "forward-conn"; id: string; count: number }
   | { t: "error"; message: string; scope?: "sftp" | "shell" | "auth" };
 
 /* ------------------------------------------------------------------ */
@@ -447,70 +408,6 @@ export function validateConnectInput(input: ConnectInput): string[] {
   }
 
   return errors;
-}
-
-/** Direction of a port-forward: local (`-L`), remote (`-R`), or SOCKS (`-D`). */
-export type ForwardKind = "local" | "remote" | "dynamic";
-
-/** A port-forward request, as gathered from the tunnels form. */
-export interface ForwardInput {
-  /** Which direction of forward to open. */
-  kind: ForwardKind;
-  /** Address the listener binds to (the bridge for local/dynamic, the SSH
-   * server for remote); defaults to loopback in the UI. */
-  bindHost: string;
-  bindPort: number | string;
-  /** Destination host — reached from the SSH server (local) or from the bridge
-   * (remote). Unused for `dynamic` (SOCKS picks the target per connection). */
-  destHost: string;
-  destPort: number | string;
-}
-
-/** Validate a port number is an integer in the 1–65535 range. */
-function isValidPort(value: number | string): boolean {
-  const n = Number(value);
-  return Number.isInteger(n) && n >= 1 && n <= 65535;
-}
-
-/**
- * Validate a port-forward form. Returns human-readable errors; an empty array
- * means the input is ready to send. Kept pure so the tunnels form and its tests
- * share one rule set. A `dynamic` (SOCKS) forward needs only a listen port; the
- * others also need a destination. The server enforces its own bind-safety
- * policy on top of this (see `isForwardBindAllowed` in `serverSecurity.ts`).
- */
-export function validateForward(input: ForwardInput): string[] {
-  const errors: string[] = [];
-  const portLabel = input.kind === "remote" ? "Remote port" : "Local port";
-  if (!isValidPort(input.bindPort)) {
-    errors.push(`${portLabel} must be an integer between 1 and 65535.`);
-  }
-  if (input.kind !== "dynamic") {
-    if (!input.destHost || input.destHost.trim() === "") {
-      errors.push("Destination host is required.");
-    }
-    if (!isValidPort(input.destPort)) {
-      errors.push("Destination port must be an integer between 1 and 65535.");
-    }
-  }
-  return errors;
-}
-
-/** Compact label for a forward chip, varying by direction. */
-export function forwardLabel(f: {
-  kind: ForwardKind;
-  bindHost: string;
-  bindPort: number;
-  destHost: string;
-  destPort: number;
-}): string {
-  const bind =
-    f.bindHost && f.bindHost !== "127.0.0.1" ? f.bindHost : "localhost";
-  if (f.kind === "dynamic") return `SOCKS ${bind}:${f.bindPort}`;
-  if (f.kind === "remote") {
-    return `remote ${bind}:${f.bindPort} → ${f.destHost}:${f.destPort}`;
-  }
-  return `${bind}:${f.bindPort} → ${f.destHost}:${f.destPort}`;
 }
 
 /**

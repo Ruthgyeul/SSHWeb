@@ -25,8 +25,6 @@ all from a web page. Built with **Next.js** and a terminal-styled design system.
   download as a zip
 - **Multi-file inline editor** — open several remote files at once as **tabs**,
   each with its own edit buffer, **find/replace**, and an unsaved-changes guard
-- **Local port forwarding** (`ssh -L`) — tunnel a local port to a host reachable
-  from the SSH server (opt-in; loopback-only by default)
 - **Manage trusted host keys** — the gear popover lists the host keys you've
   accepted (trust-on-first-use) and lets you forget any of them
 - **WebSocket ↔ SSH bridge** — a custom Node server (`server.mjs`) relays the
@@ -78,7 +76,7 @@ and is read from `NEXT_PUBLIC_*` environment variables. Copy `.env.example` to
 The SSH bridge has its own (server-only) settings — `SSH_ALLOWED_HOSTS`,
 `SSH_MAX_SESSIONS`, `SSH_MAX_DOWNLOAD_MB`, `SSH_MAX_UPLOAD_MB`,
 `SSH_RATE_LIMIT_MAX`, `SSH_ALLOWED_ORIGINS`, `SSH_ACCESS_TOKEN`,
-`SSH_ALLOW_PORT_FORWARD`, `NEXT_PUBLIC_SSH_WS_PATH` — covered under
+`NEXT_PUBLIC_SSH_WS_PATH` — covered under
 [Security](#security). See [`.env.example`](.env.example) for the full,
 commented list.
 
@@ -170,9 +168,6 @@ mirrors the same message names.
   itself: when set, the browser must present it (a one-time prompt, exchanged for
   an HttpOnly cookie at `POST /api/access`) before any WebSocket upgrade is
   accepted. The raw token is never stored in the cookie or logged.
-- **Local port forwarding is opt-in** (**`SSH_ALLOW_PORT_FORWARD`**) and binds to
-  loopback only unless **`SSH_FORWARD_ALLOW_PUBLIC_BIND`** is set, so a tunnel is
-  reachable from the relay host and nowhere else by default.
 
 > Run it behind HTTPS/TLS in production so credentials and session bytes travel
 > over `wss://`, and keep the allowlist tight if the deployment is public.
