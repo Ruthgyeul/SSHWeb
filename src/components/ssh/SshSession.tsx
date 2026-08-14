@@ -61,7 +61,6 @@ import {
   type SearchMode,
 } from "./FileBrowser";
 import { FileEditor, type EditorFile } from "./FileEditor";
-import { Tunnels, type ForwardState, type NewForward } from "./Tunnels";
 import { FilePreview, type PreviewMode } from "./FilePreview";
 import { PasteConfirm } from "./PasteConfirm";
 import { PromptDialog, type DialogRequest } from "./PromptDialog";
@@ -282,7 +281,7 @@ export interface SessionMeta {
 export type { SessionStatus };
 export { StatusDot };
 
-type Tab = "terminal" | "files" | "tunnels";
+type Tab = "terminal" | "files";
 
 /** How many times to auto-reconnect a dropped session before giving up. */
 const MAX_RECONNECT = 3;
@@ -419,8 +418,6 @@ export function SshSession({
   // Mirrors, for the (bound-once) ws message handler, whether we're elevated
   // (root): elevated in-memory caches are dropped on `sudo` toggle and logout.
   const elevatedRef = useRef(false);
-  // Active local port-forwards, keyed by their client-generated id.
-  const [forwards, setForwards] = useState<Record<string, ForwardState>>({});
   const [uploads, setUploads] = useState<Record<string, UploadItem>>({});
   const [downloads, setDownloads] = useState<Record<string, DownloadItem>>({});
   // Accumulated download chunks (bytes), keyed by remote path. A ref so pushing
@@ -1091,50 +1088,6 @@ export function SshSession({
           listDir(cwdRef.current);
           break;
 
-        case "forward-opened":
-          setForwards((f) => ({
-            ...f,
-            [msg.id]: {
-              id: msg.id,
-              kind: msg.kind,
-              bindHost: msg.bindHost,
-              bindPort: msg.bindPort,
-              destHost: msg.destHost,
-              destPort: msg.destPort,
-              status: "open",
-              conns: f[msg.id]?.conns ?? 0,
-            },
-          }));
-          break;
-
-        case "forward-closed":
-          setForwards((f) => {
-            const rest = { ...f };
-            delete rest[msg.id];
-            return rest;
-          });
-          break;
-
-        case "forward-error":
-          notify("error", `Port forward failed: ${msg.message}`);
-          setForwards((f) => {
-            const cur = f[msg.id];
-            if (!cur) return f; // error for a forward we already dropped
-            return {
-              ...f,
-              [msg.id]: { ...cur, status: "error", error: msg.message },
-            };
-          });
-          break;
-
-        case "forward-conn":
-          setForwards((f) => {
-            const cur = f[msg.id];
-            if (!cur) return f;
-            return { ...f, [msg.id]: { ...cur, conns: msg.count } };
-          });
-          break;
-
         case "error":
           if (msg.scope === "sftp") {
             // SFTP errors only happen while connected, where the overlay's
@@ -1256,7 +1209,6 @@ export function SshSession({
     setActiveEditor(null);
     setSavingPath(null);
     editorSaveTextRef.current = {};
-    setForwards({});
     setPreview(null);
     setPastePending(null);
     setDialog(null);
@@ -2078,28 +2030,6 @@ export function SshSession({
     setActiveEditor(null);
   };
 
-  // --- Port-forward actions ---
-  const openForward = (nf: NewForward) => {
-    const id =
-      globalThis.crypto?.randomUUID?.() ??
-      `fwd-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    // Optimistic "opening" entry so the tunnel shows immediately; forward-opened
-    // / forward-error will resolve its status.
-    setForwards((f) => ({
-      ...f,
-      [id]: { id, ...nf, status: "opening", conns: 0 },
-    }));
-    send({ t: "forward-open", id, ...nf });
-  };
-  const closeForward = (id: string) => {
-    send({ t: "forward-close", id });
-    setForwards((f) => {
-      const rest = { ...f };
-      delete rest[id];
-      return rest;
-    });
-  };
-
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-term-border bg-term-card">
       {/* Session header */}
@@ -2165,10 +2095,10 @@ export function SshSession({
               />
             </div>
 
-            {/* Tab switcher — one segmented control so the three tabs read as a
+            {/* Tab switcher — one segmented control so the tabs read as a
                 single unit and stay together when the header wraps. */}
             <div className="inline-flex overflow-hidden rounded-md border border-term-border">
-              {(["terminal", "files", "tunnels"] as const).map((t) => (
+              {(["terminal", "files"] as const).map((t) => (
                 <button
                   key={t}
                   type="button"
@@ -2382,16 +2312,6 @@ export function SshSession({
                 }}
               />
             )}
-          </div>
-        )}
-
-        {connected && tab === "tunnels" && (
-          <div className="absolute inset-0 bg-term-bg">
-            <Tunnels
-              forwards={Object.values(forwards)}
-              onOpen={openForward}
-              onClose={closeForward}
-            />
           </div>
         )}
 
