@@ -222,6 +222,46 @@ describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
     );
   });
 
+  it("streams a store-only ZIP for a multi-file download", async () => {
+    client.send({ t: "sftp-download-many", paths: [MOCK_FILE_PATH] });
+    const begin = await client.waitFor(
+      (m) => m.t === "sftp-download-begin" && m.name === "download.zip",
+    );
+    const key = begin.path;
+    await client.waitFor(
+      (m) => m.t === "sftp-download-end" && m.path === key,
+    );
+    // Reassemble the archive from the streamed chunk frames (inbox order).
+    const zip = Buffer.concat(
+      client.inbox
+        .filter((m) => m.t === "sftp-download-chunk" && m.path === key)
+        .map((m) => Buffer.from(m.dataB64, "base64")),
+    );
+
+    // End-of-central-directory sits in the last 22 bytes (no comment).
+    const end = zip.length - 22;
+    expect(zip.readUInt32LE(end)).toBe(0x06054b50);
+    expect(zip.readUInt16LE(end + 10)).toBe(1); // one entry
+    const centralOffset = zip.readUInt32LE(end + 16);
+
+    // Central-directory record → name, size, local-header offset.
+    expect(zip.readUInt32LE(centralOffset)).toBe(0x02014b50);
+    const size = zip.readUInt32LE(centralOffset + 20);
+    const nameLen = zip.readUInt16LE(centralOffset + 28);
+    const localOffset = zip.readUInt32LE(centralOffset + 42);
+    expect(
+      zip.subarray(centralOffset + 46, centralOffset + 46 + nameLen).toString(),
+    ).toBe("readme.txt");
+
+    // The stored data round-trips, and a data descriptor follows it.
+    expect(zip.readUInt32LE(localOffset)).toBe(0x04034b50);
+    const dataStart = localOffset + 30 + nameLen;
+    expect(zip.subarray(dataStart, dataStart + size).toString()).toBe(
+      MOCK_FILE_CONTENT,
+    );
+    expect(zip.readUInt32LE(dataStart + size)).toBe(0x08074b50);
+  });
+
   it("acknowledges mkdir with sftp-ok", async () => {
     client.send({ t: "sftp-mkdir", path: "/home/testuser/newdir" });
     const ok = await client.waitFor((m) => m.t === "sftp-ok" && m.op === "mkdir");
