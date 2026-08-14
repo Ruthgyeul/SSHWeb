@@ -52,10 +52,20 @@ function persist(next: ConnectionProfile[]) {
   }
 }
 
+let idCounter = 0;
+
+/** A unique id for a profile list entry (a plain list key, not a secret). Uses
+ * Web Crypto so there's no insecure-randomness sink; falls back to a
+ * timestamp+counter only when Web Crypto is entirely unavailable. */
 function makeId(): string {
-  return typeof crypto !== "undefined" && crypto.randomUUID
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  if (typeof crypto !== "undefined") {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    if (crypto.getRandomValues) {
+      const b = crypto.getRandomValues(new Uint8Array(16));
+      return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+    }
+  }
+  return `${Date.now()}-${idCounter++}`;
 }
 
 /**
