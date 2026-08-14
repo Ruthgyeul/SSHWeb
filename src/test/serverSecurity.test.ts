@@ -6,6 +6,7 @@ import {
   clientIpFromHeaders,
   computeMaxPayloadBytes,
   DEFAULT_SFTP_SERVER_PATHS,
+  isBlockedPrivateHost,
   isIdleExpired,
   isSecureRequest,
   isWebSocketOriginAllowed,
@@ -374,5 +375,51 @@ describe("buildSudoSftpCommand", () => {
     // The password travels on stdin, not in the command; the builder only takes
     // a boolean, so a secret can never leak into the argv it produces.
     expect(buildSudoSftpCommand(true)).not.toMatch(/hunter2|password/i);
+  });
+});
+
+describe("isBlockedPrivateHost", () => {
+  it("blocks the cloud-metadata endpoint and link-local range", () => {
+    expect(isBlockedPrivateHost("169.254.169.254")).toBe(true);
+    expect(isBlockedPrivateHost("169.254.0.1")).toBe(true);
+  });
+
+  it("blocks loopback, private and shared IPv4 ranges", () => {
+    for (const ip of [
+      "127.0.0.1",
+      "127.1.2.3",
+      "10.0.0.5",
+      "172.16.0.1",
+      "172.31.255.255",
+      "192.168.1.1",
+      "100.64.0.1",
+      "0.0.0.0",
+    ]) {
+      expect(isBlockedPrivateHost(ip), ip).toBe(true);
+    }
+  });
+
+  it("blocks the localhost name and IPv6 loopback/ULA/link-local", () => {
+    expect(isBlockedPrivateHost("localhost")).toBe(true);
+    expect(isBlockedPrivateHost("db.localhost")).toBe(true);
+    expect(isBlockedPrivateHost("::1")).toBe(true);
+    expect(isBlockedPrivateHost("[::1]")).toBe(true);
+    expect(isBlockedPrivateHost("fe80::1%eth0")).toBe(true);
+    expect(isBlockedPrivateHost("fd00::1234")).toBe(true);
+    expect(isBlockedPrivateHost("::ffff:169.254.169.254")).toBe(true);
+  });
+
+  it("allows public IPs and hostnames", () => {
+    for (const host of [
+      "203.0.113.10",
+      "8.8.8.8",
+      "172.32.0.1", // just outside 172.16/12
+      "192.169.0.1", // just outside 192.168/16
+      "example.com",
+      "ssh.example.org",
+      "2606:4700:4700::1111", // public IPv6 (Cloudflare)
+    ]) {
+      expect(isBlockedPrivateHost(host), host).toBe(false);
+    }
   });
 });
