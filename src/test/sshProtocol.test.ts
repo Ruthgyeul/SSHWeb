@@ -33,6 +33,7 @@ import {
   pathSegments,
   parseAllowlist,
   parseMessage,
+  isValidClientMessage,
   parseOctalMode,
   sortEntries,
   sortEntriesBy,
@@ -60,6 +61,66 @@ describe("encode/parse", () => {
     expect(parseMessage('{"foo":1}')).toBeNull();
     expect(parseMessage("42")).toBeNull();
     expect(parseMessage("null")).toBeNull();
+  });
+});
+
+describe("isValidClientMessage", () => {
+  it("accepts a well-formed message of a known type", () => {
+    expect(isValidClientMessage({ t: "sftp-list", path: "/home" })).toBe(true);
+    expect(
+      isValidClientMessage({
+        t: "connect",
+        host: "h",
+        port: 22,
+        username: "u",
+        cols: 80,
+        rows: 24,
+      }),
+    ).toBe(true);
+    expect(
+      isValidClientMessage({ t: "sftp-rename", from: "/a", to: "/b" }),
+    ).toBe(true);
+    expect(
+      isValidClientMessage({ t: "kbd-response", responses: ["1234"] }),
+    ).toBe(true);
+  });
+
+  it("accepts messages that have no required fields", () => {
+    expect(isValidClientMessage({ t: "disconnect" })).toBe(true);
+    expect(isValidClientMessage({ t: "thumb-purge" })).toBe(true);
+  });
+
+  it("passes through unknown types (the dispatcher drops them)", () => {
+    expect(isValidClientMessage({ t: "not-a-real-type" })).toBe(true);
+  });
+
+  it("rejects a known type missing a required field", () => {
+    // The classic crash vector: an sftp-read with no `path` would throw inside
+    // an async SFTP callback and take the shared process down.
+    expect(isValidClientMessage({ t: "sftp-read" })).toBe(false);
+    expect(isValidClientMessage({ t: "sftp-rename", from: "/a" })).toBe(false);
+    expect(isValidClientMessage({ t: "sftp-download-many" })).toBe(false);
+  });
+
+  it("rejects a required field of the wrong type", () => {
+    expect(isValidClientMessage({ t: "sftp-list", path: 5 })).toBe(false);
+    expect(isValidClientMessage({ t: "sftp-chmod", path: "/f", mode: "755" })).toBe(
+      false,
+    );
+    expect(isValidClientMessage({ t: "ping", ts: "now" })).toBe(false);
+    expect(
+      isValidClientMessage({ t: "hostkey-response", accept: "yes" }),
+    ).toBe(false);
+  });
+
+  it("rejects a non-finite number and a non-string array element", () => {
+    expect(isValidClientMessage({ t: "ping", ts: NaN })).toBe(false);
+    expect(
+      isValidClientMessage({ t: "sftp-download-many", paths: ["/a", 2] }),
+    ).toBe(false);
+    expect(
+      isValidClientMessage({ t: "kbd-response", responses: "1234" }),
+    ).toBe(false);
   });
 });
 
