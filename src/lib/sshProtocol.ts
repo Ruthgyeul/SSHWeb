@@ -970,7 +970,12 @@ const TRANSCODE_VIDEO_MIME: Record<string, string> = {
   mpg: "video/mpeg",
   mpeg: "video/mpeg",
   m2v: "video/mpeg",
-  ts: "video/mp2t",
+  // NB: `.ts` is deliberately NOT here. It's overwhelmingly TypeScript source in
+  // this (developer-facing) tool, and treating it as an MPEG transport-stream
+  // video sent every `foo.ts` to the video preview/transcode instead of the code
+  // editor. A genuine MPEG-TS clip named `.ts` now opens in the text editor
+  // (with the usual non-UTF-8 warning) rather than as video — an accepted
+  // trade-off. The unambiguous AVCHD extensions `.mts`/`.m2ts` stay as video.
   mts: "video/mp2t",
   m2ts: "video/mp2t",
   vob: "video/mpeg",
