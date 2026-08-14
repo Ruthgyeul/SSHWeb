@@ -563,6 +563,20 @@ const ALLOWED_ORIGINS = (process.env.SSH_ALLOWED_ORIGINS || "")
   .filter(Boolean);
 // Drop a socket that connects but never sends a `connect` message.
 const CONNECT_GRACE_MS = 30_000;
+// Bound the SSH handshake, including the time spent waiting for the user to
+// respond to an interactive prompt — accepting a host key (TOFU) or entering a
+// 2FA / keyboard-interactive code. Used both as ssh2's `readyTimeout` and as an
+// independent reaper on the pending prompt waiters, so a browser that opens a
+// prompt and never answers can't hold a session slot open. The old hard-coded
+// 20s `readyTimeout` also cut off users who simply took a few extra seconds on
+// 2FA; 60s is a more forgiving default. 0 keeps the ssh2 default and disables
+// the independent reaper.
+const HANDSHAKE_TIMEOUT_MS = (() => {
+  const raw = process.env.SSH_HANDSHAKE_TIMEOUT_MS;
+  if (raw === undefined) return 60_000;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 60_000;
+})();
 // Auto-close a session after this many ms of no shell/SFTP activity. Latency
 // pings don't count as activity, so a truly idle terminal still times out.
 // 0 (the default) disables the idle timeout entirely.
@@ -1581,6 +1595,42 @@ wss.on("connection", (ws, req) => {
   // Pending handshake callbacks that wait on a round-trip to the browser.
   let pendingHostVerify = null; // (accept: boolean) => void
   let pendingKbdFinish = null; // (responses: string[]) => void
+  // Independent reaper for whichever handshake prompt is currently awaiting the
+  // user (host-key confirmation or a 2FA / keyboard-interactive answer). Armed
+  // when a prompt is sent, cleared when the browser replies — so a prompt that's
+  // opened and never answered reclaims the session slot instead of relying
+  // solely on ssh2's own handshake timeout.
+  let promptTimer = null;
+  const clearPromptTimeout = () => {
+    if (promptTimer) {
+      clearTimeout(promptTimer);
+      promptTimer = null;
+    }
+  };
+  const armPromptTimeout = (kind) => {
+    clearPromptTimeout();
+    if (HANDSHAKE_TIMEOUT_MS <= 0) return;
+    promptTimer = setTimeout(() => {
+      promptTimer = null;
+      logEvent("handshake-timeout", { ip: clientIp, kind });
+      // Reject a pending host-key verify so ssh2 aborts the handshake cleanly;
+      // a pending kbd finish is just dropped (ssh2's own timeout closes it).
+      if (pendingHostVerify) {
+        try {
+          pendingHostVerify(false);
+        } catch {
+          /* callback already consumed */
+        }
+        pendingHostVerify = null;
+      }
+      pendingKbdFinish = null;
+      send({ t: "status", state: "error", message: "Handshake timed out." });
+      sendError("Timed out waiting for a response.", "auth");
+      cleanup();
+      ws.close();
+    }, HANDSHAKE_TIMEOUT_MS);
+    promptTimer.unref?.();
+  };
   // In-flight chunked uploads, keyed by remote path → { stream }.
   const uploads = new Map();
   // In-flight download read streams keyed by remote path, so they can be torn
@@ -1629,6 +1679,7 @@ wss.on("connection", (ws, req) => {
     if (closed) return;
     closed = true;
     clearTimeout(graceTimer);
+    clearPromptTimeout();
     if (idleTimer) clearInterval(idleTimer);
     logEvent("ws-close", { ip: clientIp });
     if (counted) {
@@ -2216,6 +2267,7 @@ wss.on("connection", (ws, req) => {
           // Relay the challenge (e.g. an OTP / 2FA code) to the browser and
           // wait for the user's answers before finishing authentication.
           pendingKbdFinish = finish;
+          armPromptTimeout("kbd");
           send({
             t: "kbd-interactive",
             name: name || "",
@@ -2246,7 +2298,7 @@ wss.on("connection", (ws, req) => {
         password: msg.password || undefined,
         privateKey: msg.privateKey || undefined,
         passphrase: msg.passphrase || undefined,
-        readyTimeout: 20_000,
+        readyTimeout: HANDSHAKE_TIMEOUT_MS,
         keepaliveInterval: 15_000,
         // Enable keyboard-interactive so servers that require an OTP / 2FA code
         // (or deliver the password prompt this way) can complete auth.
@@ -2256,6 +2308,7 @@ wss.on("connection", (ws, req) => {
         hostVerifier: (keyBuf, verify) => {
           const { fingerprint, keyType } = fingerprintHostKey(keyBuf);
           pendingHostVerify = verify;
+          armPromptTimeout("hostkey");
           send({ t: "hostkey", host, port: targetPort, fingerprint, keyType });
         },
       });
@@ -2882,6 +2935,7 @@ wss.on("connection", (ws, req) => {
 
       case "hostkey-response":
         if (pendingHostVerify) {
+          clearPromptTimeout();
           const verify = pendingHostVerify;
           pendingHostVerify = null;
           verify(msg.accept === true);
@@ -2890,6 +2944,7 @@ wss.on("connection", (ws, req) => {
 
       case "kbd-response":
         if (pendingKbdFinish) {
+          clearPromptTimeout();
           const finish = pendingKbdFinish;
           pendingKbdFinish = null;
           finish(Array.isArray(msg.responses) ? msg.responses.map(String) : []);

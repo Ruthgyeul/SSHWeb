@@ -128,8 +128,12 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   `SSH_MAX_UPLOAD_MB` (server env, read in `server.mjs`, in megabytes; `0` =
   unlimited) gate reachable hosts,
   concurrency and transfer size, while `SSH_RATE_LIMIT_MAX` /
-  `SSH_RATE_LIMIT_WINDOW_MS` throttle per-IP connection attempts and
-  `SSH_IDLE_TIMEOUT_MS` (0 = off) reaps sessions with no shell/SFTP activity. An
+  `SSH_RATE_LIMIT_WINDOW_MS` throttle per-IP connection attempts,
+  `SSH_IDLE_TIMEOUT_MS` (0 = off) reaps sessions with no shell/SFTP activity, and
+  `SSH_HANDSHAKE_TIMEOUT_MS` (default 60s) bounds the handshake — including the
+  wait for the user to accept a host key or enter a 2FA code — via ssh2's
+  readyTimeout plus an independent reaper on the pending prompt, so an
+  unanswered prompt can't hold a session slot. An
   optional `SSH_ACCESS_TOKEN` gates the whole relay: when set, the browser must
   exchange it for an HttpOnly cookie at `POST /api/access` (the raw token is
   never stored in the cookie — a SHA-256 digest is — nor logged) before a
