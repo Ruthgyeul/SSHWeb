@@ -39,6 +39,7 @@ src/
 │   ├── bytes.ts         # pure base64 ↔ byte helpers (web-SSH data plane)
 │   ├── connections.ts   # multi-tab "same server" quick-connect label + dedup
 │   ├── connectionProfiles.ts # saved recent-host profiles (identity only, no secret)
+│   ├── concurrencyLimiter.ts # async concurrency cap (mirrored in server.mjs)
 
 │   ├── editorSearch.ts  # find/replace match logic (editor + text preview)
 │   ├── knownHosts.ts    # TOFU known-hosts parse/compare (localStorage)

@@ -600,6 +600,72 @@ const MAX_TRANSCODES = (() => {
   return Number.isFinite(n) && n >= 0 ? n : 3;
 })();
 let activeTranscodes = 0;
+
+// --- Concurrency caps for expensive, client-triggered work ------------------
+//
+// Grid thumbnails (each reads a whole file — up to THUMBNAIL_VIDEO_MAX_BYTES —
+// and runs sharp/ffmpeg) and recursive find/grep searches (grep reads file
+// contents up to GREP_MAX_TOTAL_BYTES per search) are otherwise unbounded: a
+// client firing hundreds in parallel could exhaust this single shared process's
+// memory and CPU. Cap how many run at once (process-wide), queueing the rest and
+// shedding load once the queue is full. `createLimiter` is hand-mirrored from
+// src/lib/concurrencyLimiter.ts (unit-tested there).
+const posInt = (envVar, dflt) => {
+  const n = parseInt(process.env[envVar] || String(dflt), 10);
+  return Number.isFinite(n) && n >= 1 ? n : dflt;
+};
+const MAX_THUMBNAIL_JOBS = posInt("SSH_MAX_THUMBNAIL_JOBS", 4);
+const MAX_SEARCH_JOBS = posInt("SSH_MAX_SEARCH_JOBS", 4);
+// Bound the wait queues so a flood can't grow them without limit; past this we
+// shed the request (a skipped thumbnail keeps its icon; a search replies empty).
+const THUMBNAIL_QUEUE_MAX = posInt("SSH_MAX_THUMBNAIL_QUEUE", 500);
+const SEARCH_QUEUE_MAX = posInt("SSH_MAX_SEARCH_QUEUE", 100);
+
+class QueueFullError extends Error {
+  constructor() {
+    super("concurrency limiter queue is full");
+    this.name = "QueueFullError";
+  }
+}
+// Mirror of createConcurrencyLimiter in src/lib/concurrencyLimiter.ts.
+function createLimiter(maxConcurrent, maxQueue = Infinity) {
+  const limit = Math.max(1, Math.floor(maxConcurrent));
+  let active = 0;
+  const queue = [];
+  const pump = () => {
+    while (active < limit && queue.length > 0) {
+      const job = queue.shift();
+      active += 1;
+      Promise.resolve()
+        .then(job.task)
+        .then(job.resolve, job.reject)
+        .finally(() => {
+          active -= 1;
+          pump();
+        });
+    }
+  };
+  return {
+    run(task) {
+      return new Promise((resolve, reject) => {
+        if (queue.length >= maxQueue) {
+          reject(new QueueFullError());
+          return;
+        }
+        queue.push({ task, resolve, reject });
+        pump();
+      });
+    },
+    get active() {
+      return active;
+    },
+    get queued() {
+      return queue.length;
+    },
+  };
+}
+const thumbnailLimiter = createLimiter(MAX_THUMBNAIL_JOBS, THUMBNAIL_QUEUE_MAX);
+const searchLimiter = createLimiter(MAX_SEARCH_JOBS, SEARCH_QUEUE_MAX);
 // Content types for the streaming endpoint, by lower-case extension. Mirrors the
 // media MIME maps in `src/lib/sshProtocol.ts` (the "two synchronized places"
 // discipline) for the formats a browser can play inline.
@@ -940,6 +1006,20 @@ const server = createServer((req, res) => {
       // Live video transcodes running (on-the-fly conversion of non-natively-
       // playable containers), and the per-process ceiling.
       transcodes: { active: activeTranscodes, max: MAX_TRANSCODES },
+      // Concurrency limiters for expensive client-triggered work: how many jobs
+      // are running vs. queued right now, and the per-process ceilings.
+      limits: {
+        thumbnails: {
+          active: thumbnailLimiter.active,
+          queued: thumbnailLimiter.queued,
+          max: MAX_THUMBNAIL_JOBS,
+        },
+        search: {
+          active: searchLimiter.active,
+          queued: searchLimiter.queued,
+          max: MAX_SEARCH_JOBS,
+        },
+      },
       uptime: Math.floor(process.uptime()),
     });
     return;
@@ -1852,6 +1932,28 @@ wss.on("connection", (ws, req) => {
         });
       if (query === "") return reply([], false);
 
+      // Cap concurrent searches (this one reads listings/metadata across the
+      // tree) so many parallel searches can't tie up the shared process. When
+      // the queue is full, reply empty+truncated so the client isn't left
+      // waiting for a result that never comes.
+      searchLimiter
+        .run(
+          () =>
+            new Promise((resolve) => {
+              runFind(s, root, query, (entries, truncated) => {
+                reply(entries, truncated);
+                resolve();
+              });
+            }),
+        )
+        .catch(() => reply([], true));
+    });
+  }
+
+  // The recursive name-search walk, factored out so handleFind can run it under
+  // the search concurrency limiter. Calls `finish(entries, truncated)` exactly
+  // once when the walk completes.
+  function runFind(s, root, query, finish) {
       const results = [];
       let visited = 0;
       let truncated = false;
@@ -1895,8 +1997,7 @@ wss.on("connection", (ws, req) => {
         });
       };
 
-      walk(root, () => reply(results, truncated));
-    });
+      walk(root, () => finish(results, truncated));
   }
 
   // Recursive content search (grep): walk the tree like handleFind, but open each
@@ -1917,6 +2018,26 @@ wss.on("connection", (ws, req) => {
         });
       if (query === "") return reply([], false);
 
+      // Cap concurrent searches — grep opens and scans file *contents* (up to
+      // GREP_MAX_TOTAL_BYTES per search), so several in parallel is the heaviest
+      // search load. Queue-full sheds to an empty+truncated reply.
+      searchLimiter
+        .run(
+          () =>
+            new Promise((resolve) => {
+              runGrep(s, root, query, (entries, truncated) => {
+                reply(entries, truncated);
+                resolve();
+              });
+            }),
+        )
+        .catch(() => reply([], true));
+    });
+  }
+
+  // The recursive content-search walk, factored out so handleGrep can run it
+  // under the search concurrency limiter. Calls `finish` exactly once.
+  function runGrep(s, root, query, finish) {
       const results = [];
       let visited = 0;
       let bytesRead = 0;
@@ -1977,8 +2098,7 @@ wss.on("connection", (ws, req) => {
         });
       };
 
-      walk(root, () => reply(results, truncated));
-    });
+      walk(root, () => finish(results, truncated));
   }
 
   /** Copy (duplicate) a file or directory to a new path over SFTP. */
@@ -2362,30 +2482,45 @@ wss.on("connection", (ws, req) => {
           );
           const cached = thumbCacheGet(cacheKey);
           if (cached) return sendThumb(cached);
-          s.readFile(msg.path, async (err, buffer) => {
-            if (err) return skipThumb();
-            // Image: decode + downscale straight to WebP.
-            const imageThumb = await toWebpThumb(buffer, true);
-            if (imageThumb) {
-              thumbCachePut(cacheKey, imageThumb);
-              return sendThumb(imageThumb);
-            }
-            // Not a sharp-decodable image (video, or corrupt): extract a poster
-            // frame with ffmpeg and downscale that to WebP too.
-            if (ffmpegAvailable) {
-              const frame = await extractVideoFrame(buffer);
-              if (frame) {
-                const videoThumb = await toWebpThumb(frame, false);
-                if (videoThumb) {
-                  thumbCachePut(cacheKey, videoThumb);
-                  return sendThumb(videoThumb);
-                }
-              }
-            }
-            // Couldn't produce a WebP thumbnail — keep the icon rather than
-            // send the original bytes whole.
-            return skipThumb();
-          });
+          // Gate the heavy read + sharp/ffmpeg transcode behind a process-wide
+          // concurrency cap so a burst of tiles can't exhaust memory/CPU. When
+          // the queue is full we shed the tile (keep its icon) — the reply the
+          // client's bounded queue is waiting for still comes back.
+          thumbnailLimiter
+            .run(
+              () =>
+                new Promise((resolve) => {
+                  s.readFile(msg.path, async (err, buffer) => {
+                    try {
+                      if (err) return skipThumb();
+                      // Image: decode + downscale straight to WebP.
+                      const imageThumb = await toWebpThumb(buffer, true);
+                      if (imageThumb) {
+                        thumbCachePut(cacheKey, imageThumb);
+                        return sendThumb(imageThumb);
+                      }
+                      // Not a sharp-decodable image (video, or corrupt): extract
+                      // a poster frame with ffmpeg and downscale that too.
+                      if (ffmpegAvailable) {
+                        const frame = await extractVideoFrame(buffer);
+                        if (frame) {
+                          const videoThumb = await toWebpThumb(frame, false);
+                          if (videoThumb) {
+                            thumbCachePut(cacheKey, videoThumb);
+                            return sendThumb(videoThumb);
+                          }
+                        }
+                      }
+                      // Couldn't produce a WebP thumbnail — keep the icon rather
+                      // than send the original bytes whole.
+                      return skipThumb();
+                    } finally {
+                      resolve();
+                    }
+                  });
+                }),
+            )
+            .catch(() => skipThumb());
           return;
         }
 
