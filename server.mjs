@@ -191,6 +191,13 @@ const ALLOWLIST = (process.env.SSH_ALLOWED_HOSTS || "")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
+// Opt-in SSRF guard: refuse to dial private/internal targets (loopback, RFC1918
+// ranges, link-local incl. the 169.254.169.254 cloud-metadata endpoint, IPv6
+// ULA/link-local, and `localhost`). Off by default so a self-hosted deploy can
+// still reach hosts on its own LAN; turn it on for a public relay.
+const BLOCK_PRIVATE_HOSTS =
+  (process.env.SSH_BLOCK_PRIVATE_HOSTS || "false").toLowerCase() === "true";
+
 const MAX_SESSIONS = parseInt(process.env.SSH_MAX_SESSIONS || "25", 10);
 // Cap a single SFTP download so a huge file can't exhaust server memory.
 // Configured in whole megabytes; 0 (or less) disables the limit.
@@ -785,6 +792,55 @@ function isHostAllowed(host) {
     if (p.startsWith("*.")) return h === p.slice(2) || h.endsWith(p.slice(1));
     return h === p;
   });
+}
+
+// Mirror of parseIpv4Octets / isPrivateIpv4 / isBlockedPrivateHost in
+// src/lib/serverSecurity.ts (keep in sync). Pure IP/name classification for the
+// SSRF guard; the unit tests over the lib copy cover the logic.
+function parseIpv4Octets(host) {
+  const parts = host.split(".");
+  if (parts.length !== 4) return null;
+  const octets = [];
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const n = Number(part);
+    if (n > 255) return null;
+    octets.push(n);
+  }
+  return octets;
+}
+function isPrivateIpv4([a, b]) {
+  if (a === 0) return true;
+  if (a === 127) return true;
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  return false;
+}
+function isBlockedPrivateHost(host) {
+  let h = host.trim().toLowerCase();
+  if (h === "") return false;
+  if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1);
+  h = h.split("%")[0];
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
+  const v4 = parseIpv4Octets(h);
+  if (v4) return isPrivateIpv4(v4);
+  if (h.includes(":")) {
+    if (h === "::1" || h === "::") return true;
+    const tail = h.slice(h.lastIndexOf(":") + 1);
+    const embedded = parseIpv4Octets(tail);
+    if (embedded) return isPrivateIpv4(embedded);
+    const firstHextet = h.startsWith("::") ? "0" : h.split(":")[0] || "0";
+    const value = parseInt(firstHextet, 16);
+    if (Number.isFinite(value)) {
+      if (value >= 0xfc00 && value <= 0xfdff) return true;
+      if (value >= 0xfe80 && value <= 0xfebf) return true;
+    }
+    return false;
+  }
+  return false;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2189,6 +2245,11 @@ wss.on("connection", (ws, req) => {
       sendError(`Host not allowed by this server: ${host}`, "auth");
       return ws.close();
     }
+    if (BLOCK_PRIVATE_HOSTS && isBlockedPrivateHost(host)) {
+      logEvent("reject", { ip: clientIp, host, reason: "host-private" });
+      sendError("Connections to private/internal hosts are blocked.", "auth");
+      return ws.close();
+    }
     if (!rateLimitAllow(clientIp, Date.now())) {
       logEvent("reject", { ip: clientIp, host, reason: "rate-limit" });
       sendError("Too many connection attempts. Please slow down.", "auth");
@@ -3106,6 +3167,9 @@ server.listen(port, hostname, () => {
   );
   if (ALLOWLIST.length > 0) {
     console.log(`> SSH host allowlist active: ${ALLOWLIST.join(", ")}`);
+  }
+  if (BLOCK_PRIVATE_HOSTS) {
+    console.log("> Private/internal host dialing blocked (SSRF guard)");
   }
   if (IDLE_TIMEOUT_MS > 0) {
     console.log(`> Idle sessions closed after ${IDLE_TIMEOUT_MS} ms`);

@@ -365,3 +365,76 @@ export function buildSudoSftpCommand(
   const sudo = hasPassword ? "sudo -k -S -p ''" : "sudo -n";
   return `${sudo} /bin/sh -c '${finder}'`;
 }
+
+/* ------------------------------------------------------------------ */
+/* SSRF guard: block private / internal dial targets                   */
+/* ------------------------------------------------------------------ */
+
+/** Parse an IPv4 dotted-quad into its four octets, or null if it isn't one. */
+function parseIpv4Octets(host: string): number[] | null {
+  const parts = host.split(".");
+  if (parts.length !== 4) return null;
+  const octets: number[] = [];
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const n = Number(part);
+    if (n > 255) return null;
+    octets.push(n);
+  }
+  return octets;
+}
+
+/** Whether an IPv4 (as octets) is loopback / private / link-local / shared. */
+function isPrivateIpv4([a, b]: number[]): boolean {
+  if (a === 0) return true; // 0.0.0.0/8 ("this network")
+  if (a === 127) return true; // loopback 127.0.0.0/8
+  if (a === 10) return true; // private 10.0.0.0/8
+  if (a === 172 && b >= 16 && b <= 31) return true; // private 172.16.0.0/12
+  if (a === 192 && b === 168) return true; // private 192.168.0.0/16
+  if (a === 169 && b === 254) return true; // link-local incl. cloud metadata
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
+  return false;
+}
+
+/**
+ * Whether `host` is a private / internal target that the SSRF guard
+ * (`SSH_BLOCK_PRIVATE_HOSTS`) should refuse to dial: loopback, the RFC1918
+ * private ranges, link-local (including the `169.254.169.254` cloud-metadata
+ * endpoint), IPv6 loopback/ULA/link-local, and the `localhost` name.
+ *
+ * Only IP *literals* and `localhost` are matched — a hostname that resolves to a
+ * private address via DNS isn't caught here (that needs resolution at dial
+ * time). This blocks the common accidental/simple SSRF vectors (the metadata IP,
+ * loopback) without a DNS round-trip in the pure layer.
+ */
+export function isBlockedPrivateHost(host: string): boolean {
+  let h = host.trim().toLowerCase();
+  if (h === "") return false;
+  // Strip an IPv6 bracket wrapper and any zone id (fe80::1%eth0).
+  if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1);
+  h = h.split("%")[0];
+
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
+
+  const v4 = parseIpv4Octets(h);
+  if (v4) return isPrivateIpv4(v4);
+
+  if (h.includes(":")) {
+    // IPv6. Handle loopback/unspecified and IPv4-mapped/embedded forms first.
+    if (h === "::1" || h === "::") return true;
+    const lastColon = h.lastIndexOf(":");
+    const tail = h.slice(lastColon + 1);
+    const embedded = parseIpv4Octets(tail); // e.g. ::ffff:169.254.169.254
+    if (embedded) return isPrivateIpv4(embedded);
+    // First hextet decides ULA (fc00::/7) and link-local (fe80::/10).
+    const firstHextet = h.startsWith("::") ? "0" : h.split(":")[0] || "0";
+    const value = parseInt(firstHextet, 16);
+    if (Number.isFinite(value)) {
+      if (value >= 0xfc00 && value <= 0xfdff) return true; // ULA fc00::/7
+      if (value >= 0xfe80 && value <= 0xfebf) return true; // link-local fe80::/10
+    }
+    return false;
+  }
+
+  return false;
+}
