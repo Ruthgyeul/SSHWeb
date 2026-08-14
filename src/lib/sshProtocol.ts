@@ -216,6 +216,92 @@ export type ClientMessage =
   | { t: "disconnect" };
 
 /* ------------------------------------------------------------------ */
+/* Client message field validation (mirrored in server.mjs)            */
+/* ------------------------------------------------------------------ */
+
+/** The primitive shape a required message field must have. */
+export type FieldKind = "string" | "number" | "boolean" | "string[]";
+
+/**
+ * Required-field specs per client message type. The bridge validates an
+ * incoming frame against this table *before* dispatching it, so a malformed
+ * message (e.g. an `sftp-read` with no `path`) is rejected up front instead of
+ * throwing deep inside an async SFTP callback — which, with no per-message
+ * guard, would crash the single shared bridge process and drop every concurrent
+ * session. Only structurally-required fields are listed (the client is
+ * TypeScript-typed against the `ClientMessage` union, so it always sends them);
+ * optional fields are not checked here. Hand-mirrored in `server.mjs`, the same
+ * "two synchronized places" discipline as the wire protocol constants.
+ */
+export const CLIENT_MESSAGE_FIELDS: Record<
+  string,
+  Record<string, FieldKind>
+> = {
+  connect: {
+    host: "string",
+    port: "number",
+    username: "string",
+    cols: "number",
+    rows: "number",
+  },
+  data: { data: "string" },
+  resize: { cols: "number", rows: "number" },
+  ping: { ts: "number" },
+  "hostkey-response": { accept: "boolean" },
+  "kbd-response": { responses: "string[]" },
+  "sftp-list": { path: "string" },
+  "sftp-read": { path: "string" },
+  "sftp-write": { path: "string", dataB64: "string" },
+  "sftp-write-resume": { path: "string" },
+  "sftp-upload-cancel": { path: "string" },
+  "sftp-download-cancel": { path: "string" },
+  "sftp-mkdir": { path: "string" },
+  "sftp-find": { path: "string", query: "string" },
+  "sftp-grep": { path: "string", query: "string" },
+  "sftp-sudo": { enable: "boolean" },
+  "sftp-rm": { path: "string" },
+  "sftp-rename": { from: "string", to: "string" },
+  "sftp-copy": { from: "string", to: "string" },
+  "sftp-chmod": { path: "string", mode: "number" },
+  "sftp-download-dir": { path: "string" },
+  "sftp-download-many": { paths: "string[]" },
+  "thumb-purge": {},
+  disconnect: {},
+};
+
+/** Whether `value` matches the expected field kind. */
+function fieldMatchesKind(value: unknown, kind: FieldKind): boolean {
+  switch (kind) {
+    case "string":
+      return typeof value === "string";
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
+    case "boolean":
+      return typeof value === "boolean";
+    case "string[]":
+      return Array.isArray(value) && value.every((v) => typeof v === "string");
+  }
+}
+
+/**
+ * Validate a decoded client frame's required fields. Returns `true` when the
+ * type is unknown (the dispatcher's `default` case drops it) or every required
+ * field is present with the right type; returns `false` only when a *known*
+ * message type is missing a required field or carries one of the wrong type.
+ * Kept pure so the bridge and its tests share one rule set.
+ */
+export function isValidClientMessage(
+  msg: { t: string } & Record<string, unknown>,
+): boolean {
+  const spec = CLIENT_MESSAGE_FIELDS[msg.t];
+  if (!spec) return true;
+  for (const field in spec) {
+    if (!fieldMatchesKind(msg[field], spec[field])) return false;
+  }
+  return true;
+}
+
+/* ------------------------------------------------------------------ */
 /* Server → client messages                                            */
 /* ------------------------------------------------------------------ */
 

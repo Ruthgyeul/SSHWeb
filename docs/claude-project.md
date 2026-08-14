@@ -110,7 +110,14 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
 - **The wire protocol has two synchronized homes**, like the palette does:
   typed messages + pure helpers in `src/lib/sshProtocol.ts` (imported by the
   client, unit-tested in `sshProtocol.test.ts`), and the matching `t` string
-  constants hand-mirrored in `server.mjs`. Change one, change the other.
+  constants hand-mirrored in `server.mjs`. Change one, change the other. This
+  includes the per-message required-field table (`CLIENT_MESSAGE_FIELDS` /
+  `isValidClientMessage`) the bridge validates every incoming frame against
+  before dispatch — add a new client message and you extend that table in both
+  places. The bridge also runs a global `uncaughtException`/`unhandledRejection`
+  guard plus a try/catch around message dispatch, so one malformed or
+  unexpected frame degrades to a logged error on that session instead of
+  crashing the single shared process and dropping every connection.
 - **UI is all client components** under `src/components/ssh/` (xterm.js is
   dynamically imported so it never runs during SSR).
 - **Security posture:** credentials are relayed to the target host and never

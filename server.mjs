@@ -474,6 +474,73 @@ function looksBinary(buffer) {
   for (let i = 0; i < n; i++) if (buffer[i] === 0) return true;
   return false;
 }
+
+// Required-field specs per client message type — mirrors CLIENT_MESSAGE_FIELDS
+// in src/lib/sshProtocol.ts (keep the two in sync). Used to reject a malformed
+// frame before a handler dereferences a missing field (e.g. an sftp-read with no
+// `path`), which would otherwise throw inside an async SFTP callback and crash
+// the single shared bridge process, dropping every concurrent session.
+const CLIENT_MESSAGE_FIELDS = {
+  connect: {
+    host: "string",
+    port: "number",
+    username: "string",
+    cols: "number",
+    rows: "number",
+  },
+  data: { data: "string" },
+  resize: { cols: "number", rows: "number" },
+  ping: { ts: "number" },
+  "hostkey-response": { accept: "boolean" },
+  "kbd-response": { responses: "string[]" },
+  "sftp-list": { path: "string" },
+  "sftp-read": { path: "string" },
+  "sftp-write": { path: "string", dataB64: "string" },
+  "sftp-write-resume": { path: "string" },
+  "sftp-upload-cancel": { path: "string" },
+  "sftp-download-cancel": { path: "string" },
+  "sftp-mkdir": { path: "string" },
+  "sftp-find": { path: "string", query: "string" },
+  "sftp-grep": { path: "string", query: "string" },
+  "sftp-sudo": { enable: "boolean" },
+  "sftp-rm": { path: "string" },
+  "sftp-rename": { from: "string", to: "string" },
+  "sftp-copy": { from: "string", to: "string" },
+  "sftp-chmod": { path: "string", mode: "number" },
+  "sftp-download-dir": { path: "string" },
+  "sftp-download-many": { paths: "string[]" },
+  "thumb-purge": {},
+  disconnect: {},
+};
+
+// Mirror of fieldMatchesKind in src/lib/sshProtocol.ts.
+function fieldMatchesKind(value, kind) {
+  switch (kind) {
+    case "string":
+      return typeof value === "string";
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
+    case "boolean":
+      return typeof value === "boolean";
+    case "string[]":
+      return Array.isArray(value) && value.every((v) => typeof v === "string");
+    default:
+      return false;
+  }
+}
+
+// Mirror of isValidClientMessage in src/lib/sshProtocol.ts. Unknown types pass
+// here (the dispatcher's default case drops them); a known type with a missing
+// or mistyped required field is rejected.
+function isValidClientMessage(msg) {
+  const spec = CLIENT_MESSAGE_FIELDS[msg.t];
+  if (!spec) return true;
+  for (const field in spec) {
+    if (!fieldMatchesKind(msg[field], spec[field])) return false;
+  }
+  return true;
+}
+
 // Cap a single SFTP upload so an unbounded stream can't fill the target disk
 // (symmetric with the download cap). Configured in whole megabytes; 0 (or less)
 // disables the limit.
@@ -2598,10 +2665,22 @@ wss.on("connection", (ws, req) => {
       return;
     }
     if (!msg || typeof msg.t !== "string") return;
+    // Reject a known message type with a missing/mistyped required field before
+    // dispatch, so a malformed frame can't throw deep in an async handler.
+    if (!isValidClientMessage(msg)) {
+      logEvent("bad-message", { ip: clientIp, kind: String(msg.t) });
+      return;
+    }
     // Any real shell/SFTP traffic counts as activity for the idle reaper;
     // latency pings deliberately don't, so an idle terminal still times out.
     if (msg.t !== "ping") touch();
 
+    // Defense in depth: even with field validation, a handler can throw
+    // asynchronously in ways a single frame check can't foresee. Guard the
+    // synchronous dispatch so one bad frame degrades to a logged error on this
+    // session instead of an uncaught exception that would crash the shared
+    // process and drop every concurrent session.
+    try {
     switch (msg.t) {
       case "connect":
         handleConnect(msg);
@@ -2775,6 +2854,15 @@ wss.on("connection", (ws, req) => {
         ws.close();
         break;
     }
+    } catch {
+      sshErrors += 1;
+      logEvent("handler-error", { ip: clientIp, kind: String(msg.t) });
+      try {
+        sendError("The server hit an error handling that request.", "sftp");
+      } catch {
+        /* socket already gone */
+      }
+    }
   });
 
   ws.on("close", cleanup);
@@ -2845,3 +2933,16 @@ function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+// Last-resort safety net. This is a single shared process relaying every
+// session, so an uncaught exception or unhandled rejection anywhere (a stray
+// throw in a library callback, a rejected promise with no `.catch`) would
+// otherwise tear the whole server down and drop every concurrent connection.
+// Log it and keep serving — the per-session guards above already contain most
+// failures to the one session that caused them.
+process.on("uncaughtException", (err) => {
+  logEvent("uncaught-exception", { message: err?.message ? "yes" : "no" });
+});
+process.on("unhandledRejection", () => {
+  logEvent("unhandled-rejection", {});
+});
