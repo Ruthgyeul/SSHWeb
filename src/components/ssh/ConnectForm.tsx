@@ -21,6 +21,21 @@ export interface ConnectDetails {
   passphrase?: string;
 }
 
+/**
+ * Values to pre-fill the form with. Deliberately has **no password** — after a
+ * failed login we re-seed the form with the host/port/user (and key material) so
+ * the user only has to retype the secret, never the whole connection. Applied at
+ * mount, so the caller re-keys the form when it wants to re-seed.
+ */
+export interface ConnectFormInitial {
+  host?: string;
+  port?: string;
+  username?: string;
+  auth?: AuthMethod;
+  privateKey?: string;
+  passphrase?: string;
+}
+
 const inputClass =
   "w-full rounded-md border border-term-border bg-term-panel px-3 py-2 font-mono text-sm text-term-text outline-none placeholder:text-term-faint focus:border-term-accent";
 const labelClass = "mb-1 block text-xs font-medium text-term-muted";
@@ -34,17 +49,20 @@ const labelClass = "mb-1 block text-xs font-medium text-term-muted";
 export function ConnectForm({
   onConnect,
   connecting,
+  initial,
 }: {
   onConnect: (details: ConnectDetails) => void;
   connecting: boolean;
+  initial?: ConnectFormInitial;
 }) {
-  const [host, setHost] = useState("");
-  const [port, setPort] = useState("22");
-  const [username, setUsername] = useState("");
-  const [auth, setAuth] = useState<AuthMethod>("password");
+  const [host, setHost] = useState(initial?.host ?? "");
+  const [port, setPort] = useState(initial?.port ?? "22");
+  const [username, setUsername] = useState(initial?.username ?? "");
+  const [auth, setAuth] = useState<AuthMethod>(initial?.auth ?? "password");
+  // The password is never pre-filled — a failed login clears exactly this field.
   const [password, setPassword] = useState("");
-  const [privateKey, setPrivateKey] = useState("");
-  const [passphrase, setPassphrase] = useState("");
+  const [privateKey, setPrivateKey] = useState(initial?.privateKey ?? "");
+  const [passphrase, setPassphrase] = useState(initial?.passphrase ?? "");
   const [errors, setErrors] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -169,6 +187,8 @@ export function ConnectForm({
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="off"
+            // Re-seeded after a failed login: focus the one field to retype.
+            autoFocus={!!initial}
             disabled={connecting}
           />
         </div>

@@ -52,7 +52,11 @@ import {
   type SessionStatus,
 } from "./SessionStatus";
 import { XtermView, type XtermHandle } from "./XtermView";
-import { ConnectForm, type ConnectDetails } from "./ConnectForm";
+import {
+  ConnectForm,
+  type ConnectDetails,
+  type ConnectFormInitial,
+} from "./ConnectForm";
 import {
   FileBrowser,
   type UploadItem,
@@ -316,12 +320,26 @@ function saveKnownHost(id: string, fingerprint: string) {
  * backoff) using the credentials from the last connect, then offers a manual
  * "Reconnect" button.
  */
+/** A live connection in another tab, offered as a one-click "same server" login. */
+export interface ReusableConnection {
+  /** `user@host` (with `:port` when non-default) for the button label. */
+  label: string;
+  /** The in-memory details to reconnect with — no re-typing. */
+  details: ConnectDetails;
+}
+
 export function SshSession({
   active,
   onMeta,
+  reusableConnections,
+  onConnectionChange,
 }: {
   active: boolean;
   onMeta: (meta: SessionMeta) => void;
+  /** Other tabs' live connections, shown as quick-connect options on the form. */
+  reusableConnections?: ReusableConnection[];
+  /** Report this tab's connected details (or null when not connected) upward. */
+  onConnectionChange?: (details: ConnectDetails | null) => void;
 }) {
   const wsRef = useRef<WebSocket | null>(null);
   const xtermRef = useRef<XtermHandle>(null);
@@ -517,6 +535,16 @@ export function SshSession({
   // Whether we hold credentials from a prior connect (drives the Reconnect UI);
   // mirrors lastDetailsRef but is render-safe.
   const [hasLast, setHasLast] = useState(false);
+  // Bumped to re-mount (re-seed) the ConnectForm: after a failed login we
+  // remount it pre-filled with the last host/port/user (password cleared), and
+  // on a fresh "New connection" we remount it empty.
+  const [formSeed, setFormSeed] = useState(0);
+  // Values to pre-fill the connect form with after a failed login (never the
+  // password). Set from the callback that sees the failure, so no ref is read
+  // during render.
+  const [formInitial, setFormInitial] = useState<ConnectFormInitial | undefined>(
+    undefined,
+  );
 
   // Reconnection bookkeeping (refs so the ws close handler sees fresh values).
   const lastDetailsRef = useRef<ConnectDetails | null>(null);
@@ -686,6 +714,8 @@ export function SshSession({
             setStatus("connected");
             setConnectedAt((at) => at ?? Date.now());
             setStatusMessage("");
+            // A later disconnect should show a clean form, not the last prefill.
+            setFormInitial(undefined);
             xtermRef.current?.writeln(
               "\x1b[32m✓ Connected.\x1b[0m Type as you would in any shell.",
             );
@@ -1161,7 +1191,26 @@ export function SshSession({
     lastDetailsRef,
     onMessage: handleServerMessage,
     onOpen: sendConnect,
-    onNeverConnected: () => setStatus("error"),
+    onNeverConnected: () => {
+      // Login/host failure. Return to the connect form pre-filled with the same
+      // host/port/user (and key material) but a cleared password — re-seed it by
+      // bumping formSeed so the user only retypes the secret.
+      const d = lastDetailsRef.current;
+      setFormInitial(
+        d
+          ? {
+              host: d.host,
+              port: String(d.port),
+              username: d.username,
+              auth: d.privateKey ? "key" : "password",
+              privateKey: d.privateKey ?? "",
+              passphrase: d.passphrase ?? "",
+            }
+          : undefined,
+      );
+      setStatus("error");
+      setFormSeed((s) => s + 1);
+    },
     onSocketError: () =>
       setStatusMessage("WebSocket error — is the SSH bridge running?"),
   });
@@ -1465,6 +1514,19 @@ export function SshSession({
     connectedRef.current = connected;
   }, [connected]);
 
+  // Report this tab's connected details upward (for other tabs' "same server"
+  // quick-connect), and clear it whenever this tab isn't connected. The details
+  // stay in memory only — same as the reconnect credentials this session
+  // already holds — and are dropped on disconnect and unmount.
+  const onConnectionChangeRef = useRef(onConnectionChange);
+  useEffect(() => {
+    onConnectionChangeRef.current = onConnectionChange;
+  });
+  useEffect(() => {
+    onConnectionChangeRef.current?.(connected ? lastDetailsRef.current : null);
+    return () => onConnectionChangeRef.current?.(null);
+  }, [connected]);
+
   // Keep previewPathRef in sync so a late preview reply knows what's open.
   useEffect(() => {
     previewPathRef.current = preview?.path ?? null;
@@ -1552,7 +1614,9 @@ export function SshSession({
 
   const connecting = status === "connecting" || status === "reconnecting";
   const showOverlay = !connected;
-  const canReconnect = (status === "dropped" || status === "error") && hasLast;
+  // A dropped *live* session offers a one-click reconnect (saved credentials).
+  // A failed login (status "error") instead returns to the pre-filled form.
+  const canReconnect = status === "dropped" && hasLast;
 
   // --- On-screen modifier keys (mobile key bar) ---
   const disarmMods = () => {
@@ -2360,6 +2424,8 @@ export function SshSession({
                         setHasLast(false);
                         setStatus("idle");
                         setStatusMessage("");
+                        setFormInitial(undefined);
+                        setFormSeed((s) => s + 1);
                       }}
                       className="rounded-md border border-term-border px-4 py-2 text-sm text-term-muted hover:text-term-text"
                     >
@@ -2386,18 +2452,52 @@ export function SshSession({
                     </div>
                   </div>
                   <h2 className="text-lg font-semibold text-term-text">
-                    New SSH connection
+                    {status === "error" ? "Try again" : "New SSH connection"}
                   </h2>
                   <p className="mt-1 mb-5 text-xs leading-relaxed text-term-muted">
-                    Credentials are relayed straight to the target host to open
-                    the session and are never stored or logged by this site. Only
-                    connect to hosts you trust.
+                    {status === "error"
+                      ? "The login didn't go through. Your host, port and username are kept — just re-enter your password (or key) and reconnect."
+                      : "Credentials are relayed straight to the target host to open the session and are never stored or logged by this site. Only connect to hosts you trust."}
                   </p>
-                  <ConnectForm onConnect={connect} connecting={connecting} />
+                  <ConnectForm
+                    key={formSeed}
+                    initial={formInitial}
+                    onConnect={connect}
+                    connecting={connecting}
+                  />
                   {statusMessage && (
                     <p className="mt-4 rounded-md border border-term-red/40 bg-term-red/10 px-3 py-2 text-xs text-term-red">
                       {statusMessage}
                     </p>
+                  )}
+                  {reusableConnections && reusableConnections.length > 0 && (
+                    <div className="mt-6 border-t border-term-border pt-4">
+                      <p className="mb-2 text-xs font-medium text-term-muted">
+                        Open another session on a server you&apos;re already on
+                      </p>
+                      <div className="flex flex-col gap-1.5">
+                        {reusableConnections.map((c) => (
+                          <button
+                            key={c.label}
+                            type="button"
+                            onClick={() => connect(c.details)}
+                            disabled={connecting}
+                            className={cn(
+                              "flex items-center gap-2 rounded-md border border-term-border bg-term-panel px-3 py-2 text-left text-sm text-term-text transition-colors hover:border-term-accent/40 hover:bg-term-accent/10",
+                              connecting && "cursor-not-allowed opacity-60",
+                            )}
+                          >
+                            <span
+                              className="select-none font-mono text-term-accent"
+                              aria-hidden
+                            >
+                              ↳
+                            </span>
+                            <span className="truncate font-mono">{c.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </>
               )}

@@ -36,6 +36,8 @@ src/
 │   ├── thumbnailCache.ts # thumbnail cache key + LRU-eviction (mirrored in server.mjs)
 │   ├── byteLruCache.ts  # generic byte-bounded TTL LRU (browser preview cache)
 │   ├── bytes.ts         # pure base64 ↔ byte helpers (web-SSH data plane)
+│   ├── connections.ts   # multi-tab "same server" quick-connect label + dedup
+
 │   ├── editorSearch.ts  # find/replace match logic (editor + text preview)
 │   ├── knownHosts.ts    # TOFU known-hosts parse/compare (localStorage)
 │   ├── markdown.ts      # Markdown → sanitized HTML (preview)

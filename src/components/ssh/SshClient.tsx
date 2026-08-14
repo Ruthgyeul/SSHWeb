@@ -6,7 +6,10 @@ import {
   SshSession,
   StatusDot,
   type SessionMeta,
+  type ReusableConnection,
 } from "./SshSession";
+import type { ConnectDetails } from "./ConnectForm";
+import { reusableConnectionsExcluding } from "@/lib/connections";
 
 /**
  * Multi-session shell around {@link SshSession}. Each tab is an independent SSH
@@ -19,6 +22,11 @@ export function SshClient() {
   const [ids, setIds] = useState<number[]>([0]);
   const [activeId, setActiveId] = useState(0);
   const [metas, setMetas] = useState<Record<number, SessionMeta>>({});
+  // Live connections per tab (in-memory only), so a new tab can offer a
+  // one-click "same server" login without re-entering — or re-typing — anything.
+  const [connections, setConnections] = useState<
+    Record<number, ConnectDetails>
+  >({});
   // User-assigned tab names (override the auto `user@host` label). Editing state
   // holds the id being renamed and the in-progress draft.
   const [names, setNames] = useState<Record<number, string>>({});
@@ -51,6 +59,31 @@ export function SshClient() {
     );
   }, []);
 
+  // Record (or clear) a tab's live connection details.
+  const reportConnection = useCallback(
+    (id: number, details: ConnectDetails | null) => {
+      setConnections((prev) => {
+        if (!details) {
+          if (!(id in prev)) return prev;
+          const rest = { ...prev };
+          delete rest[id];
+          return rest;
+        }
+        if (prev[id] === details) return prev;
+        return { ...prev, [id]: details };
+      });
+    },
+    [],
+  );
+
+  // The reusable connections offered to tab `id`: every *other* tab's live
+  // connection, de-duplicated by `user@host:port` so a server appears once.
+  const reusableFor = useCallback(
+    (id: number): ReusableConnection[] =>
+      reusableConnectionsExcluding(connections, id),
+    [connections],
+  );
+
   const addSession = useCallback(() => {
     const id = nextIdRef.current++;
     setIds((prev) => [...prev, id]);
@@ -74,6 +107,12 @@ export function SshClient() {
         return rest;
       });
       setNames((prev) => {
+        const rest = { ...prev };
+        delete rest[id];
+        return rest;
+      });
+      setConnections((prev) => {
+        if (!(id in prev)) return prev;
         const rest = { ...prev };
         delete rest[id];
         return rest;
@@ -168,6 +207,8 @@ export function SshClient() {
             <SshSession
               active={id === activeId}
               onMeta={(m) => updateMeta(id, m)}
+              reusableConnections={reusableFor(id)}
+              onConnectionChange={(details) => reportConnection(id, details)}
             />
           </div>
         ))}
