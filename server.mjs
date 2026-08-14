@@ -1393,23 +1393,95 @@ server.on("upgrade", (req, socket, head) => {
   }
 });
 
-// --- Folder download (store-only ZIP) --------------------------------------
+// --- Folder download (streaming store-only ZIP) ----------------------------
+//
+// The archive is streamed entry-by-entry over the chunked download frames (each
+// file read as a stream, CRC computed incrementally) so the bridge never buffers
+// the whole tree — or a whole file — in memory, and never blocks the event loop
+// crc-ing a giant buffer. Because the size/CRC aren't known when the local
+// header goes out, every entry uses a data descriptor. The record builders below
+// are hand-mirrored from src/lib/zip.ts (unit-tested there); keep them in sync.
 
-/** CRC-32 (IEEE) of a buffer — required in ZIP local/central headers. */
 const CRC_TABLE = (() => {
-  const table = new Int32Array(256);
+  const table = new Uint32Array(256);
   for (let n = 0; n < 256; n++) {
     let c = n;
     for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    table[n] = c;
+    table[n] = c >>> 0;
   }
   return table;
 })();
-
-function crc32(buf) {
-  let c = 0xffffffff;
+function crc32Init() {
+  return 0xffffffff;
+}
+function crc32Update(crc, buf) {
+  let c = crc >>> 0;
   for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
+  return c >>> 0;
+}
+function crc32Final(crc) {
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+const ZIP32_MAX = 0xffffffff;
+function exceedsZip32(value) {
+  return value >= ZIP32_MAX;
+}
+function zipLocalHeader(nameLength) {
+  const h = Buffer.alloc(30);
+  h.writeUInt32LE(0x04034b50, 0);
+  h.writeUInt16LE(20, 4);
+  h.writeUInt16LE(0x0808, 6); // UTF-8 | data-descriptor
+  h.writeUInt16LE(0, 8); // store
+  h.writeUInt16LE(0, 10);
+  h.writeUInt16LE(0, 12);
+  h.writeUInt32LE(0, 14); // crc (in data descriptor)
+  h.writeUInt32LE(0, 18); // compressed size (in data descriptor)
+  h.writeUInt32LE(0, 22); // uncompressed size (in data descriptor)
+  h.writeUInt16LE(nameLength, 26);
+  h.writeUInt16LE(0, 28);
+  return h;
+}
+function zipDataDescriptor(crc, size) {
+  const d = Buffer.alloc(16);
+  d.writeUInt32LE(0x08074b50, 0);
+  d.writeUInt32LE(crc >>> 0, 4);
+  d.writeUInt32LE(size >>> 0, 8);
+  d.writeUInt32LE(size >>> 0, 12);
+  return d;
+}
+function zipCentralHeader(nameLength, crc, size, offset) {
+  const h = Buffer.alloc(46);
+  h.writeUInt32LE(0x02014b50, 0);
+  h.writeUInt16LE(20, 4);
+  h.writeUInt16LE(20, 6);
+  h.writeUInt16LE(0x0808, 8);
+  h.writeUInt16LE(0, 10);
+  h.writeUInt16LE(0, 12);
+  h.writeUInt16LE(0, 14);
+  h.writeUInt32LE(crc >>> 0, 16);
+  h.writeUInt32LE(size >>> 0, 20);
+  h.writeUInt32LE(size >>> 0, 24);
+  h.writeUInt16LE(nameLength, 28);
+  h.writeUInt16LE(0, 30);
+  h.writeUInt16LE(0, 32);
+  h.writeUInt16LE(0, 34);
+  h.writeUInt16LE(0, 36);
+  h.writeUInt32LE(0, 38);
+  h.writeUInt32LE(offset >>> 0, 42);
+  return h;
+}
+function zipEndRecord(count, centralSize, centralOffset) {
+  const e = Buffer.alloc(22);
+  e.writeUInt32LE(0x06054b50, 0);
+  e.writeUInt16LE(0, 4);
+  e.writeUInt16LE(0, 6);
+  e.writeUInt16LE(count & 0xffff, 8);
+  e.writeUInt16LE(count & 0xffff, 10);
+  e.writeUInt32LE(centralSize >>> 0, 12);
+  e.writeUInt32LE(centralOffset >>> 0, 16);
+  e.writeUInt16LE(0, 20);
+  return e;
 }
 
 // --- Path helpers for chunked uploads --------------------------------------
@@ -1505,29 +1577,34 @@ function mkdirp(sftp, dir, done) {
 }
 
 /**
- * Recursively read every file under `dir` over SFTP, returning
- * `[{ name: relativePath, data: Buffer }]`. Symlinks are skipped.
+ * Enumerate the files a zip should contain WITHOUT reading their contents —
+ * just names + sizes from directory listings/stat, so the archive can be sized
+ * and then streamed one file at a time. `roots` is a list of `{ path, prefix }`:
+ * a folder download passes the folder with an empty prefix (names relative to
+ * it); a multi-selection passes each path prefixed with its basename so the
+ * structure is preserved. Symlinks and special files are skipped. Returns
+ * `[{ readPath, name, size }]`.
  */
-function collectDirFiles(sftp, dir, done) {
-  const out = [];
-  const base = dir.replace(/\/+$/, "");
-  const walk = (path, rel, cb) => {
-    sftp.readdir(path, (err, list) => {
+function enumerateZipEntries(sftp, roots, done) {
+  const entries = [];
+  const walkDir = (dir, rel, cb) => {
+    sftp.readdir(dir, (err, list) => {
       if (err) return cb(err);
       let i = 0;
       const nextEntry = () => {
         if (i >= list.length) return cb(null);
         const item = list[i++];
-        const childPath = `${path}/${item.filename}`;
+        const childPath = `${dir}/${item.filename}`;
         const childRel = rel ? `${rel}/${item.filename}` : item.filename;
         if (item.attrs.isDirectory?.()) {
-          walk(childPath, childRel, (e) => (e ? cb(e) : nextEntry()));
+          walkDir(childPath, childRel, (e) => (e ? cb(e) : nextEntry()));
         } else if (item.attrs.isFile?.()) {
-          sftp.readFile(childPath, (e, buf) => {
-            if (e) return cb(e);
-            out.push({ name: childRel, data: buf });
-            nextEntry();
+          entries.push({
+            readPath: childPath,
+            name: childRel,
+            size: item.attrs.size || 0,
           });
+          nextEntry();
         } else {
           nextEntry(); // skip symlinks / specials
         }
@@ -1535,103 +1612,28 @@ function collectDirFiles(sftp, dir, done) {
       nextEntry();
     });
   };
-  walk(base, "", (err) => (err ? done(err) : done(null, out)));
-}
-
-/**
- * Collect a set of selected paths (files and/or directories) into a flat
- * `[{ name, data }]` list suitable for zipping. A directory is walked
- * recursively and its entries are prefixed with the directory's basename so the
- * archive preserves structure. Errors abort the whole collection.
- */
-function collectPaths(sftp, paths, done) {
-  const out = [];
-  let i = 0;
-  const nextPath = () => {
-    if (i >= paths.length) return done(null, out);
-    const p = paths[i++];
-    const base = p.split("/").filter(Boolean).pop() || "file";
-    sftp.stat(p, (err, stats) => {
+  let r = 0;
+  const nextRoot = () => {
+    if (r >= roots.length) return done(null, entries);
+    const { path, prefix } = roots[r++];
+    sftp.stat(path, (err, stats) => {
       if (err) return done(err);
       if (stats.isDirectory?.()) {
-        collectDirFiles(sftp, p, (e, files) => {
-          if (e) return done(e);
-          for (const f of files) out.push({ name: `${base}/${f.name}`, data: f.data });
-          nextPath();
-        });
+        const base = path.replace(/\/+$/, "");
+        walkDir(base, prefix, (e) => (e ? done(e) : nextRoot()));
       } else if (stats.isFile?.()) {
-        sftp.readFile(p, (e, buf) => {
-          if (e) return done(e);
-          out.push({ name: base, data: buf });
-          nextPath();
+        entries.push({
+          readPath: path,
+          name: prefix || path.split("/").filter(Boolean).pop() || "file",
+          size: stats.size || 0,
         });
+        nextRoot();
       } else {
-        nextPath(); // skip symlinks / specials
+        nextRoot(); // skip symlinks / specials
       }
     });
   };
-  nextPath();
-}
-
-/** Build a minimal store-only (uncompressed) ZIP archive from a file list. */
-function buildStoreZip(files) {
-  const chunks = [];
-  const central = [];
-  let offset = 0;
-  for (const file of files) {
-    const nameBuf = Buffer.from(file.name, "utf8");
-    const crc = crc32(file.data);
-    const size = file.data.length;
-
-    const local = Buffer.alloc(30);
-    local.writeUInt32LE(0x04034b50, 0); // local file header signature
-    local.writeUInt16LE(20, 4); // version needed
-    local.writeUInt16LE(0x0800, 6); // flags: UTF-8 filename
-    local.writeUInt16LE(0, 8); // method: store
-    local.writeUInt16LE(0, 10); // mod time
-    local.writeUInt16LE(0, 12); // mod date
-    local.writeUInt32LE(crc, 14);
-    local.writeUInt32LE(size, 18); // compressed size
-    local.writeUInt32LE(size, 22); // uncompressed size
-    local.writeUInt16LE(nameBuf.length, 26);
-    local.writeUInt16LE(0, 28); // extra length
-    chunks.push(local, nameBuf, file.data);
-
-    const cd = Buffer.alloc(46);
-    cd.writeUInt32LE(0x02014b50, 0); // central directory signature
-    cd.writeUInt16LE(20, 4); // version made by
-    cd.writeUInt16LE(20, 6); // version needed
-    cd.writeUInt16LE(0x0800, 8); // flags
-    cd.writeUInt16LE(0, 10); // method
-    cd.writeUInt16LE(0, 12);
-    cd.writeUInt16LE(0, 14);
-    cd.writeUInt32LE(crc, 16);
-    cd.writeUInt32LE(size, 20);
-    cd.writeUInt32LE(size, 24);
-    cd.writeUInt16LE(nameBuf.length, 28);
-    cd.writeUInt16LE(0, 30); // extra
-    cd.writeUInt16LE(0, 32); // comment
-    cd.writeUInt16LE(0, 34); // disk number
-    cd.writeUInt16LE(0, 36); // internal attrs
-    cd.writeUInt32LE(0, 38); // external attrs
-    cd.writeUInt32LE(offset, 42); // local header offset
-    central.push(cd, nameBuf);
-
-    offset += local.length + nameBuf.length + size;
-  }
-
-  const centralBuf = Buffer.concat(central);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0); // end of central directory signature
-  end.writeUInt16LE(0, 4);
-  end.writeUInt16LE(0, 6);
-  end.writeUInt16LE(files.length, 8);
-  end.writeUInt16LE(files.length, 10);
-  end.writeUInt32LE(centralBuf.length, 12);
-  end.writeUInt32LE(offset, 16); // central dir offset
-  end.writeUInt16LE(0, 20); // comment length
-
-  return Buffer.concat([...chunks, centralBuf, end]);
+  nextRoot();
 }
 
 wss.on("connection", (ws, req) => {
@@ -2898,52 +2900,172 @@ wss.on("connection", (ws, req) => {
     });
   }
 
-  // Zip up a whole directory and send it as one download.
-  function handleDownloadDir(msg) {
-    withSftp((s) => {
-      collectDirFiles(s, msg.path, (err, files) => {
-        if (err) return sendError(err.message, "sftp");
-        const total = files.reduce((n, f) => n + f.data.length, 0);
-        if (MAX_DOWNLOAD_BYTES > 0 && total > MAX_DOWNLOAD_BYTES) {
-          return sendError(
-            `Folder too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
-            "sftp",
-          );
-        }
-        const zip = buildStoreZip(files);
-        const name = (msg.path.split("/").filter(Boolean).pop() || "download") + ".zip";
-        send({
-          t: "sftp-read",
-          path: msg.path,
-          name,
-          dataB64: zip.toString("base64"),
-        });
+  // Stream a store-only ZIP of `roots` (enumerated to names+sizes first) over the
+  // chunked download frames, reading each file one at a time and computing its
+  // CRC incrementally so neither the whole tree nor a whole file is ever held in
+  // memory. `downloadKey` is the client-facing path (drives its progress row and
+  // cancel); `zipName` is the saved filename. `overLimit` builds the too-large
+  // message for the byte cap.
+  function streamZip(s, roots, downloadKey, zipName, overLimit) {
+    enumerateZipEntries(s, roots, (err, entries) => {
+      if (err) return sendError(err.message, "sftp");
+      const nameBufs = entries.map((e) => Buffer.from(e.name, "utf8"));
+      let content = 0;
+      let archive = 22; // end-of-central-directory record
+      for (let k = 0; k < entries.length; k++) {
+        content += entries[k].size;
+        archive += 30 + nameBufs[k].length + entries[k].size + 16; // local + name + data + descriptor
+        archive += 46 + nameBufs[k].length; // central directory record
+      }
+      if (MAX_DOWNLOAD_BYTES > 0 && content > MAX_DOWNLOAD_BYTES) {
+        return sendError(overLimit, "sftp");
+      }
+      // Classic ZIP is 32-bit; refuse (rather than silently overflow) an archive
+      // or entry that would need ZIP64.
+      if (exceedsZip32(archive) || entries.some((e) => exceedsZip32(e.size))) {
+        return sendError(
+          "Selection too large to zip (over 4 GB). Download items individually.",
+          "sftp",
+        );
+      }
+
+      let cancelled = false;
+      let curStream = null;
+      // Registered in the downloads map so a cancel / cleanup tears the current
+      // file read down and stops the archive (matches the streamOriginal shape).
+      downloads.set(downloadKey, {
+        destroy() {
+          cancelled = true;
+          try {
+            curStream?.destroy();
+          } catch {
+            /* stream already gone */
+          }
+        },
       });
+
+      const emit = (buf) => {
+        bytesDown += buf.length;
+        sftpBytesDown += buf.length;
+        send({
+          t: "sftp-download-chunk",
+          path: downloadKey,
+          dataB64: buf.toString("base64"),
+        });
+      };
+
+      send({
+        t: "sftp-download-begin",
+        path: downloadKey,
+        name: zipName,
+        size: archive,
+      });
+
+      const centralParts = [];
+      let offset = 0;
+
+      const finishArchive = () => {
+        const centralBuf = Buffer.concat(centralParts);
+        emit(centralBuf);
+        emit(zipEndRecord(entries.length, centralBuf.length, offset));
+        downloads.delete(downloadKey);
+        sftpFilesDown += 1;
+        send({ t: "sftp-download-end", path: downloadKey });
+      };
+
+      const processEntry = (idx) => {
+        if (cancelled || ws.readyState !== ws.OPEN) {
+          downloads.delete(downloadKey);
+          return;
+        }
+        if (idx >= entries.length) return finishArchive();
+        const nameBuf = nameBufs[idx];
+        const local = zipLocalHeader(nameBuf.length);
+        emit(local);
+        emit(nameBuf);
+        const entryOffset = offset;
+        let crc = crc32Init();
+        let written = 0;
+        const rs = s.createReadStream(entries[idx].readPath);
+        curStream = rs;
+        rs.on("data", (chunk) => {
+          crc = crc32Update(crc, chunk);
+          written += chunk.length;
+          emit(chunk);
+          if (ws.bufferedAmount > 8 * 1024 * 1024) {
+            rs.pause();
+            const resume = setInterval(() => {
+              if (ws.readyState !== ws.OPEN) {
+                clearInterval(resume);
+                rs.destroy();
+              } else if (ws.bufferedAmount < 1 * 1024 * 1024) {
+                clearInterval(resume);
+                rs.resume();
+              }
+            }, 25);
+          }
+        });
+        rs.on("error", (e) => {
+          if (!cancelled && downloads.has(downloadKey)) {
+            downloads.delete(downloadKey);
+            sendError(e.message, "sftp");
+          }
+        });
+        rs.on("end", () => {
+          curStream = null;
+          const finalCrc = crc32Final(crc);
+          emit(zipDataDescriptor(finalCrc, written));
+          centralParts.push(
+            zipCentralHeader(nameBuf.length, finalCrc, written, entryOffset),
+            nameBuf,
+          );
+          offset += local.length + nameBuf.length + written + 16;
+          if (exceedsZip32(offset) || exceedsZip32(written)) {
+            // A file grew past 4 GB between stat and read — abort cleanly.
+            downloads.delete(downloadKey);
+            return sendError(
+              "Selection too large to zip (over 4 GB). Download items individually.",
+              "sftp",
+            );
+          }
+          processEntry(idx + 1);
+        });
+      };
+      processEntry(0);
     });
   }
 
-  // Zip up a set of selected files and send them as one download.
+  // Zip up a whole directory and stream it as one download.
+  function handleDownloadDir(msg) {
+    withSftp((s) => {
+      const name =
+        (msg.path.split("/").filter(Boolean).pop() || "download") + ".zip";
+      streamZip(
+        s,
+        [{ path: msg.path, prefix: "" }],
+        msg.path,
+        name,
+        `Folder too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
+      );
+    });
+  }
+
+  // Zip up a set of selected files and stream them as one download.
   function handleDownloadMany(msg) {
     withSftp((s) => {
       const paths = Array.isArray(msg.paths) ? msg.paths.filter(Boolean) : [];
       if (paths.length === 0) return sendError("Nothing selected.", "sftp");
-      collectPaths(s, paths, (err, files) => {
-        if (err) return sendError(err.message, "sftp");
-        const total = files.reduce((n, f) => n + f.data.length, 0);
-        if (MAX_DOWNLOAD_BYTES > 0 && total > MAX_DOWNLOAD_BYTES) {
-          return sendError(
-            `Selection too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
-            "sftp",
-          );
-        }
-        const zip = buildStoreZip(files);
-        send({
-          t: "sftp-read",
-          path: paths[0],
-          name: "download.zip",
-          dataB64: zip.toString("base64"),
-        });
-      });
+      const roots = paths.map((p) => ({
+        path: p,
+        prefix: p.split("/").filter(Boolean).pop() || "file",
+      }));
+      streamZip(
+        s,
+        roots,
+        paths[0],
+        "download.zip",
+        `Selection too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
+      );
     });
   }
 
