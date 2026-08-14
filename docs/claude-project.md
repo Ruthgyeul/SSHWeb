@@ -146,9 +146,15 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   passwordless `sudo -n` used when none is given (`SSH_SFTP_SERVER_PATHS`
   overrides where `sftp-server` is found). The WebSocket upgrade is origin-checked
   (same-origin by default, or `SSH_ALLOWED_ORIGINS`) to block cross-site
-  WebSocket hijacking. The security-critical pure logic (origin check, rate
+  WebSocket hijacking. An opt-in SSRF guard (`SSH_BLOCK_PRIVATE_HOSTS`) refuses to
+  dial private/internal targets — loopback, RFC1918 ranges, link-local (incl. the
+  `169.254.169.254` cloud-metadata endpoint), IPv6 ULA/link-local, and
+  `localhost` — so the relay can't be turned into a metadata/intranet probe (IP
+  literals + `localhost` only; a hostname that resolves to a private IP isn't
+  caught). The security-critical pure logic (origin check, rate
   limiter, IP resolution, upload accounting + chunk-order check, idle expiry,
-  access-token match, cookie parsing, WebSocket frame-size
+  access-token match, cookie parsing, private-host SSRF classification,
+  WebSocket frame-size
   bound, secure-cookie decision, sudo-sftp command builder) lives in
   `src/lib/serverSecurity.ts` (unit-tested) and is hand-mirrored in `server.mjs`
   — the same "two synchronized places" discipline as the wire protocol. The
