@@ -568,8 +568,11 @@ const ALLOWED_ORIGINS = (process.env.SSH_ALLOWED_ORIGINS || "")
   .split(/[\s,]+/)
   .map((s) => s.trim())
   .filter(Boolean);
-// Drop a socket that connects but never sends a `connect` message.
-const CONNECT_GRACE_MS = 30_000;
+// Drop a socket that connects but never sends a `connect` message (ms).
+const CONNECT_GRACE_MS = (() => {
+  const n = parseInt(process.env.SSH_CONNECT_GRACE_MS || "30000", 10);
+  return Number.isFinite(n) && n > 0 ? n : 30_000;
+})();
 // Bound the SSH handshake, including the time spent waiting for the user to
 // respond to an interactive prompt — accepting a host key (TOFU) or entering a
 // 2FA / keyboard-interactive code. Used both as ssh2's `readyTimeout` and as an

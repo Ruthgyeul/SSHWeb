@@ -41,7 +41,11 @@ export const SITE_DESCRIPTION = env(
 export const AUTHOR_NAME = env("NEXT_PUBLIC_AUTHOR_NAME", "SSHWeb");
 export const AUTHOR_URL = env("NEXT_PUBLIC_AUTHOR_URL", SITE_URL);
 
-/** Open Graph locale, e.g. "en_US" / "ko_KR". */
+/**
+ * Open Graph / `<html lang>` locale, e.g. "en_US" / "ko_KR". This is metadata
+ * only — it sets the document language and OG locale for SEO/social cards; it
+ * does NOT translate the UI, which is English-only.
+ */
 export const SITE_LOCALE = env("NEXT_PUBLIC_SITE_LOCALE", "en_US");
 
 /** `<html lang>` value derived from the OG locale ("en_US" -> "en-US"). */

@@ -21,8 +21,14 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
   {
     title: "Files (SFTP)",
     items: [
-      { keys: ["Double-click"], desc: "Open by type: dir · image · text · download" },
+      { keys: ["Click"], desc: "Open by type: dir · image · text · download" },
       { keys: ["Drag & drop"], desc: "Upload files into the current directory" },
+    ],
+  },
+  {
+    title: "Session tabs",
+    items: [
+      { keys: ["Double-click"], desc: "Rename the tab" },
     ],
   },
   {
