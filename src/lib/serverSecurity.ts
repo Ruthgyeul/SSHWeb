@@ -312,28 +312,6 @@ export function isSecureRequest(
 }
 
 /* ------------------------------------------------------------------ */
-/* Port-forward bind safety                                            */
-/* ------------------------------------------------------------------ */
-
-/** Loopback bind addresses a local port-forward may always listen on. */
-const LOOPBACK_BINDS = new Set(["127.0.0.1", "::1", "localhost", ""]);
-
-/**
- * Whether a local port-forward may bind to `bindHost`. Opening a listening
- * socket is sensitive, so by default a forward may only listen on loopback
- * (reachable from the machine running the relay, not the wider network). Set
- * `allowPublic` (from `SSH_FORWARD_ALLOW_PUBLIC_BIND`) to permit any bind
- * address, e.g. `0.0.0.0`. An empty/absent bind host is treated as loopback.
- */
-export function isForwardBindAllowed(
-  bindHost: string | undefined,
-  allowPublic: boolean,
-): boolean {
-  if (allowPublic) return true;
-  return LOOPBACK_BINDS.has((bindHost ?? "").trim().toLowerCase());
-}
-
-/* ------------------------------------------------------------------ */
 /* Elevated (sudo) SFTP command                                        */
 /* ------------------------------------------------------------------ */
 

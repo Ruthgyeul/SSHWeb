@@ -20,7 +20,6 @@
  */
 
 import { createServer } from "node:http";
-import net from "node:net";
 import { parse } from "node:url";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -562,17 +561,6 @@ function streamContentType(name) {
 // itself on cleanup, so a token only ever reaches that one session's files
 // (which its own authenticated WebSocket can already read).
 const streamSessions = new Map();
-// Allow local port-forwarding (`ssh -L`). Opening a listening TCP socket on the
-// relay host is sensitive, so it's off unless explicitly enabled.
-const ALLOW_FORWARD =
-  (process.env.SSH_ALLOW_PORT_FORWARD || "false").toLowerCase() === "true";
-// Whether a forward may bind to a non-loopback address (e.g. 0.0.0.0). Off by
-// default: forwards may only listen on loopback so they aren't network-reachable.
-const FORWARD_ALLOW_PUBLIC_BIND =
-  (process.env.SSH_FORWARD_ALLOW_PUBLIC_BIND || "false").toLowerCase() ===
-  "true";
-// Cap on concurrent forwards per session, so a client can't exhaust host ports.
-const MAX_FORWARDS = parseInt(process.env.SSH_MAX_FORWARDS || "10", 10);
 // Allow the file browser's elevated (sudo) mode. When enabled, a session may
 // ask the bridge to run `sftp-server` under `sudo` so file operations execute
 // as root (see buildSudoSftpCommand). This grants far-reaching access on the
@@ -751,14 +739,6 @@ function requestIsAuthorized(req) {
   const b = Buffer.from(cookie);
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
-}
-
-const FORWARD_LOOPBACK_BINDS = new Set(["127.0.0.1", "::1", "localhost", ""]);
-
-/** Whether a forward may bind to `bindHost` (mirrors serverSecurity.ts). */
-function isForwardBindAllowed(bindHost, allowPublic) {
-  if (allowPublic) return true;
-  return FORWARD_LOOPBACK_BINDS.has((bindHost ?? "").trim().toLowerCase());
 }
 
 /** Default cross-distro `sftp-server` locations (mirrors serverSecurity.ts). */
@@ -1229,18 +1209,6 @@ function joinRemote(dir, name) {
 }
 
 /**
- * Send a SOCKS5 reply with status `rep` (0 = success) and a dummy bound address
- * (0.0.0.0:0) — enough for a SOCKS client to proceed or see the failure.
- */
-function socksReply(socket, rep) {
-  try {
-    socket.write(Buffer.from([0x05, rep, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
-  } catch {
-    /* socket already gone */
-  }
-}
-
-/**
  * Copy one file over SFTP by streaming the source into the destination. The
  * source is only read (never modified); the destination is a new file. Bytes
  * pass through the bridge in a streamed pipe, so memory stays bounded.
@@ -1471,11 +1439,6 @@ wss.on("connection", (ws, req) => {
   // In-flight download read streams keyed by remote path, so they can be torn
   // down on cleanup or cancelled individually (`sftp-download-cancel`).
   const downloads = new Map();
-  // Open port-forwards, keyed by client id → { kind, server, sockets:Set, … }.
-  const forwards = new Map();
-  // Remote (`-R`) forwards, keyed by the SSH server's listen port → routing info,
-  // so the shared `tcp connection` handler can dispatch incoming channels.
-  const remoteForwards = new Map();
   // Timestamp of the last genuine shell/SFTP activity (not latency pings), used
   // by the idle-timeout reaper below.
   let lastActivity = Date.now();
@@ -1561,24 +1524,6 @@ wss.on("connection", (ws, req) => {
       }
     }
     downloads.clear();
-    for (const fwd of forwards.values()) {
-      try {
-        // Remote (`-R`) forwards have no local listener (server is null); the
-        // SSH connection ending tears down their remote bind.
-        fwd.server?.close();
-      } catch {
-        /* listener already gone */
-      }
-      for (const s of fwd.sockets) {
-        try {
-          s.destroy();
-        } catch {
-          /* socket already gone */
-        }
-      }
-    }
-    forwards.clear();
-    remoteForwards.clear();
     // Revoke the media-stream capability so no further /api/preview requests can
     // reach this (now closed) session, and drop its dedicated SFTP channel.
     if (streamToken) {
@@ -2095,44 +2040,6 @@ wss.on("connection", (ws, req) => {
           });
         },
       )
-      // Incoming channels for remote (`-R`) forwards: route by the SSH server's
-      // listen port to the matching forward, then connect out from the bridge to
-      // its destination and pipe the two together.
-      .on("tcp connection", (info, accept, reject) => {
-        const route = remoteForwards.get(info.destPort);
-        if (!route) return reject();
-        const stream = accept();
-        const target = net.connect(route.destPort, route.destHost, () => {
-          route.sockets.add(target);
-          send({ t: "forward-conn", id: route.id, count: route.sockets.size });
-          stream.pipe(target).pipe(stream);
-        });
-        stream.on("data", (d) => {
-          bytesDown += d.length;
-        });
-        target.on("data", (d) => {
-          bytesUp += d.length;
-        });
-        const done = () => {
-          if (route.sockets.delete(target)) {
-            send({ t: "forward-conn", id: route.id, count: route.sockets.size });
-          }
-          try {
-            stream.destroy();
-          } catch {
-            /* already gone */
-          }
-          try {
-            target.destroy();
-          } catch {
-            /* already gone */
-          }
-        };
-        stream.on("close", done);
-        stream.on("error", done);
-        target.on("close", done);
-        target.on("error", done);
-      })
       .on("error", (err) => {
         // ssh2 surfaces auth failures and network errors here.
         sshErrors += 1;
@@ -2265,299 +2172,6 @@ wss.on("connection", (ws, req) => {
     appendUploadChunk(existing, path, buffer, msg.final === true);
   }
 
-  // Wire one accepted local socket to a freshly-opened SSH forward-out stream,
-  // metering traffic and cleaning both ends up together. Shared by the local
-  // (`-L`) and dynamic (`-D`/SOCKS) forwards.
-  function bridgeSocketToStream(id, sockets, socket, stream, leftover) {
-    sockets.add(socket);
-    send({ t: "forward-conn", id, count: sockets.size });
-    socket.on("data", (d) => {
-      bytesUp += d.length;
-    });
-    stream.on("data", (d) => {
-      bytesDown += d.length;
-    });
-    if (leftover && leftover.length) stream.write(leftover);
-    socket.pipe(stream).pipe(socket);
-    const done = () => {
-      if (sockets.delete(socket)) {
-        send({ t: "forward-conn", id, count: sockets.size });
-      }
-      try {
-        socket.destroy();
-      } catch {
-        /* already gone */
-      }
-      try {
-        stream.destroy();
-      } catch {
-        /* already gone */
-      }
-    };
-    socket.on("close", done);
-    socket.on("error", done);
-    stream.on("close", done);
-    stream.on("error", done);
-  }
-
-  // Local forward (`ssh -L`): listen on bindHost:bindPort and tunnel each
-  // accepted TCP connection to destHost:destPort through the SSH session.
-  function openLocalForward(id, bindHost, bindPort, destHost, destPort) {
-    const sockets = new Set();
-    const fail = (message) => send({ t: "forward-error", id, message });
-    const local = net.createServer((socket) => {
-      if (!ssh) return socket.destroy();
-      ssh.forwardOut(
-        socket.remoteAddress || "127.0.0.1",
-        socket.remotePort || 0,
-        destHost,
-        destPort,
-        (err, stream) => {
-          if (err) return socket.destroy();
-          bridgeSocketToStream(id, sockets, socket, stream);
-        },
-      );
-    });
-    local.on("error", (err) => {
-      forwards.delete(id);
-      fail(
-        err.code === "EADDRINUSE"
-          ? `Port ${bindPort} is already in use.`
-          : err.message,
-      );
-    });
-    forwards.set(id, {
-      kind: "local",
-      server: local,
-      sockets,
-      bindHost,
-      bindPort,
-      destHost,
-      destPort,
-    });
-    local.listen(bindPort, bindHost, () => {
-      logEvent("forward-open", { ip: clientIp, kind: "local", bindPort, destHost, destPort });
-      send({ t: "forward-opened", id, kind: "local", bindHost, bindPort, destHost, destPort });
-    });
-  }
-
-  // Dynamic forward (`ssh -D`): run a minimal SOCKS5 proxy on bindHost:bindPort
-  // and tunnel each CONNECT request through the SSH session to the address the
-  // client asks for.
-  function openDynamicForward(id, bindHost, bindPort) {
-    const sockets = new Set();
-    const fail = (message) => send({ t: "forward-error", id, message });
-    const local = net.createServer((socket) => {
-      if (!ssh) return socket.destroy();
-      handleSocksConnection(id, sockets, socket);
-    });
-    local.on("error", (err) => {
-      forwards.delete(id);
-      fail(
-        err.code === "EADDRINUSE"
-          ? `Port ${bindPort} is already in use.`
-          : err.message,
-      );
-    });
-    forwards.set(id, {
-      kind: "dynamic",
-      server: local,
-      sockets,
-      bindHost,
-      bindPort,
-      destHost: "",
-      destPort: 0,
-    });
-    local.listen(bindPort, bindHost, () => {
-      logEvent("forward-open", { ip: clientIp, kind: "dynamic", bindPort });
-      send({ t: "forward-opened", id, kind: "dynamic", bindHost, bindPort, destHost: "", destPort: 0 });
-    });
-  }
-
-  // Speak just enough SOCKS5 (no-auth, CONNECT) to tunnel a browser/CLI SOCKS
-  // client through the SSH session. Parses incrementally since the greeting and
-  // request may arrive across several TCP chunks.
-  function handleSocksConnection(id, sockets, socket) {
-    let stage = "greeting";
-    let buf = Buffer.alloc(0);
-    const onData = (chunk) => {
-      buf = Buffer.concat([buf, chunk]);
-      if (stage === "greeting") {
-        if (buf.length < 2) return;
-        if (buf[0] !== 0x05) return socket.destroy();
-        const nMethods = buf[1];
-        if (buf.length < 2 + nMethods) return;
-        buf = buf.subarray(2 + nMethods);
-        socket.write(Buffer.from([0x05, 0x00])); // version 5, no authentication
-        stage = "request";
-      }
-      if (stage === "request") {
-        if (buf.length < 4) return;
-        if (buf[0] !== 0x05) return socket.destroy();
-        const cmd = buf[1];
-        const atyp = buf[3];
-        let host;
-        let offset;
-        if (atyp === 0x01) {
-          if (buf.length < 10) return;
-          host = `${buf[4]}.${buf[5]}.${buf[6]}.${buf[7]}`;
-          offset = 8;
-        } else if (atyp === 0x03) {
-          const len = buf[4];
-          if (buf.length < 5 + len + 2) return;
-          host = buf.subarray(5, 5 + len).toString("utf8");
-          offset = 5 + len;
-        } else if (atyp === 0x04) {
-          if (buf.length < 22) return;
-          const parts = [];
-          for (let i = 0; i < 16; i += 2) {
-            parts.push(buf.readUInt16BE(4 + i).toString(16));
-          }
-          host = parts.join(":");
-          offset = 20;
-        } else {
-          socksReply(socket, 0x08); // address type not supported
-          return socket.destroy();
-        }
-        const port = buf.readUInt16BE(offset);
-        const leftover = buf.subarray(offset + 2);
-        stage = "connecting";
-        socket.removeListener("data", onData);
-        if (cmd !== 0x01) {
-          socksReply(socket, 0x07); // command not supported (only CONNECT)
-          return socket.destroy();
-        }
-        if (!ssh) {
-          socksReply(socket, 0x01);
-          return socket.destroy();
-        }
-        ssh.forwardOut(
-          socket.remoteAddress || "127.0.0.1",
-          socket.remotePort || 0,
-          host,
-          port,
-          (err, stream) => {
-            if (err) {
-              socksReply(socket, 0x05); // connection refused
-              try {
-                socket.destroy();
-              } catch {
-                /* already gone */
-              }
-              return;
-            }
-            socksReply(socket, 0x00); // succeeded
-            bridgeSocketToStream(id, sockets, socket, stream, leftover);
-          },
-        );
-      }
-    };
-    socket.on("data", onData);
-    socket.on("error", () => {
-      try {
-        socket.destroy();
-      } catch {
-        /* already gone */
-      }
-    });
-  }
-
-  // Remote forward (`ssh -R`): ask the SSH server to listen on bindHost:bindPort
-  // and tunnel every connection there back to destHost:destPort reached from the
-  // bridge. Incoming channels arrive on the shared `tcp connection` handler
-  // (registered in handleConnect), routed by the remote listen port.
-  function openRemoteForward(id, bindHost, bindPort, destHost, destPort) {
-    const sockets = new Set();
-    ssh.forwardIn(bindHost, bindPort, (err, assignedPort) => {
-      if (err) {
-        forwards.delete(id);
-        return send({ t: "forward-error", id, message: err.message });
-      }
-      const actualPort = assignedPort || bindPort;
-      forwards.set(id, {
-        kind: "remote",
-        server: null,
-        sockets,
-        bindHost,
-        bindPort: actualPort,
-        destHost,
-        destPort,
-      });
-      remoteForwards.set(actualPort, { id, destHost, destPort, sockets });
-      logEvent("forward-open", { ip: clientIp, kind: "remote", bindPort: actualPort, destHost, destPort });
-      send({ t: "forward-opened", id, kind: "remote", bindHost, bindPort: actualPort, destHost, destPort });
-    });
-  }
-
-  // Dispatch a forward-open by kind. Guarded by ALLOW_FORWARD, a per-session cap,
-  // and (for the bridge-side listeners) the loopback-only bind policy.
-  function openForward(msg) {
-    const id = String(msg.id || "");
-    if (!id || forwards.has(id)) return;
-    const fail = (message) => send({ t: "forward-error", id, message });
-    if (!ALLOW_FORWARD) {
-      return fail("Port forwarding is disabled on this server.");
-    }
-    if (!ssh) return fail("Not connected.");
-    if (forwards.size >= MAX_FORWARDS) {
-      return fail(`Too many forwards (max ${MAX_FORWARDS}).`);
-    }
-    const kind =
-      msg.kind === "remote" || msg.kind === "dynamic" ? msg.kind : "local";
-    const bindHost = String(msg.bindHost || "127.0.0.1").trim() || "127.0.0.1";
-    const bindPort = Number(msg.bindPort) || 0;
-    const destHost = String(msg.destHost || "").trim();
-    const destPort = Number(msg.destPort) || 0;
-    if (bindPort < 1 || bindPort > 65535) {
-      return fail("Invalid forward specification.");
-    }
-    if (kind !== "dynamic" && (destPort < 1 || destPort > 65535 || !destHost)) {
-      return fail("Invalid forward specification.");
-    }
-    // The bind-safety policy applies to whichever side opens the listener: the
-    // bridge for local/dynamic, and the SSH server for remote (a non-loopback
-    // remote bind exposes the port on the target host).
-    if (!isForwardBindAllowed(bindHost, FORWARD_ALLOW_PUBLIC_BIND)) {
-      return fail(
-        "Forward may only bind to loopback on this server (127.0.0.1).",
-      );
-    }
-    if (kind === "remote") {
-      return openRemoteForward(id, bindHost, bindPort, destHost, destPort);
-    }
-    if (kind === "dynamic") return openDynamicForward(id, bindHost, bindPort);
-    return openLocalForward(id, bindHost, bindPort, destHost, destPort);
-  }
-
-  // Tear down a forward: stop its listener (or unforward the remote bind) and
-  // drop any live tunnelled sockets.
-  function closeForward(id) {
-    const fwd = forwards.get(String(id || ""));
-    if (!fwd) return;
-    forwards.delete(String(id));
-    if (fwd.kind === "remote") {
-      remoteForwards.delete(fwd.bindPort);
-      try {
-        ssh?.unforwardIn(fwd.bindHost, fwd.bindPort, () => {});
-      } catch {
-        /* connection already gone */
-      }
-    } else {
-      try {
-        fwd.server?.close();
-      } catch {
-        /* listener already gone */
-      }
-    }
-    for (const s of fwd.sockets) {
-      try {
-        s.destroy();
-      } catch {
-        /* socket already gone */
-      }
-    }
-    send({ t: "forward-closed", id: String(id) });
-  }
 
   // The file-read handler: thumbnails, previews (streamed/optimized),
   // edit reads and streamed downloads/transcodes. Extracted verbatim from the
@@ -3149,14 +2763,6 @@ wss.on("connection", (ws, req) => {
         });
         break;
 
-      case "forward-open":
-        openForward(msg);
-        break;
-
-      case "forward-close":
-        closeForward(msg.id);
-        break;
-
       case "thumb-purge":
         // Drop this connection's cached tiles (both login-user and elevated).
         if (sessionScope) {
@@ -3188,11 +2794,6 @@ server.listen(port, hostname, () => {
   if (ACCESS_TOKEN) {
     console.log("> Relay access gate enabled (SSH_ACCESS_TOKEN set)");
   }
-  if (ALLOW_FORWARD) {
-    console.log(
-      `> Port forwarding enabled (bind: ${FORWARD_ALLOW_PUBLIC_BIND ? "any" : "loopback only"})`,
-    );
-  }
   if (ALLOW_SUDO) {
     console.log("> Elevated (sudo) file access enabled (SSH_ALLOW_SUDO=true)");
   }
@@ -3201,7 +2802,6 @@ server.listen(port, hostname, () => {
     maxSessions: MAX_SESSIONS,
     idleTimeoutMs: IDLE_TIMEOUT_MS,
     accessGate: accessTokenRequired(ACCESS_TOKEN),
-    portForward: ALLOW_FORWARD,
     sudo: ALLOW_SUDO,
   });
 });

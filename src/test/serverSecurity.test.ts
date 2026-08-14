@@ -6,7 +6,6 @@ import {
   clientIpFromHeaders,
   computeMaxPayloadBytes,
   DEFAULT_SFTP_SERVER_PATHS,
-  isForwardBindAllowed,
   isIdleExpired,
   isSecureRequest,
   isWebSocketOriginAllowed,
@@ -290,26 +289,6 @@ describe("parseCookieHeader", () => {
     expect(parseCookieHeader("nonsense; good=1; =orphan")).toEqual({
       good: "1",
     });
-  });
-});
-
-describe("isForwardBindAllowed", () => {
-  it("permits loopback binds by default", () => {
-    expect(isForwardBindAllowed("127.0.0.1", false)).toBe(true);
-    expect(isForwardBindAllowed("::1", false)).toBe(true);
-    expect(isForwardBindAllowed("localhost", false)).toBe(true);
-    expect(isForwardBindAllowed("", false)).toBe(true);
-    expect(isForwardBindAllowed(undefined, false)).toBe(true);
-  });
-
-  it("rejects a public bind unless explicitly allowed", () => {
-    expect(isForwardBindAllowed("0.0.0.0", false)).toBe(false);
-    expect(isForwardBindAllowed("192.168.1.5", false)).toBe(false);
-  });
-
-  it("permits any bind when public binds are allowed", () => {
-    expect(isForwardBindAllowed("0.0.0.0", true)).toBe(true);
-    expect(isForwardBindAllowed("192.168.1.5", true)).toBe(true);
   });
 });
 
