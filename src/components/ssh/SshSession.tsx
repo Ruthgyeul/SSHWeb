@@ -52,7 +52,11 @@ import {
   type SessionStatus,
 } from "./SessionStatus";
 import { XtermView, type XtermHandle } from "./XtermView";
-import { ConnectForm, type ConnectDetails } from "./ConnectForm";
+import {
+  ConnectForm,
+  type ConnectDetails,
+  type ConnectFormInitial,
+} from "./ConnectForm";
 import {
   FileBrowser,
   type UploadItem,
@@ -517,6 +521,16 @@ export function SshSession({
   // Whether we hold credentials from a prior connect (drives the Reconnect UI);
   // mirrors lastDetailsRef but is render-safe.
   const [hasLast, setHasLast] = useState(false);
+  // Bumped to re-mount (re-seed) the ConnectForm: after a failed login we
+  // remount it pre-filled with the last host/port/user (password cleared), and
+  // on a fresh "New connection" we remount it empty.
+  const [formSeed, setFormSeed] = useState(0);
+  // Values to pre-fill the connect form with after a failed login (never the
+  // password). Set from the callback that sees the failure, so no ref is read
+  // during render.
+  const [formInitial, setFormInitial] = useState<ConnectFormInitial | undefined>(
+    undefined,
+  );
 
   // Reconnection bookkeeping (refs so the ws close handler sees fresh values).
   const lastDetailsRef = useRef<ConnectDetails | null>(null);
@@ -686,6 +700,8 @@ export function SshSession({
             setStatus("connected");
             setConnectedAt((at) => at ?? Date.now());
             setStatusMessage("");
+            // A later disconnect should show a clean form, not the last prefill.
+            setFormInitial(undefined);
             xtermRef.current?.writeln(
               "\x1b[32m✓ Connected.\x1b[0m Type as you would in any shell.",
             );
@@ -1161,7 +1177,26 @@ export function SshSession({
     lastDetailsRef,
     onMessage: handleServerMessage,
     onOpen: sendConnect,
-    onNeverConnected: () => setStatus("error"),
+    onNeverConnected: () => {
+      // Login/host failure. Return to the connect form pre-filled with the same
+      // host/port/user (and key material) but a cleared password — re-seed it by
+      // bumping formSeed so the user only retypes the secret.
+      const d = lastDetailsRef.current;
+      setFormInitial(
+        d
+          ? {
+              host: d.host,
+              port: String(d.port),
+              username: d.username,
+              auth: d.privateKey ? "key" : "password",
+              privateKey: d.privateKey ?? "",
+              passphrase: d.passphrase ?? "",
+            }
+          : undefined,
+      );
+      setStatus("error");
+      setFormSeed((s) => s + 1);
+    },
     onSocketError: () =>
       setStatusMessage("WebSocket error — is the SSH bridge running?"),
   });
@@ -1552,7 +1587,9 @@ export function SshSession({
 
   const connecting = status === "connecting" || status === "reconnecting";
   const showOverlay = !connected;
-  const canReconnect = (status === "dropped" || status === "error") && hasLast;
+  // A dropped *live* session offers a one-click reconnect (saved credentials).
+  // A failed login (status "error") instead returns to the pre-filled form.
+  const canReconnect = status === "dropped" && hasLast;
 
   // --- On-screen modifier keys (mobile key bar) ---
   const disarmMods = () => {
@@ -2360,6 +2397,8 @@ export function SshSession({
                         setHasLast(false);
                         setStatus("idle");
                         setStatusMessage("");
+                        setFormInitial(undefined);
+                        setFormSeed((s) => s + 1);
                       }}
                       className="rounded-md border border-term-border px-4 py-2 text-sm text-term-muted hover:text-term-text"
                     >
@@ -2386,14 +2425,19 @@ export function SshSession({
                     </div>
                   </div>
                   <h2 className="text-lg font-semibold text-term-text">
-                    New SSH connection
+                    {status === "error" ? "Try again" : "New SSH connection"}
                   </h2>
                   <p className="mt-1 mb-5 text-xs leading-relaxed text-term-muted">
-                    Credentials are relayed straight to the target host to open
-                    the session and are never stored or logged by this site. Only
-                    connect to hosts you trust.
+                    {status === "error"
+                      ? "The login didn't go through. Your host, port and username are kept — just re-enter your password (or key) and reconnect."
+                      : "Credentials are relayed straight to the target host to open the session and are never stored or logged by this site. Only connect to hosts you trust."}
                   </p>
-                  <ConnectForm onConnect={connect} connecting={connecting} />
+                  <ConnectForm
+                    key={formSeed}
+                    initial={formInitial}
+                    onConnect={connect}
+                    connecting={connecting}
+                  />
                   {statusMessage && (
                     <p className="mt-4 rounded-md border border-term-red/40 bg-term-red/10 px-3 py-2 text-xs text-term-red">
                       {statusMessage}
