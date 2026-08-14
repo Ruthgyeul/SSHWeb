@@ -23,7 +23,8 @@ src/
 │       ├── hooks/       #   co-located hooks (useFileSort, useFileViewMode,
 │       │                #     useSnippets, useTerminalPrefs, useThumbnailQueue,
 │       │                #     useUploadQueue, useReconnect, useSshSocket,
-│       │                #     useImageTransform, useTextFind, usePreviewKeyboard)
+│       │                #     useConnectionProfiles, useImageTransform,
+│       │                #     useTextFind, usePreviewKeyboard)
 │       ├── preview/     #   FilePreview view components (PreviewMedia, PreviewFilmstrip)
 │       └── dom/         #   DOM helpers (download.ts, dropUpload.ts)
 ├── config/
@@ -37,6 +38,7 @@ src/
 │   ├── byteLruCache.ts  # generic byte-bounded TTL LRU (browser preview cache)
 │   ├── bytes.ts         # pure base64 ↔ byte helpers (web-SSH data plane)
 │   ├── connections.ts   # multi-tab "same server" quick-connect label + dedup
+│   ├── connectionProfiles.ts # saved recent-host profiles (identity only, no secret)
 
 │   ├── editorSearch.ts  # find/replace match logic (editor + text preview)
 │   ├── knownHosts.ts    # TOFU known-hosts parse/compare (localStorage)
