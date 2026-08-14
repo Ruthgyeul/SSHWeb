@@ -10,6 +10,8 @@ import {
 } from "@/lib/sshProtocol";
 import { SSH_ALLOWED_HOSTS } from "@/config/siteConfig";
 import { cn } from "@/lib/utils";
+import { useConnectionProfiles } from "./hooks/useConnectionProfiles";
+import type { ConnectionProfile } from "@/lib/connectionProfiles";
 
 /** Resolved connection details ready to hand to the WebSocket layer. */
 export interface ConnectDetails {
@@ -68,6 +70,44 @@ export function ConnectForm({
 
   const allowlist = parseAllowlist(SSH_ALLOWED_HOSTS);
 
+  // Saved connection profiles (recent hosts) — identity only, never the secret.
+  const {
+    profiles,
+    save: saveProfile,
+    remove: removeProfile,
+  } = useConnectionProfiles();
+
+  function loadProfile(p: ConnectionProfile) {
+    setHost(p.host);
+    setPort(String(p.port));
+    setUsername(p.username);
+    setAuth(p.auth);
+    setErrors([]);
+  }
+
+  function saveCurrent() {
+    const found = validateConnectInput({
+      host,
+      port,
+      username,
+      auth,
+      // Saving only needs a valid host/port/user; pass the current secret so the
+      // shared validator doesn't complain, but it is never persisted.
+      password: password || "x",
+      privateKey: privateKey || "x",
+    });
+    if (found.length > 0) {
+      setErrors(found);
+      return;
+    }
+    saveProfile({
+      host: host.trim(),
+      port: Number(port),
+      username: username.trim(),
+      auth,
+    });
+  }
+
   function handleKeyFile(file: File) {
     const reader = new FileReader();
     reader.onload = () => setPrivateKey(String(reader.result ?? ""));
@@ -103,6 +143,39 @@ export function ConnectForm({
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
+      {profiles.length > 0 && (
+        <div>
+          <span className={labelClass}>Saved connections</span>
+          <div className="flex flex-wrap gap-1.5">
+            {profiles.map((p) => (
+              <span
+                key={p.id}
+                className="group inline-flex items-center overflow-hidden rounded-md border border-term-border bg-term-panel text-xs text-term-text"
+              >
+                <button
+                  type="button"
+                  onClick={() => loadProfile(p)}
+                  disabled={connecting}
+                  title={`Fill ${p.username}@${p.host}:${p.port}`}
+                  className="max-w-[14rem] truncate px-2.5 py-1 font-mono hover:bg-term-accent/10 hover:text-term-accent"
+                >
+                  {p.label}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeProfile(p.id)}
+                  disabled={connecting}
+                  title="Forget this connection"
+                  aria-label={`Forget ${p.label}`}
+                  className="border-l border-term-border px-1.5 py-1 text-term-faint hover:text-term-red"
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_7rem]">
         <div>
           <label htmlFor="ssh-host" className={labelClass}>
@@ -252,16 +325,30 @@ export function ConnectForm({
         </ul>
       )}
 
-      <button
-        type="submit"
-        disabled={connecting}
-        className={cn(
-          "mt-1 rounded-md border border-term-accent/40 bg-term-accent/15 px-4 py-2.5 text-sm font-medium text-term-accent transition-colors hover:bg-term-accent/25",
-          connecting && "cursor-not-allowed opacity-60",
-        )}
-      >
-        {connecting ? "Connecting…" : "Connect →"}
-      </button>
+      <div className="mt-1 flex gap-2">
+        <button
+          type="submit"
+          disabled={connecting}
+          className={cn(
+            "flex-1 rounded-md border border-term-accent/40 bg-term-accent/15 px-4 py-2.5 text-sm font-medium text-term-accent transition-colors hover:bg-term-accent/25",
+            connecting && "cursor-not-allowed opacity-60",
+          )}
+        >
+          {connecting ? "Connecting…" : "Connect →"}
+        </button>
+        <button
+          type="button"
+          onClick={saveCurrent}
+          disabled={connecting}
+          title="Save this host/port/username for next time (no password is stored)"
+          className={cn(
+            "rounded-md border border-term-border px-4 py-2.5 text-sm text-term-muted transition-colors hover:border-term-accent/40 hover:text-term-accent",
+            connecting && "cursor-not-allowed opacity-60",
+          )}
+        >
+          ★ Save
+        </button>
+      </div>
     </form>
   );
 }
