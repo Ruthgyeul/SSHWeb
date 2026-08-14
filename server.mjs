@@ -2148,6 +2148,43 @@ wss.on("connection", (ws, req) => {
     return "other";
   }
 
+  // Upload backpressure: SFTP write streams whose buffer is full and that we're
+  // waiting to `drain` before reading more from the socket. Symmetric with the
+  // download path (which pauses the SFTP *read* stream on a full `ws`
+  // bufferedAmount). Without this, a client uploading over a fast local
+  // WebSocket to a slow SSH target would have every chunk buffered in the write
+  // stream's memory unbounded — `write()` returns false but was ignored.
+  const backpressured = new Set();
+  function pauseForBackpressure(stream) {
+    if (backpressured.has(stream)) return;
+    backpressured.add(stream);
+    // Pause the whole connection's incoming data (uploads share the socket) only
+    // when the first stream stalls; resume once every stalled stream drains.
+    if (backpressured.size === 1) {
+      try {
+        ws.pause();
+      } catch {
+        /* socket already gone */
+      }
+    }
+    // Release on the first of drain (buffer flushed) / close / error (stream
+    // destroyed on cap, cancel or failure) so a torn-down stream never leaves
+    // the socket paused forever.
+    const release = () => {
+      if (!backpressured.delete(stream)) return;
+      if (backpressured.size === 0) {
+        try {
+          ws.resume();
+        } catch {
+          /* socket already gone */
+        }
+      }
+    };
+    stream.once("drain", release);
+    stream.once("close", release);
+    stream.once("error", release);
+  }
+
   // Append `buffer` to an open upload, enforcing the size cap and closing the
   // stream on the final chunk.
   function appendUploadChunk(entry, path, buffer, isFinal) {
@@ -2169,13 +2206,17 @@ wss.on("connection", (ws, req) => {
     entry.written += buffer.length;
     bytesUp += buffer.length;
     sftpBytesUp += buffer.length;
-    entry.stream.write(buffer);
+    const ok = entry.stream.write(buffer);
     if (isFinal) {
       entry.stream.end(() => {
         uploads.delete(path);
         sftpFilesUp += 1;
         send({ t: "sftp-ok", op: "write", path });
       });
+    } else if (!ok) {
+      // Write buffer full and more chunks are coming — throttle the client until
+      // the SFTP stream drains instead of buffering the rest in memory.
+      pauseForBackpressure(entry.stream);
     }
   }
 
