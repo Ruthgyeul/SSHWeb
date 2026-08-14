@@ -320,12 +320,26 @@ function saveKnownHost(id: string, fingerprint: string) {
  * backoff) using the credentials from the last connect, then offers a manual
  * "Reconnect" button.
  */
+/** A live connection in another tab, offered as a one-click "same server" login. */
+export interface ReusableConnection {
+  /** `user@host` (with `:port` when non-default) for the button label. */
+  label: string;
+  /** The in-memory details to reconnect with — no re-typing. */
+  details: ConnectDetails;
+}
+
 export function SshSession({
   active,
   onMeta,
+  reusableConnections,
+  onConnectionChange,
 }: {
   active: boolean;
   onMeta: (meta: SessionMeta) => void;
+  /** Other tabs' live connections, shown as quick-connect options on the form. */
+  reusableConnections?: ReusableConnection[];
+  /** Report this tab's connected details (or null when not connected) upward. */
+  onConnectionChange?: (details: ConnectDetails | null) => void;
 }) {
   const wsRef = useRef<WebSocket | null>(null);
   const xtermRef = useRef<XtermHandle>(null);
@@ -1500,6 +1514,19 @@ export function SshSession({
     connectedRef.current = connected;
   }, [connected]);
 
+  // Report this tab's connected details upward (for other tabs' "same server"
+  // quick-connect), and clear it whenever this tab isn't connected. The details
+  // stay in memory only — same as the reconnect credentials this session
+  // already holds — and are dropped on disconnect and unmount.
+  const onConnectionChangeRef = useRef(onConnectionChange);
+  useEffect(() => {
+    onConnectionChangeRef.current = onConnectionChange;
+  });
+  useEffect(() => {
+    onConnectionChangeRef.current?.(connected ? lastDetailsRef.current : null);
+    return () => onConnectionChangeRef.current?.(null);
+  }, [connected]);
+
   // Keep previewPathRef in sync so a late preview reply knows what's open.
   useEffect(() => {
     previewPathRef.current = preview?.path ?? null;
@@ -2442,6 +2469,35 @@ export function SshSession({
                     <p className="mt-4 rounded-md border border-term-red/40 bg-term-red/10 px-3 py-2 text-xs text-term-red">
                       {statusMessage}
                     </p>
+                  )}
+                  {reusableConnections && reusableConnections.length > 0 && (
+                    <div className="mt-6 border-t border-term-border pt-4">
+                      <p className="mb-2 text-xs font-medium text-term-muted">
+                        Open another session on a server you&apos;re already on
+                      </p>
+                      <div className="flex flex-col gap-1.5">
+                        {reusableConnections.map((c) => (
+                          <button
+                            key={c.label}
+                            type="button"
+                            onClick={() => connect(c.details)}
+                            disabled={connecting}
+                            className={cn(
+                              "flex items-center gap-2 rounded-md border border-term-border bg-term-panel px-3 py-2 text-left text-sm text-term-text transition-colors hover:border-term-accent/40 hover:bg-term-accent/10",
+                              connecting && "cursor-not-allowed opacity-60",
+                            )}
+                          >
+                            <span
+                              className="select-none font-mono text-term-accent"
+                              aria-hidden
+                            >
+                              ↳
+                            </span>
+                            <span className="truncate font-mono">{c.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </>
               )}

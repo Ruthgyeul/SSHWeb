@@ -21,10 +21,10 @@ that actually talks SSH is [`server.mjs`](../server.mjs).
 
 | Component     | Purpose                                                                 |
 | ------------- | ----------------------------------------------------------------------- |
-| `SshClient`   | Multi-session tab manager — mounts one `SshSession` per tab; **double-click a tab to rename it** |
-| `SshSession`  | One connection: owns a WebSocket + terminal + files, auto-reconnects; header shows live uptime + latency (status widgets live in `SessionStatus`) |
+| `SshClient`   | Multi-session tab manager — mounts one `SshSession` per tab; **double-click a tab to rename it**. Tracks each tab's live connection (in memory only) so a **new tab offers a one-click "same server" login** at the bottom of its connect form — reconnect to a host another tab is already on without re-typing anything (dedup/label logic in `src/lib/connections.ts`) |
+| `SshSession`  | One connection: owns a WebSocket + terminal + files, auto-reconnects; header shows live uptime + latency (status widgets live in `SessionStatus`). On a **failed login it returns to the connect form pre-filled** with the same host/port/user (and key material) — only the password is cleared + focused — instead of forcing a full re-entry; a dropped *live* session still shows the one-click reconnect card |
 | `SessionStatus` | The header/tab status widgets — `StatusDot`, `Uptime` clock, `LatencyChip` — plus the `SessionStatus` union type, shared by `SshSession` and `SshClient` |
-| `ConnectForm` | Host/port/user + password-or-key login (validated via `sshProtocol`)    |
+| `ConnectForm` | Host/port/user + password-or-key login (validated via `sshProtocol`). Takes an optional `initial` to pre-fill every field **except the password** (used to re-seed the form after a failed login / for a "same server" quick-connect) |
 | `XtermView`   | xterm.js wrapper; xterm is dynamically imported (never during SSR)      |
 | `MobileKeys`  | On-screen key bar (Esc/Tab/Ctrl/Alt/arrows/Fn/…) for touch devices; Ctrl/Alt are sticky one-shot modifiers |
 | `SnippetsBar` | Saved command snippets that inject into the shell (persisted via `useSnippets`) |
