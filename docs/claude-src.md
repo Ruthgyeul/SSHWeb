@@ -23,8 +23,8 @@ src/
 │       ├── hooks/       #   co-located hooks (useFileSort, useFileViewMode,
 │       │                #     useSnippets, useTerminalPrefs, useThumbnailQueue,
 │       │                #     useUploadQueue, useReconnect, useSshSocket,
-│       │                #     useConnectionProfiles, useImageTransform,
-│       │                #     useTextFind, usePreviewKeyboard)
+│       │                #     useConnectionProfiles, useModalA11y,
+│       │                #     useImageTransform, useTextFind, usePreviewKeyboard)
 │       ├── preview/     #   FilePreview view components (PreviewMedia, PreviewFilmstrip)
 │       └── dom/         #   DOM helpers (download.ts, dropUpload.ts)
 ├── config/

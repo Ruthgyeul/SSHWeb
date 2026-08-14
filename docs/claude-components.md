@@ -50,7 +50,13 @@ the file-browser view hooks (`useFileSort`, `useFileViewMode`, `useSnippets`,
 (`useThumbnailQueue`, `useUploadQueue`, and the socket lifecycle —
 `useReconnect` for the auto-reconnect state machine + `useSshSocket` for the
 bridge WebSocket), and the `FilePreview` modal hooks (`useImageTransform`,
-`useTextFind`, `usePreviewKeyboard`) — each unit-tested via `renderHook`. The
+`useTextFind`, `usePreviewKeyboard`) — each unit-tested via `renderHook`. A
+shared **`useModalA11y`** gives every overlay modal (`FilePreview`, `FileEditor`,
+`PromptDialog`, `AuthPrompt`, `ShortcutsHelp`, `PasteConfirm`) the same
+accessibility behaviour — `role="dialog"`/`aria-modal`, a focus trap that moves
+focus in and wraps Tab/Shift+Tab, Escape-to-close, and focus restore to the
+opener on close (`closeOnEscape: false` where the modal owns Escape, e.g. the
+preview/editor; `trapFocus: false` for the editor, whose textarea needs Tab). The
 `FilePreview` view JSX is split into `ssh/preview/` components (`PreviewMedia`,
 `PreviewFilmstrip`). Pure, DOM-free helpers stay in `src/lib`
 instead — the base64 ↔ byte codec used across the wire is `src/lib/bytes.ts`

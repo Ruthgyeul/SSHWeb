@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { KbdPrompt } from "@/lib/sshProtocol";
 import { cn } from "@/lib/utils";
 import { WarningIcon } from "./icons";
+import { useModalA11y } from "./hooks/useModalA11y";
 
 /** A host-key confirmation request (trust-on-first-use). */
 export interface HostKeyPromptState {
@@ -44,9 +45,21 @@ export function AuthPromptModal({
   onHostKeyDecision: (accept: boolean) => void;
   onKbdSubmit: (responses: string[]) => void;
 }) {
+  // Trap focus, but don't map Escape to a close — an auth prompt must be
+  // answered explicitly (reject/accept or submit), not dismissed.
+  const dialogRef = useModalA11y<HTMLDivElement>({
+    onClose: () => {},
+    closeOnEscape: false,
+  });
   return (
     <div className="absolute inset-0 z-30 flex items-center justify-center bg-term-bg/80 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-xl border border-term-border bg-term-card p-5 shadow-2xl sm:p-6">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="SSH authentication"
+        className="w-full max-w-md rounded-xl border border-term-border bg-term-card p-5 shadow-2xl sm:p-6"
+      >
         {prompt.kind === "hostkey" ? (
           <HostKeyBody prompt={prompt} onDecision={onHostKeyDecision} />
         ) : (
