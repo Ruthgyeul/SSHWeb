@@ -1,5 +1,7 @@
 "use client";
 
+import { useModalA11y } from "./hooks/useModalA11y";
+
 /**
  * Confirmation modal shown before a multi-line paste reaches the shell. Pasting
  * text that contains newlines can run several commands at once (each newline is
@@ -20,12 +22,22 @@ export function PasteConfirm({
   // the untouched original is what actually gets sent on confirm.
   const preview = text.replace(/\x1b\[20[01]~/g, "");
   const lineCount = preview.replace(/\n$/, "").split("\n").length;
+  const dialogRef = useModalA11y<HTMLDivElement>({ onClose: onCancel });
 
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-term-bg/80 p-4">
-      <div className="flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="paste-confirm-title"
+        className="flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl"
+      >
         <div className="border-b border-term-border px-5 py-3">
-          <h2 className="text-sm font-semibold text-term-text">
+          <h2
+            id="paste-confirm-title"
+            className="text-sm font-semibold text-term-text"
+          >
             Paste {lineCount} lines into the terminal?
           </h2>
           <p className="mt-1 text-xs leading-relaxed text-term-muted">

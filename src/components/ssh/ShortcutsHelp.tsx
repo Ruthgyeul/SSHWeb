@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useModalA11y } from "./hooks/useModalA11y";
 
 interface Shortcut {
   keys: string[];
@@ -59,20 +59,25 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
 
 /** A modal cheat-sheet of the app's keyboard and pointer shortcuts. */
 export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const dialogRef = useModalA11y<HTMLDivElement>({ onClose });
 
   return (
     <div
       className="absolute inset-0 z-40 flex items-center justify-center bg-term-bg/80 p-4"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="flex max-h-full w-full max-w-md flex-col overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shortcuts-help-title"
+        className="flex max-h-full w-full max-w-md flex-col overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl"
+      >
         <div className="flex items-center justify-between border-b border-term-border px-5 py-3">
-          <h2 className="text-sm font-semibold text-term-text">
+          <h2
+            id="shortcuts-help-title"
+            className="text-sm font-semibold text-term-text"
+          >
             Keyboard shortcuts
           </h2>
           <button

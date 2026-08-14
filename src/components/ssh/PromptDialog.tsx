@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useModalA11y } from "./hooks/useModalA11y";
 
 /**
  * A single request to show the in-app dialog. When `input` is present the dialog
@@ -41,6 +42,7 @@ export function PromptDialog({
   const [value, setValue] = useState(request.input?.initialValue ?? "");
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useModalA11y<HTMLDivElement>({ onClose });
 
   // Focus (and select) the field when the dialog opens.
   useEffect(() => {
@@ -68,9 +70,20 @@ export function PromptDialog({
       className="absolute inset-0 z-40 flex items-center justify-center bg-term-bg/80 p-4"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="w-full max-w-sm overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="prompt-dialog-title"
+        className="w-full max-w-sm overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl"
+      >
         <div className="border-b border-term-border px-5 py-3">
-          <h2 className="text-sm font-semibold text-term-text">{request.title}</h2>
+          <h2
+            id="prompt-dialog-title"
+            className="text-sm font-semibold text-term-text"
+          >
+            {request.title}
+          </h2>
           {request.message && (
             <p className="mt-1 text-xs leading-relaxed text-term-muted">
               {request.message}
@@ -93,12 +106,11 @@ export function PromptDialog({
                 if (error) setError(null);
               }}
               onKeyDown={(e) => {
+                // Escape is handled by useModalA11y (works for confirm-only
+                // dialogs too); here we only add Enter-to-submit.
                 if (e.key === "Enter") {
                   e.preventDefault();
                   submit();
-                } else if (e.key === "Escape") {
-                  e.preventDefault();
-                  onClose();
                 }
               }}
               type={request.input.password ? "password" : "text"}

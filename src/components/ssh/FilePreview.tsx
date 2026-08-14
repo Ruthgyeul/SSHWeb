@@ -13,6 +13,7 @@ import {
 } from "./hooks/useImageTransform";
 import { useTextFind } from "./hooks/useTextFind";
 import { usePreviewKeyboard } from "./hooks/usePreviewKeyboard";
+import { useModalA11y } from "./hooks/useModalA11y";
 import { PreviewMedia } from "./preview/PreviewMedia";
 import { PreviewFilmstrip } from "./preview/PreviewFilmstrip";
 import { FileIcon, type FileIconKind } from "./FileIcon";
@@ -283,6 +284,12 @@ export function FilePreview({
     setSpeed,
   });
 
+  // Focus trap + restore; Escape is owned by usePreviewKeyboard above.
+  const dialogRef = useModalA11y<HTMLDivElement>({
+    onClose,
+    closeOnEscape: false,
+  });
+
   const pct =
     total && total > 0
       ? Math.min(100, Math.round(((received ?? 0) / total) * 100))
@@ -436,7 +443,13 @@ export function FilePreview({
   );
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col bg-term-card">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Preview: ${name}`}
+      className="absolute inset-0 z-30 flex flex-col bg-term-card"
+    >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
         <FileIcon kind={MODE_ICON_KIND[kind]} className="text-term-muted" />
 

@@ -17,6 +17,7 @@ import {
   type Match,
 } from "@/lib/editorSearch";
 import { PencilIcon, SearchIcon } from "./icons";
+import { useModalA11y } from "./hooks/useModalA11y";
 
 // Text metrics shared by the textarea, the highlight overlay and the gutter, so
 // all three line up to the pixel. Any change here must apply to all three.
@@ -259,10 +260,24 @@ export function FileEditor({
     }
   };
 
+  // Screen-reader dialog semantics + focus restore on close. The editor owns
+  // Escape (discard guard) and Tab (insert two spaces), so no trap here.
+  const dialogRef = useModalA11y<HTMLDivElement>({
+    onClose: onCloseAll,
+    closeOnEscape: false,
+    trapFocus: false,
+  });
+
   if (!activeFile) return null;
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col bg-term-card">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="File editor"
+      className="absolute inset-0 z-30 flex flex-col bg-term-card"
+    >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
         <PencilIcon className="h-4 w-4 text-term-muted" />
         <span

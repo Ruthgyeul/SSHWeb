@@ -318,7 +318,11 @@ export function ConnectForm({
       )}
 
       {errors.length > 0 && (
-        <ul className="rounded-md border border-term-red/40 bg-term-red/10 px-3 py-2 text-xs text-term-red">
+        <ul
+          role="alert"
+          aria-live="assertive"
+          className="rounded-md border border-term-red/40 bg-term-red/10 px-3 py-2 text-xs text-term-red"
+        >
           {errors.map((error) => (
             <li key={error}>• {error}</li>
           ))}
