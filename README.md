@@ -68,7 +68,7 @@ and is read from `NEXT_PUBLIC_*` environment variables. Copy `.env.example` to
 | `NEXT_PUBLIC_SITE_SHORT_NAME`  | Short name (PWA label, title suffix)            |
 | `NEXT_PUBLIC_SITE_DESCRIPTION` | Meta description / social card copy             |
 | `NEXT_PUBLIC_AUTHOR_NAME`      | Author / publisher                              |
-| `NEXT_PUBLIC_SITE_LOCALE`      | Locale, e.g. `en_US` / `ko_KR`                  |
+| `NEXT_PUBLIC_SITE_LOCALE`      | Metadata locale (`<html lang>` + OG); UI stays English |
 | `NEXT_PUBLIC_TERMINAL_USER`    | Shell prompt user (cosmetic)                    |
 | `NEXT_PUBLIC_TERMINAL_HOST`    | Shell prompt host (cosmetic)                    |
 | `NEXT_PUBLIC_ALLOW_INDEXING`   | `false` to block crawlers on staging            |
