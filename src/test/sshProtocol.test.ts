@@ -569,7 +569,7 @@ describe("HEIC/HEIF handling", () => {
 
 describe("videoNeedsTranscode", () => {
   it("flags containers browsers can't play natively", () => {
-    for (const n of ["a.avi", "b.wmv", "c.flv", "d.ts", "e.m2ts", "f.mpg", "g.vob", "h.3gp"]) {
+    for (const n of ["a.avi", "b.wmv", "c.flv", "e.m2ts", "f.mpg", "g.vob", "h.3gp"]) {
       expect(videoNeedsTranscode(n)).toBe(true);
       expect(isProbablyVideoFile(n)).toBe(true); // still recognised as a video
       expect(filePreviewKind(n)).toBe("video");
@@ -582,6 +582,31 @@ describe("videoNeedsTranscode", () => {
     }
     expect(videoNeedsTranscode("photo.jpg")).toBe(false);
     expect(videoNeedsTranscode("noext")).toBe(false);
+  });
+});
+
+describe(".ts is TypeScript source, not MPEG-TS video", () => {
+  it("does not classify a .ts file as video", () => {
+    for (const n of ["app.ts", "Component.TS", "server.ts"]) {
+      expect(isProbablyVideoFile(n)).toBe(false);
+      expect(videoMimeType(n)).toBeNull();
+      expect(videoNeedsTranscode(n)).toBe(false);
+      expect(previewKind(n)).toBeNull();
+      // Not a media/PDF/Markdown preview → falls through to the editor.
+      expect(filePreviewKind(n)).toBeNull();
+    }
+  });
+
+  it("opens .ts in the inline editor as text", () => {
+    expect(isProbablyTextFile("app.ts")).toBe(true);
+    expect(isProbablyTextFile("app.tsx")).toBe(true);
+  });
+
+  it("keeps the unambiguous AVCHD .mts/.m2ts as video", () => {
+    for (const n of ["clip.mts", "clip.m2ts"]) {
+      expect(isProbablyVideoFile(n)).toBe(true);
+      expect(videoNeedsTranscode(n)).toBe(true);
+    }
   });
 });
 

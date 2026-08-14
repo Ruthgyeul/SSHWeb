@@ -159,7 +159,7 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   `STREAM_MAX_CHUNK_BYTES` and a hardened `default-src 'none'; sandbox` CSP on the
   media bytes; the existing `media-src 'self'` already authorizes it, so don't
   widen the CSP. A container/codec the browser can't play natively (e.g.
-  `.avi`/`.wmv`/`.flv`/`.ts` — `videoNeedsTranscode` in `sshProtocol.ts`) is
+  `.avi`/`.wmv`/`.flv`/`.mts` — `videoNeedsTranscode` in `sshProtocol.ts`) is
   **transcoded on the fly** by the same endpoint (`?transcode=1`): the bridge
   pipes the source through `ffmpeg` to fragmented MP4 (H.264/AAC,
   `-movflags frag_keyframe+empty_moov+faststart`) and streams it progressively so
