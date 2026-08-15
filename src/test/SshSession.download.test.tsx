@@ -43,7 +43,8 @@ vi.mock("@/components/ssh/dom/download", () => ({
 vi.mock("@/components/ssh/FileBrowser", () => ({
   FileBrowser: (props: Record<string, (...a: unknown[]) => void>) => {
     holder.fbProps = props;
-    holder.fbSearch = (props as { search?: typeof holder.fbSearch }).search;
+    holder.fbSearch =
+      (props as { search?: typeof holder.fbSearch }).search ?? null;
     return <div data-testid="filebrowser" />;
   },
 }));
