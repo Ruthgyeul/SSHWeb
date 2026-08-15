@@ -21,17 +21,15 @@ import {
 import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcon";
 import {
-  EyeIcon,
   FolderOpenIcon,
   GridIcon,
   ListIcon,
-  PencilIcon,
-  DownloadIcon,
   RefreshIcon,
   SearchIcon,
   UploadIcon,
   WarningIcon,
 } from "./icons";
+import { FileEntryActions } from "./FileEntryActions";
 import { SearchResults } from "./SearchResults";
 import { TransferProgress } from "./TransferProgress";
 import { collectDroppedFiles, droppedEntries } from "./dom/dropUpload";
@@ -71,9 +69,6 @@ export interface SearchState {
   results: (FindEntry | GrepEntry)[];
   truncated: boolean;
 }
-
-const actionBtn =
-  "rounded px-1.5 py-0.5 text-xs text-term-muted transition-colors";
 
 /** DataTransfer type carrying an in-app dragged entry's absolute path (move). */
 const DRAG_TYPE = "application/x-sshweb-path";
@@ -1105,94 +1100,23 @@ export function FileBrowser({
                           {formatMtime(entry.mtime)}
                         </td>
                         <td className="whitespace-nowrap py-1.5 pl-2 pr-3 text-right">
-                          {previewable && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onPreview(target, entry.name, previewSiblings)
-                              }
-                              className={cn(
-                                actionBtn,
-                                "hover:text-term-accent",
-                              )}
-                              title="Preview"
-                            >
-                              <EyeIcon />
-                            </button>
-                          )}
-                          {editable && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onPreview(target, entry.name, previewSiblings)
-                                }
-                                className={cn(
-                                  actionBtn,
-                                  "hover:text-term-accent",
-                                )}
-                                title="Preview (read-only)"
-                              >
-                                <EyeIcon />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onEdit(target, entry.name, entry.size)
-                                }
-                                className={cn(
-                                  actionBtn,
-                                  "hover:text-term-accent",
-                                )}
-                                title="Edit"
-                              >
-                                <PencilIcon />
-                              </button>
-                            </>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              isDir ? onDownloadDir(target) : onDownload(target)
-                            }
-                            className={cn(actionBtn, "hover:text-term-accent")}
-                            title={isDir ? "Download as zip" : "Download"}
-                            aria-label={isDir ? "Download as zip" : "Download"}
-                          >
-                            <DownloadIcon className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onRename(entry)}
-                            className={cn(actionBtn, "hover:text-term-text")}
-                            title="Rename"
-                          >
-                            mv
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onCopy(entry)}
-                            className={cn(actionBtn, "hover:text-term-text")}
-                            title="Duplicate"
-                          >
-                            cp
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onChmod(entry)}
-                            className={cn(actionBtn, "hover:text-term-text")}
-                            title="Change permissions"
-                          >
-                            chmod
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onDelete(entry)}
-                            className={cn(actionBtn, "hover:text-term-red")}
-                            title="Delete"
-                          >
-                            ✕
-                          </button>
+                          <FileEntryActions
+                            entry={entry}
+                            target={target}
+                            isDir={isDir}
+                            editable={editable}
+                            previewable={previewable}
+                            previewSiblings={previewSiblings}
+                            showChmod
+                            onPreview={onPreview}
+                            onEdit={onEdit}
+                            onDownload={onDownload}
+                            onDownloadDir={onDownloadDir}
+                            onRename={onRename}
+                            onCopy={onCopy}
+                            onChmod={onChmod}
+                            onDelete={onDelete}
+                          />
                         </td>
                       </tr>
                     );
@@ -1312,86 +1236,22 @@ export function FileBrowser({
                           {formatSize(entry.size, entry.type)}
                         </span>
                         <div className="flex flex-none items-center opacity-0 transition-opacity group-hover:opacity-100 touch:opacity-100">
-                          {previewable && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onPreview(target, entry.name, previewSiblings)
-                              }
-                              className={cn(
-                                actionBtn,
-                                "hover:text-term-accent",
-                              )}
-                              title="Preview"
-                            >
-                              <EyeIcon />
-                            </button>
-                          )}
-                          {editable && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onPreview(target, entry.name, previewSiblings)
-                                }
-                                className={cn(
-                                  actionBtn,
-                                  "hover:text-term-accent",
-                                )}
-                                title="Preview (read-only)"
-                              >
-                                <EyeIcon />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onEdit(target, entry.name, entry.size)
-                                }
-                                className={cn(
-                                  actionBtn,
-                                  "hover:text-term-accent",
-                                )}
-                                title="Edit"
-                              >
-                                <PencilIcon />
-                              </button>
-                            </>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              isDir ? onDownloadDir(target) : onDownload(target)
-                            }
-                            className={cn(actionBtn, "hover:text-term-accent")}
-                            title={isDir ? "Download as zip" : "Download"}
-                            aria-label={isDir ? "Download as zip" : "Download"}
-                          >
-                            <DownloadIcon className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onRename(entry)}
-                            className={cn(actionBtn, "hover:text-term-text")}
-                            title="Rename"
-                          >
-                            mv
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onCopy(entry)}
-                            className={cn(actionBtn, "hover:text-term-text")}
-                            title="Duplicate"
-                          >
-                            cp
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onDelete(entry)}
-                            className={cn(actionBtn, "hover:text-term-red")}
-                            title="Delete"
-                          >
-                            ✕
-                          </button>
+                          <FileEntryActions
+                            entry={entry}
+                            target={target}
+                            isDir={isDir}
+                            editable={editable}
+                            previewable={previewable}
+                            previewSiblings={previewSiblings}
+                            onPreview={onPreview}
+                            onEdit={onEdit}
+                            onDownload={onDownload}
+                            onDownloadDir={onDownloadDir}
+                            onRename={onRename}
+                            onCopy={onCopy}
+                            onChmod={onChmod}
+                            onDelete={onDelete}
+                          />
                         </div>
                       </div>
                     </div>
