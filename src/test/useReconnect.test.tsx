@@ -56,7 +56,12 @@ describe("useReconnect", () => {
         expect(r().beginReconnectAfterDrop()).toBe(true);
         r().schedule(retry, true);
       });
-      expect(onReconnecting).toHaveBeenNthCalledWith(i, i, 3, expect.any(Number));
+      expect(onReconnecting).toHaveBeenNthCalledWith(
+        i,
+        i,
+        3,
+        expect.any(Number),
+      );
       act(() => vi.runAllTimers());
     }
     // A 4th drop exhausts the budget → give up, no further onReconnecting.

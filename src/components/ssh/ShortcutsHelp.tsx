@@ -15,33 +15,46 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
       { keys: ["Enter"], desc: "Next search match" },
       { keys: ["Shift", "Enter"], desc: "Previous search match" },
       { keys: ["Esc"], desc: "Close the search bar" },
-      { keys: ["Ctrl", "C"], desc: "Send SIGINT (or copy when text is selected)" },
+      {
+        keys: ["Ctrl", "C"],
+        desc: "Send SIGINT (or copy when text is selected)",
+      },
     ],
   },
   {
     title: "Files (SFTP)",
     items: [
       { keys: ["Click"], desc: "Open by type: dir · image · text · download" },
-      { keys: ["Drag & drop"], desc: "Upload files into the current directory" },
+      {
+        keys: ["Drag & drop"],
+        desc: "Upload files into the current directory",
+      },
     ],
   },
   {
     title: "Session tabs",
-    items: [
-      { keys: ["Double-click"], desc: "Rename the tab" },
-    ],
+    items: [{ keys: ["Double-click"], desc: "Rename the tab" }],
   },
   {
     title: "Preview",
     items: [
       { keys: ["←", "→"], desc: "Previous / next file (gallery)" },
-      { keys: ["Shift", "←/→"], desc: "Previous / next file (works over video/audio too)" },
+      {
+        keys: ["Shift", "←/→"],
+        desc: "Previous / next file (works over video/audio too)",
+      },
       { keys: ["+", "−"], desc: "Zoom an image in / out" },
       { keys: ["0"], desc: "Reset the image view" },
       { keys: ["R"], desc: "Rotate the image 90°" },
       { keys: ["Space"], desc: "Play / pause a video" },
-      { keys: ["←", "→"], desc: "Seek a video ∓5s (Shift+←/→ steps the gallery)" },
-      { keys: ["↑", "↓"], desc: "Video volume up / down (M mute, F fullscreen)" },
+      {
+        keys: ["←", "→"],
+        desc: "Seek a video ∓5s (Shift+←/→ steps the gallery)",
+      },
+      {
+        keys: ["↑", "↓"],
+        desc: "Video volume up / down (M mute, F fullscreen)",
+      },
       { keys: ["Ctrl/⌘", "F"], desc: "Find in a text preview" },
       { keys: ["Esc"], desc: "Close the find bar / the preview" },
     ],
@@ -57,7 +70,10 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
   {
     title: "Touch devices",
     items: [
-      { keys: ["Ctrl / Alt"], desc: "Sticky one-shot modifier for the next key" },
+      {
+        keys: ["Ctrl / Alt"],
+        desc: "Sticky one-shot modifier for the next key",
+      },
       { keys: ["Fn"], desc: "Toggle the F1–F12 row" },
     ],
   },

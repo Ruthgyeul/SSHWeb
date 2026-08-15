@@ -6,9 +6,9 @@ import {
 
 describe("connectionLabel", () => {
   it("omits the port for the default 22", () => {
-    expect(connectionLabel({ username: "root", host: "example.com", port: 22 })).toBe(
-      "root@example.com",
-    );
+    expect(
+      connectionLabel({ username: "root", host: "example.com", port: 22 }),
+    ).toBe("root@example.com");
   });
 
   it("appends a non-default port", () => {

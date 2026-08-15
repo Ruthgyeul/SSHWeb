@@ -70,11 +70,7 @@ export function useTerminalPrefs(): [
   TerminalPrefs,
   (patch: Partial<TerminalPrefs>) => void,
 ] {
-  const prefs = useSyncExternalStore(
-    subscribe,
-    getSnapshot,
-    getServerSnapshot,
-  );
+  const prefs = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
   const update = useCallback((patch: Partial<TerminalPrefs>) => {
     const prev = getSnapshot();

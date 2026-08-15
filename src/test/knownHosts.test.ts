@@ -62,9 +62,24 @@ describe("knownHostEntries", () => {
       "a.example:22": "SHA256:1a",
     };
     expect(knownHostEntries(map)).toEqual([
-      { id: "a.example:22", host: "a.example", port: 22, fingerprint: "SHA256:1a" },
-      { id: "a.example:2222", host: "a.example", port: 2222, fingerprint: "SHA256:1b" },
-      { id: "b.example:22", host: "b.example", port: 22, fingerprint: "SHA256:2" },
+      {
+        id: "a.example:22",
+        host: "a.example",
+        port: 22,
+        fingerprint: "SHA256:1a",
+      },
+      {
+        id: "a.example:2222",
+        host: "a.example",
+        port: 2222,
+        fingerprint: "SHA256:1b",
+      },
+      {
+        id: "b.example:22",
+        host: "b.example",
+        port: 22,
+        fingerprint: "SHA256:2",
+      },
     ]);
   });
 

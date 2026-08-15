@@ -145,7 +145,10 @@ export function MobileKeys({
           >
             Alt
           </button>
-          <span className="mx-0.5 h-5 w-px flex-none bg-term-border" aria-hidden />
+          <span
+            className="mx-0.5 h-5 w-px flex-none bg-term-border"
+            aria-hidden
+          />
 
           {NAV_KEYS.map((k) => (
             <button
@@ -159,7 +162,10 @@ export function MobileKeys({
               {k.label}
             </button>
           ))}
-          <span className="mx-0.5 h-5 w-px flex-none bg-term-border" aria-hidden />
+          <span
+            className="mx-0.5 h-5 w-px flex-none bg-term-border"
+            aria-hidden
+          />
 
           {CHAR_KEYS.map((ch) => (
             <button
@@ -172,7 +178,10 @@ export function MobileKeys({
               {ch}
             </button>
           ))}
-          <span className="mx-0.5 h-5 w-px flex-none bg-term-border" aria-hidden />
+          <span
+            className="mx-0.5 h-5 w-px flex-none bg-term-border"
+            aria-hidden
+          />
 
           {EDIT_KEYS.map((k) => (
             <button

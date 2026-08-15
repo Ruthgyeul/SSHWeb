@@ -7,8 +7,7 @@ import { useThumbnailQueue } from "@/components/ssh/hooks/useThumbnailQueue";
 /** Collect the paths sent as `sftp-read` thumb requests, in order. */
 function setup(maxInFlight = 2) {
   const send = vi.fn();
-  const paths = () =>
-    send.mock.calls.map(([m]) => m.path);
+  const paths = () => send.mock.calls.map(([m]) => m.path);
   const hook = renderHook(() => useThumbnailQueue(send, maxInFlight));
   return { send, paths, q: () => hook.result.current };
 }
@@ -23,7 +22,10 @@ describe("useThumbnailQueue", () => {
     });
     expect(send).toHaveBeenCalledTimes(2);
     expect(paths()).toEqual(["a", "b"]);
-    expect(send.mock.calls[0][0]).toMatchObject({ t: "sftp-read", thumb: true });
+    expect(send.mock.calls[0][0]).toMatchObject({
+      t: "sftp-read",
+      thumb: true,
+    });
   });
 
   it("frees a slot on reply and pumps the next queued request", () => {

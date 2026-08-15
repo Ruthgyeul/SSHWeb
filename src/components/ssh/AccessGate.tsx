@@ -99,7 +99,8 @@ export function AccessGate({ children }: { children: React.ReactNode }) {
             className="select-none font-mono text-2xl text-term-accent"
             aria-hidden
           >
-            &gt;<span className="term-cursor ml-0.5 align-middle" />
+            &gt;
+            <span className="term-cursor ml-0.5 align-middle" />
           </span>
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-term-text">

@@ -72,22 +72,19 @@ function subscribe(onChange: () => void): () => void {
 export function useFileSort(): [FileSort, (key: SortKey) => void] {
   const sort = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
-  const toggleSort = useCallback(
-    (key: SortKey) => {
-      const current = getSnapshot();
-      const next: FileSort =
-        current.key === key
-          ? { key, dir: current.dir === "asc" ? "desc" : "asc" }
-          : { key, dir: DEFAULT_SORT_DIR[key] };
-      try {
-        localStorage.setItem(STORAGE_KEY, `${next.key}:${next.dir}`);
-        window.dispatchEvent(new Event(SYNC_EVENT));
-      } catch {
-        /* storage unavailable (private mode) — preference just won't persist */
-      }
-    },
-    [],
-  );
+  const toggleSort = useCallback((key: SortKey) => {
+    const current = getSnapshot();
+    const next: FileSort =
+      current.key === key
+        ? { key, dir: current.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: DEFAULT_SORT_DIR[key] };
+    try {
+      localStorage.setItem(STORAGE_KEY, `${next.key}:${next.dir}`);
+      window.dispatchEvent(new Event(SYNC_EVENT));
+    } catch {
+      /* storage unavailable (private mode) — preference just won't persist */
+    }
+  }, []);
 
   return [sort, toggleSort];
 }

@@ -50,7 +50,10 @@ describe("useUploadQueue", () => {
   it("passes the job's startOffset through to the starter", () => {
     const { start, q } = setup(1);
     act(() => q().enqueue(job("resume.bin", 4096)));
-    expect(start).toHaveBeenCalledWith({ path: "resume.bin", startOffset: 4096 });
+    expect(start).toHaveBeenCalledWith({
+      path: "resume.bin",
+      startOffset: 4096,
+    });
   });
 
   it("skips a job the starter rejects without consuming a slot", () => {

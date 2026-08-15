@@ -22,7 +22,9 @@ describe("findSubtitleSidecar", () => {
   });
 
   it("returns null when there's no sidecar", () => {
-    expect(findSubtitleSidecar("clip.mp4", ["clip.mp4", "notes.txt"])).toBeNull();
+    expect(
+      findSubtitleSidecar("clip.mp4", ["clip.mp4", "notes.txt"]),
+    ).toBeNull();
     expect(findSubtitleSidecar("clip.mp4", [])).toBeNull();
   });
 

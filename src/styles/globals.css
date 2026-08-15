@@ -28,8 +28,8 @@
   --color-term-pink: #f472b6;
   --color-term-lime: #a3e635;
 
-  --font-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", Menlo,
-    monospace;
+  --font-mono:
+    var(--font-geist-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
 
 :root {

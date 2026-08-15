@@ -85,7 +85,14 @@ export function upsertProfile(
   if (existing) {
     return list.map((p) =>
       p.id === existing.id
-        ? { id: p.id, host: input.host, port: input.port, username: input.username, auth: input.auth, label }
+        ? {
+            id: p.id,
+            host: input.host,
+            port: input.port,
+            username: input.username,
+            auth: input.auth,
+            label,
+          }
         : p,
     );
   }

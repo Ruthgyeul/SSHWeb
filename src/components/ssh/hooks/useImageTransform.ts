@@ -52,9 +52,12 @@ export function useImageTransform(enabled: boolean): ImageTransform {
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [offset, setOffset] = useState<ImageOffset>({ x: 0, y: 0 });
-  const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(
-    null,
-  );
+  const dragRef = useRef<{
+    x: number;
+    y: number;
+    ox: number;
+    oy: number;
+  } | null>(null);
   // Mirror of "is a pan drag active" for render (the ref itself can't be read
   // during render) — used to drop the CSS transition so panning tracks 1:1.
   const [dragging, setDragging] = useState(false);
@@ -84,7 +87,12 @@ export function useImageTransform(enabled: boolean): ImageTransform {
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
       if (!enabled || zoom <= 1) return;
-      dragRef.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
+      dragRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        ox: offset.x,
+        oy: offset.y,
+      };
       setDragging(true);
       (e.target as Element).setPointerCapture?.(e.pointerId);
     },

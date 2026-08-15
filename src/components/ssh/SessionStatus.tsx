@@ -6,12 +6,7 @@ import { ClockIcon } from "./icons";
 
 /** Lifecycle phase of a single SSH session. */
 export type SessionStatus =
-  | "idle"
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "dropped"
-  | "error";
+  "idle" | "connecting" | "connected" | "reconnecting" | "dropped" | "error";
 
 /** The coloured status dot shared by the session header and the manager's tabs. */
 export function StatusDot({ status }: { status: SessionStatus }) {
@@ -61,7 +56,11 @@ export function Uptime({ since }: { since: number }) {
 /** A small latency read-out (ms), colour-coded green/yellow/red by round-trip. */
 export function LatencyChip({ ms }: { ms: number }) {
   const color =
-    ms < 100 ? "text-term-green" : ms < 300 ? "text-term-yellow" : "text-term-red";
+    ms < 100
+      ? "text-term-green"
+      : ms < 300
+        ? "text-term-yellow"
+        : "text-term-red";
   return (
     <span
       className={cn("flex-none tabular-nums text-[11px]", color)}

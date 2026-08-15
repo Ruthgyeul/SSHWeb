@@ -38,16 +38,19 @@ export function SshClient() {
     setDraft(current);
   }, []);
 
-  const commitRename = useCallback((id: number) => {
-    setNames((prev) => {
-      const name = draft.trim();
-      const next = { ...prev };
-      if (name) next[id] = name;
-      else delete next[id];
-      return next;
-    });
-    setEditingId(null);
-  }, [draft]);
+  const commitRename = useCallback(
+    (id: number) => {
+      setNames((prev) => {
+        const name = draft.trim();
+        const next = { ...prev };
+        if (name) next[id] = name;
+        else delete next[id];
+        return next;
+      });
+      setEditingId(null);
+    },
+    [draft],
+  );
 
   // Record a session's reported label/status, bailing out when unchanged so a
   // child re-render doesn't cascade into a parent update loop.
@@ -90,36 +93,33 @@ export function SshClient() {
     setActiveId(id);
   }, []);
 
-  const closeSession = useCallback(
-    (id: number) => {
-      setIds((prev) => {
-        if (prev.length <= 1) return prev; // keep at least one tab
-        const idx = prev.indexOf(id);
-        const next = prev.filter((x) => x !== id);
-        setActiveId((cur) =>
-          cur === id ? next[Math.min(idx, next.length - 1)] : cur,
-        );
-        return next;
-      });
-      setMetas((prev) => {
-        const rest = { ...prev };
-        delete rest[id];
-        return rest;
-      });
-      setNames((prev) => {
-        const rest = { ...prev };
-        delete rest[id];
-        return rest;
-      });
-      setConnections((prev) => {
-        if (!(id in prev)) return prev;
-        const rest = { ...prev };
-        delete rest[id];
-        return rest;
-      });
-    },
-    [],
-  );
+  const closeSession = useCallback((id: number) => {
+    setIds((prev) => {
+      if (prev.length <= 1) return prev; // keep at least one tab
+      const idx = prev.indexOf(id);
+      const next = prev.filter((x) => x !== id);
+      setActiveId((cur) =>
+        cur === id ? next[Math.min(idx, next.length - 1)] : cur,
+      );
+      return next;
+    });
+    setMetas((prev) => {
+      const rest = { ...prev };
+      delete rest[id];
+      return rest;
+    });
+    setNames((prev) => {
+      const rest = { ...prev };
+      delete rest[id];
+      return rest;
+    });
+    setConnections((prev) => {
+      if (!(id in prev)) return prev;
+      const rest = { ...prev };
+      delete rest[id];
+      return rest;
+    });
+  }, []);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">

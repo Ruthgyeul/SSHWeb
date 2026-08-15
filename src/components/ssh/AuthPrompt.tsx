@@ -104,7 +104,8 @@ function HostKeyBody({
               </code>{" "}
               is <span className="text-term-red">different</span> from the one
               you trusted before. This can mean the server was rebuilt — or a
-              man-in-the-middle attack. Only continue if you know why it changed.
+              man-in-the-middle attack. Only continue if you know why it
+              changed.
             </>
           ) : (
             <>
@@ -112,8 +113,8 @@ function HostKeyBody({
               <code className="text-term-text">
                 {prompt.host}:{prompt.port}
               </code>{" "}
-              can&apos;t be established. Confirm the fingerprint out-of-band, then
-              accept to remember it for next time.
+              can&apos;t be established. Confirm the fingerprint out-of-band,
+              then accept to remember it for next time.
             </>
           )}
         </p>
@@ -194,7 +195,10 @@ function KbdBody({
 
       {prompt.prompts.map((p, i) => (
         <div key={i}>
-          <label htmlFor={`kbd-${i}`} className="mb-1 block text-xs text-term-muted">
+          <label
+            htmlFor={`kbd-${i}`}
+            className="mb-1 block text-xs text-term-muted"
+          >
             {p.prompt || "Response"}
           </label>
           <input

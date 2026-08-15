@@ -86,9 +86,7 @@ describe("FilePreview rendering by kind", () => {
 
   it("shows a download-only card for an unsupported file", () => {
     renderPreview({ kind: "unsupported", name: "app.bin", src: "" });
-    expect(
-      screen.getByText(/can.t be previewed inline/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/can.t be previewed inline/i)).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /download to open it locally/i }),
     ).toBeInTheDocument();

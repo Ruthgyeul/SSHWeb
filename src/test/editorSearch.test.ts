@@ -65,10 +65,12 @@ describe("nextMatchIndex", () => {
 
 describe("replaceMatch", () => {
   it("replaces a single span and reports the caret after it", () => {
-    expect(replaceMatch("hello world", { start: 6, end: 11 }, "there")).toEqual({
-      text: "hello there",
-      caret: 11,
-    });
+    expect(replaceMatch("hello world", { start: 6, end: 11 }, "there")).toEqual(
+      {
+        text: "hello there",
+        caret: 11,
+      },
+    );
   });
 
   it("leaves the text untouched for out-of-range bounds", () => {
@@ -120,15 +122,21 @@ describe("buildSearchHtml", () => {
 
   it("wraps each match in a <mark>, tagging only the active one", () => {
     // "abab", query "ab" → matches at [0,2) and [2,4); active = index 1.
-    const html = buildSearchHtml("abab", [
-      { start: 0, end: 2 },
-      { start: 2, end: 4 },
-    ], 1);
+    const html = buildSearchHtml(
+      "abab",
+      [
+        { start: 0, end: 2 },
+        { start: 2, end: 4 },
+      ],
+      1,
+    );
     const marks = html.match(/<mark/g) ?? [];
     expect(marks).toHaveLength(2);
     expect(html.match(/data-active="true"/g) ?? []).toHaveLength(1);
     // The active mark carries the highlighted (bg-term-accent) class.
-    expect(html).toContain('class="bg-term-accent text-term-bg" data-active="true"');
+    expect(html).toContain(
+      'class="bg-term-accent text-term-bg" data-active="true"',
+    );
     expect(html).toContain('class="bg-term-accent/30 text-term-text"');
   });
 

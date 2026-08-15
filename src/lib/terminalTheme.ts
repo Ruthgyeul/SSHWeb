@@ -187,6 +187,8 @@ export const TERMINAL_THEMES: TerminalThemePreset[] = [
 export const DEFAULT_THEME_ID = TERMINAL_THEMES[0].id;
 
 /** Look up a preset by id, falling back to the default when unknown/absent. */
-export function getThemePreset(id: string | null | undefined): TerminalThemePreset {
+export function getThemePreset(
+  id: string | null | undefined,
+): TerminalThemePreset {
   return TERMINAL_THEMES.find((t) => t.id === id) ?? TERMINAL_THEMES[0];
 }

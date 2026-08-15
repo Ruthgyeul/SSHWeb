@@ -17,7 +17,13 @@ import { useModalA11y } from "./hooks/useModalA11y";
 import { PreviewMedia } from "./preview/PreviewMedia";
 import { PreviewFilmstrip } from "./preview/PreviewFilmstrip";
 import { FileIcon, type FileIconKind } from "./FileIcon";
-import { DownloadIcon, PencilIcon, RotateIcon, SearchIcon, WarningIcon } from "./icons";
+import {
+  DownloadIcon,
+  PencilIcon,
+  RotateIcon,
+  SearchIcon,
+  WarningIcon,
+} from "./icons";
 
 /** What the preview modal can show: a content kind, a read-only `text` view
  * (syntax-highlighted, non-editable), or a download-only fallback. */
@@ -222,7 +228,10 @@ export function FilePreview({
   // The active filmstrip tile, scrolled into view when the gallery steps.
   const activeThumbRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
-    activeThumbRef.current?.scrollIntoView({ block: "nearest", inline: "center" });
+    activeThumbRef.current?.scrollIntoView({
+      block: "nearest",
+      inline: "center",
+    });
   }, [path]);
 
   const isText = kind === "text";
@@ -309,7 +318,9 @@ export function FilePreview({
               style={{ width: `${pct}%` }}
             />
           </div>
-          <span className="text-[11px] tabular-nums text-term-muted">{pct}%</span>
+          <span className="text-[11px] tabular-nums text-term-muted">
+            {pct}%
+          </span>
         </div>
       )}
       {onCancel && (
@@ -366,7 +377,8 @@ export function FilePreview({
       {truncated && (
         <span className="flex items-center gap-1.5">
           <WarningIcon className="h-3.5 w-3.5 flex-none" />
-          Showing the first part of a large file — download for the full contents.
+          Showing the first part of a large file — download for the full
+          contents.
         </span>
       )}
       {encodingWarning && (
@@ -495,7 +507,11 @@ export function FilePreview({
                 type="button"
                 onClick={requestOriginal}
                 disabled={loadingOriginal}
-                className={cn(toolBtn, "mr-1", originalIsHuge && "text-term-yellow")}
+                className={cn(
+                  toolBtn,
+                  "mr-1",
+                  originalIsHuge && "text-term-yellow",
+                )}
                 title={
                   originalIsHuge
                     ? "Load the very large full-resolution original (may be slow / memory-heavy)"
@@ -539,7 +555,9 @@ export function FilePreview({
               onClick={resetView}
               className={toolBtn}
               aria-label="Reset view"
-              disabled={zoom === 1 && rotation === 0 && offset.x === 0 && offset.y === 0}
+              disabled={
+                zoom === 1 && rotation === 0 && offset.x === 0 && offset.y === 0
+              }
             >
               Reset
             </button>
@@ -600,11 +618,7 @@ export function FilePreview({
           {loading && spinner}
           {galleryArrows}
           {src && (
-            <iframe
-              src={src}
-              title={name}
-              className="h-full w-full border-0"
-            />
+            <iframe src={src} title={name} className="h-full w-full border-0" />
           )}
         </div>
       ) : kind === "markdown" ? (
@@ -640,7 +654,9 @@ export function FilePreview({
                     aria-hidden
                     className="select-none border-r border-term-border px-3 py-3 text-right text-term-faint"
                   >
-                    {Array.from({ length: lineCount }, (_, i) => i + 1).join("\n")}
+                    {Array.from({ length: lineCount }, (_, i) => i + 1).join(
+                      "\n",
+                    )}
                   </pre>
                 )}
                 {streaming ? (
@@ -649,7 +665,9 @@ export function FilePreview({
                   <pre
                     className={cn(
                       "flex-1 px-4 py-3 text-term-text",
-                      wrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto whitespace-pre",
+                      wrap
+                        ? "whitespace-pre-wrap break-words"
+                        : "overflow-x-auto whitespace-pre",
                     )}
                   >
                     {text ?? ""}
@@ -658,7 +676,9 @@ export function FilePreview({
                   <pre
                     className={cn(
                       "flex-1 px-4 py-3 text-term-text",
-                      wrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto whitespace-pre",
+                      wrap
+                        ? "whitespace-pre-wrap break-words"
+                        : "overflow-x-auto whitespace-pre",
                     )}
                     dangerouslySetInnerHTML={{
                       __html: searching ? searchHtml : codeHtml,

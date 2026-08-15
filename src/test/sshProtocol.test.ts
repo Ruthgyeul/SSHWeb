@@ -104,13 +104,13 @@ describe("isValidClientMessage", () => {
 
   it("rejects a required field of the wrong type", () => {
     expect(isValidClientMessage({ t: "sftp-list", path: 5 })).toBe(false);
-    expect(isValidClientMessage({ t: "sftp-chmod", path: "/f", mode: "755" })).toBe(
+    expect(
+      isValidClientMessage({ t: "sftp-chmod", path: "/f", mode: "755" }),
+    ).toBe(false);
+    expect(isValidClientMessage({ t: "ping", ts: "now" })).toBe(false);
+    expect(isValidClientMessage({ t: "hostkey-response", accept: "yes" })).toBe(
       false,
     );
-    expect(isValidClientMessage({ t: "ping", ts: "now" })).toBe(false);
-    expect(
-      isValidClientMessage({ t: "hostkey-response", accept: "yes" }),
-    ).toBe(false);
   });
 
   it("rejects a non-finite number and a non-string array element", () => {
@@ -118,9 +118,9 @@ describe("isValidClientMessage", () => {
     expect(
       isValidClientMessage({ t: "sftp-download-many", paths: ["/a", 2] }),
     ).toBe(false);
-    expect(
-      isValidClientMessage({ t: "kbd-response", responses: "1234" }),
-    ).toBe(false);
+    expect(isValidClientMessage({ t: "kbd-response", responses: "1234" })).toBe(
+      false,
+    );
   });
 });
 
@@ -244,7 +244,9 @@ describe("ctrlChar / applyKeyModifiers", () => {
 
   it("passes through when no modifiers or multi-char input", () => {
     expect(applyKeyModifiers("s", { ctrl: false, alt: false })).toBe("s");
-    expect(applyKeyModifiers("hello", { ctrl: true, alt: false })).toBe("hello");
+    expect(applyKeyModifiers("hello", { ctrl: true, alt: false })).toBe(
+      "hello",
+    );
   });
 });
 
@@ -388,15 +390,17 @@ describe("isThumbnailable", () => {
 
   it("accepts a small image file", () => {
     expect(isThumbnailable(mk({}))).toBe(true);
-    expect(isThumbnailable(mk({ name: "a.JPG", size: THUMBNAIL_MAX_BYTES }))).toBe(
-      true,
-    );
+    expect(
+      isThumbnailable(mk({ name: "a.JPG", size: THUMBNAIL_MAX_BYTES })),
+    ).toBe(true);
   });
 
   it("accepts a small video file (up to the larger video cap)", () => {
     expect(isThumbnailable(mk({ name: "clip.mp4", size: 1024 }))).toBe(true);
     expect(
-      isThumbnailable(mk({ name: "Movie.MOV", size: THUMBNAIL_VIDEO_MAX_BYTES })),
+      isThumbnailable(
+        mk({ name: "Movie.MOV", size: THUMBNAIL_VIDEO_MAX_BYTES }),
+      ),
     ).toBe(true);
     // A video between the image and video caps is still thumbnailable.
     expect(
@@ -410,7 +414,9 @@ describe("isThumbnailable", () => {
   });
 
   it("rejects directories and links even with media-like names", () => {
-    expect(isThumbnailable(mk({ type: "dir", name: "images.png" }))).toBe(false);
+    expect(isThumbnailable(mk({ type: "dir", name: "images.png" }))).toBe(
+      false,
+    );
     expect(isThumbnailable(mk({ type: "link", name: "shortcut.png" }))).toBe(
       false,
     );
@@ -420,7 +426,9 @@ describe("isThumbnailable", () => {
   it("rejects media larger than its cap", () => {
     expect(isThumbnailable(mk({ size: THUMBNAIL_MAX_BYTES + 1 }))).toBe(false);
     expect(
-      isThumbnailable(mk({ name: "big.mp4", size: THUMBNAIL_VIDEO_MAX_BYTES + 1 })),
+      isThumbnailable(
+        mk({ name: "big.mp4", size: THUMBNAIL_VIDEO_MAX_BYTES + 1 }),
+      ),
     ).toBe(false);
   });
 });
@@ -528,7 +536,7 @@ describe("sniffMediaKind", () => {
 
   it("returns null for text and unknown bytes", () => {
     expect(sniffMediaKind(ascii("#!/bin/sh\necho hi\n"))).toBeNull();
-    expect(sniffMediaKind(ascii("{ \"json\": true }"))).toBeNull();
+    expect(sniffMediaKind(ascii('{ "json": true }'))).toBeNull();
     expect(sniffMediaKind(new Uint8Array(4))).toBeNull(); // too short
   });
 
@@ -569,7 +577,15 @@ describe("HEIC/HEIF handling", () => {
 
 describe("videoNeedsTranscode", () => {
   it("flags containers browsers can't play natively", () => {
-    for (const n of ["a.avi", "b.wmv", "c.flv", "e.m2ts", "f.mpg", "g.vob", "h.3gp"]) {
+    for (const n of [
+      "a.avi",
+      "b.wmv",
+      "c.flv",
+      "e.m2ts",
+      "f.mpg",
+      "g.vob",
+      "h.3gp",
+    ]) {
       expect(videoNeedsTranscode(n)).toBe(true);
       expect(isProbablyVideoFile(n)).toBe(true); // still recognised as a video
       expect(filePreviewKind(n)).toBe("video");
@@ -706,7 +722,11 @@ describe("sortEntriesBy", () => {
   });
 
   it("exposes sensible default directions per key", () => {
-    expect(DEFAULT_SORT_DIR).toEqual({ name: "asc", size: "desc", mtime: "desc" });
+    expect(DEFAULT_SORT_DIR).toEqual({
+      name: "asc",
+      size: "desc",
+      mtime: "desc",
+    });
   });
 });
 

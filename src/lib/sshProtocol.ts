@@ -305,11 +305,7 @@ export function isValidClientMessage(
 /* Server → client messages                                            */
 /* ------------------------------------------------------------------ */
 
-export type ConnectionState =
-  | "connecting"
-  | "connected"
-  | "closed"
-  | "error";
+export type ConnectionState = "connecting" | "connected" | "closed" | "error";
 
 /** A single keyboard-interactive question (e.g. "Verification code:"). */
 export interface KbdPrompt {
@@ -327,7 +323,13 @@ export type ServerMessage =
   // The target host's public-key fingerprint, presented for TOFU verification
   // before the session opens. The client compares it against its known-hosts
   // store and either auto-accepts, prompts, or warns on a changed key.
-  | { t: "hostkey"; host: string; port: number; fingerprint: string; keyType: string }
+  | {
+      t: "hostkey";
+      host: string;
+      port: number;
+      fingerprint: string;
+      keyType: string;
+    }
   // Reply to a `ping`, carrying the original `ts` so the client can compute the
   // round-trip time.
   | { t: "pong"; ts: number }
@@ -355,10 +357,20 @@ export type ServerMessage =
       origWidth?: number;
       origHeight?: number;
     }
-  | { t: "sftp-download-chunk"; path: string; dataB64: string; preview?: boolean }
+  | {
+      t: "sftp-download-chunk";
+      path: string;
+      dataB64: string;
+      preview?: boolean;
+    }
   // `truncated` is set when a capped `preview` read (`maxBytes`) stopped short
   // of the file's real end, so the modal can flag that it's showing a head slice.
-  | { t: "sftp-download-end"; path: string; preview?: boolean; truncated?: boolean }
+  | {
+      t: "sftp-download-end";
+      path: string;
+      preview?: boolean;
+      truncated?: boolean;
+    }
   // Reply to `sftp-write-resume`: the destination's current on-disk size, so the
   // client resumes its chunked upload from exactly there (0 = file missing, so
   // the client restarts the upload from the beginning).
@@ -419,7 +431,12 @@ export type ServerMessage =
   // `maxDownloadBytes` echoes the whole-file download cap (`SSH_MAX_DOWNLOAD_MB`,
   // 0 = unlimited) so the client can decide when a small clip is safe to fetch
   // whole (and cache for instant re-open) instead of streaming it.
-  | { t: "caps"; sudo: boolean; streamToken?: string; maxDownloadBytes?: number }
+  | {
+      t: "caps";
+      sudo: boolean;
+      streamToken?: string;
+      maxDownloadBytes?: number;
+    }
   // Acknowledges an `sftp-sudo` request: `enabled` is the mode now in effect.
   // A failure to gain elevation is reported separately as an `error` (scope
   // `sftp`) and leaves the session unelevated.
@@ -638,7 +655,10 @@ export function sortEntriesBy(
  * — callers treat the result as read-only). Used by the file browser's in-CWD
  * filter box; ordering is preserved so it composes with `sortEntries`.
  */
-export function filterEntries(entries: FileEntry[], query: string): FileEntry[] {
+export function filterEntries(
+  entries: FileEntry[],
+  query: string,
+): FileEntry[] {
   const needle = query.trim().toLowerCase();
   if (needle === "") return entries;
   return entries.filter((e) => e.name.toLowerCase().includes(needle));
@@ -686,7 +706,9 @@ export function summarizeUploads(items: TransferProgress[]): UploadSummary {
     if (it.status === "interrupted") interrupted = true;
   }
   const pct =
-    total > 0 ? Math.min(100, Math.max(0, Math.round((sent / total) * 100))) : 100;
+    total > 0
+      ? Math.min(100, Math.max(0, Math.round((sent / total) * 100)))
+      : 100;
   return { files: items.length, sent, total, pct, interrupted, queued };
 }
 
@@ -787,21 +809,84 @@ export function modeToOctal(mode: number): string {
  */
 const BINARY_EXTENSIONS = new Set([
   // Archives / compressed.
-  "zip", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "7z", "rar", "tar", "zst",
-  "lz", "lzma", "jar", "war", "ear", "apk", "deb", "rpm", "iso", "dmg", "cab",
-  "ar", "cpio",
+  "zip",
+  "gz",
+  "tgz",
+  "bz2",
+  "tbz2",
+  "xz",
+  "txz",
+  "7z",
+  "rar",
+  "tar",
+  "zst",
+  "lz",
+  "lzma",
+  "jar",
+  "war",
+  "ear",
+  "apk",
+  "deb",
+  "rpm",
+  "iso",
+  "dmg",
+  "cab",
+  "ar",
+  "cpio",
   // Audio.
-  "mp3", "wav", "flac", "aac", "oga", "m4a", "opus", "wma", "aiff", "mid",
+  "mp3",
+  "wav",
+  "flac",
+  "aac",
+  "oga",
+  "m4a",
+  "opus",
+  "wma",
+  "aiff",
+  "mid",
   "midi",
   // Documents / office.
-  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
+  "pdf",
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "ppt",
+  "pptx",
+  "odt",
+  "ods",
+  "odp",
   // Fonts.
-  "ttf", "otf", "woff", "woff2", "eot",
+  "ttf",
+  "otf",
+  "woff",
+  "woff2",
+  "eot",
   // Compiled / executable / object.
-  "exe", "dll", "so", "dylib", "o", "a", "obj", "bin", "class", "pyc", "pyo",
-  "wasm", "node", "lib", "msi", "elf", "ko",
+  "exe",
+  "dll",
+  "so",
+  "dylib",
+  "o",
+  "a",
+  "obj",
+  "bin",
+  "class",
+  "pyc",
+  "pyo",
+  "wasm",
+  "node",
+  "lib",
+  "msi",
+  "elf",
+  "ko",
   // Databases / packed data.
-  "db", "sqlite", "sqlite3", "mdb", "pack", "idx",
+  "db",
+  "sqlite",
+  "sqlite3",
+  "mdb",
+  "pack",
+  "idx",
 ]);
 
 /* ------------------------------------------------------------------ */
@@ -819,7 +904,14 @@ export function ctrlChar(ch: string): string {
   if (ch >= "a" && ch <= "z") return String.fromCharCode(ch.charCodeAt(0) - 96);
   if (ch >= "A" && ch <= "Z") return String.fromCharCode(ch.charCodeAt(0) - 64);
   const map: Record<string, number> = {
-    "@": 0, " ": 0, "[": 27, "\\": 28, "]": 29, "^": 30, "_": 31, "?": 127,
+    "@": 0,
+    " ": 0,
+    "[": 27,
+    "\\": 28,
+    "]": 29,
+    "^": 30,
+    _: 31,
+    "?": 127,
   };
   return ch in map ? String.fromCharCode(map[ch]) : ch;
 }
@@ -1209,7 +1301,8 @@ export function sniffMediaKind(
     return true;
   };
   // Images.
-  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image"; // PNG
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47)
+    return "image"; // PNG
   if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image"; // JPEG
   if (ascii(0, "GIF8")) return "image"; // GIF87a / GIF89a
   if (b[0] === 0x42 && b[1] === 0x4d) return "image"; // BMP
@@ -1220,19 +1313,27 @@ export function sniffMediaKind(
   // from moving-image (MP4/MOV). HEIC/AVIF preview as (transcoded) images.
   if (ascii(4, "ftyp")) {
     if (
-      ascii(8, "heic") || ascii(8, "heix") || ascii(8, "hevc") ||
-      ascii(8, "heim") || ascii(8, "heis") || ascii(8, "mif1") ||
-      ascii(8, "msf1") || ascii(8, "avif") || ascii(8, "avis")
+      ascii(8, "heic") ||
+      ascii(8, "heix") ||
+      ascii(8, "hevc") ||
+      ascii(8, "heim") ||
+      ascii(8, "heis") ||
+      ascii(8, "mif1") ||
+      ascii(8, "msf1") ||
+      ascii(8, "avif") ||
+      ascii(8, "avis")
     ) {
       return "image";
     }
     return "video"; // MP4 / MOV / M4V (ISO base media)
   }
-  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return "video"; // Matroska/WebM
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3)
+    return "video"; // Matroska/WebM
   // Audio.
   if (ascii(0, "OggS")) return "audio"; // Ogg
   if (ascii(0, "fLaC")) return "audio"; // FLAC
-  if (ascii(0, "ID3") || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) return "audio"; // MP3
+  if (ascii(0, "ID3") || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0))
+    return "audio"; // MP3
   if (ascii(0, "RIFF") && ascii(8, "WAVE")) return "audio"; // WAV
   return null;
 }

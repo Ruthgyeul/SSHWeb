@@ -14,9 +14,7 @@ export function PromptLabel({ path = "~" }: { path?: string }) {
       <span className="text-term-green">
         {TERMINAL_USER}@{TERMINAL_HOST}
       </span>
-      <span className="text-term-faint">
-        :{path}$
-      </span>
+      <span className="text-term-faint">:{path}$</span>
     </>
   );
 }

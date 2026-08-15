@@ -40,9 +40,21 @@ describe("reconnectBackoffMs", () => {
 describe("planReconnect", () => {
   it("schedules the next attempt with its backoff while under the ceiling", () => {
     // MAX_RECONNECT is 3 in SshSession: attempts 1..3 retry, then give up.
-    expect(planReconnect(0, 3)).toEqual({ reconnect: true, attempt: 1, delayMs: 1000 });
-    expect(planReconnect(1, 3)).toEqual({ reconnect: true, attempt: 2, delayMs: 2000 });
-    expect(planReconnect(2, 3)).toEqual({ reconnect: true, attempt: 3, delayMs: 4000 });
+    expect(planReconnect(0, 3)).toEqual({
+      reconnect: true,
+      attempt: 1,
+      delayMs: 1000,
+    });
+    expect(planReconnect(1, 3)).toEqual({
+      reconnect: true,
+      attempt: 2,
+      delayMs: 2000,
+    });
+    expect(planReconnect(2, 3)).toEqual({
+      reconnect: true,
+      attempt: 3,
+      delayMs: 4000,
+    });
   });
 
   it("gives up once the ceiling is passed", () => {

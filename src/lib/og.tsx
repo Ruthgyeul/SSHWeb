@@ -23,74 +23,72 @@ const host = SITE_URL.replace(/^https?:\/\//, "");
 
 export function OgImage() {
   return new ImageResponse(
-    (
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "space-between",
+        background: color.bg,
+        color: color.text,
+        padding: "72px 80px",
+        fontFamily: "monospace",
+      }}
+    >
       <div
         style={{
-          width: "100%",
-          height: "100%",
           display: "flex",
-          flexDirection: "column",
-          justifyContent: "space-between",
-          background: color.bg,
-          color: color.text,
-          padding: "72px 80px",
-          fontFamily: "monospace",
+          alignItems: "center",
+          color: color.accent,
+          fontSize: 30,
         }}
       >
         <div
           style={{
+            width: 22,
+            height: 22,
+            borderRadius: 6,
+            background: color.green,
+            marginRight: 16,
+          }}
+        />
+        {host}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", fontSize: 30, color: color.faint }}>
+          <span style={{ color: color.green }}>$</span>
+          <span style={{ marginLeft: 12 }}>whoami</span>
+        </div>
+        <div
+          style={{
             display: "flex",
-            alignItems: "center",
-            color: color.accent,
-            fontSize: 30,
+            fontSize: 72,
+            fontWeight: 700,
+            lineHeight: 1.1,
+            marginTop: 18,
           }}
         >
-          <div
-            style={{
-              width: 22,
-              height: 22,
-              borderRadius: 6,
-              background: color.green,
-              marginRight: 16,
-            }}
-          />
-          {host}
+          {SITE_NAME}
         </div>
-
-        <div style={{ display: "flex", flexDirection: "column" }}>
-          <div style={{ display: "flex", fontSize: 30, color: color.faint }}>
-            <span style={{ color: color.green }}>$</span>
-            <span style={{ marginLeft: 12 }}>whoami</span>
-          </div>
-          <div
-            style={{
-              display: "flex",
-              fontSize: 72,
-              fontWeight: 700,
-              lineHeight: 1.1,
-              marginTop: 18,
-            }}
-          >
-            {SITE_NAME}
-          </div>
-          <div
-            style={{
-              display: "flex",
-              fontSize: 30,
-              color: color.muted,
-              marginTop: 20,
-              maxWidth: 940,
-            }}
-          >
-            {SITE_DESCRIPTION}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", fontSize: 26, color: color.faint }}>
-          Next.js · TypeScript · Tailwind CSS
+        <div
+          style={{
+            display: "flex",
+            fontSize: 30,
+            color: color.muted,
+            marginTop: 20,
+            maxWidth: 940,
+          }}
+        >
+          {SITE_DESCRIPTION}
         </div>
       </div>
-    ),
+
+      <div style={{ display: "flex", fontSize: 26, color: color.faint }}>
+        Next.js · TypeScript · Tailwind CSS
+      </div>
+    </div>,
     { ...size },
   );
 }

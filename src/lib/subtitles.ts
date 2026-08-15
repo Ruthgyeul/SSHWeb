@@ -36,12 +36,17 @@ export function findSubtitleSidecar(
     const dot = lower.lastIndexOf(".");
     if (dot < 0) continue;
     const ext = lower.slice(dot + 1);
-    const extRank = SUBTITLE_EXTENSIONS.indexOf(ext as (typeof SUBTITLE_EXTENSIONS)[number]);
+    const extRank = SUBTITLE_EXTENSIONS.indexOf(
+      ext as (typeof SUBTITLE_EXTENSIONS)[number],
+    );
     if (extRank < 0) continue;
     const stem = lower.slice(0, dot);
     if (stem === base) {
       // Exact base match: prefer .vtt over .srt (lower rank wins).
-      if (exact === null || extRank < SUBTITLE_EXTENSIONS.indexOf(exactExt(exact))) {
+      if (
+        exact === null ||
+        extRank < SUBTITLE_EXTENSIONS.indexOf(exactExt(exact))
+      ) {
         exact = name;
       }
     } else if (stem.startsWith(`${base}.`)) {
@@ -58,7 +63,9 @@ export function findSubtitleSidecar(
 /** The subtitle extension of an already-matched sidecar filename. */
 function exactExt(name: string): (typeof SUBTITLE_EXTENSIONS)[number] {
   const dot = name.lastIndexOf(".");
-  return name.slice(dot + 1).toLowerCase() as (typeof SUBTITLE_EXTENSIONS)[number];
+  return name
+    .slice(dot + 1)
+    .toLowerCase() as (typeof SUBTITLE_EXTENSIONS)[number];
 }
 
 /** Whether a sidecar filename needs SRT→VTT conversion before use in a track. */
