@@ -94,7 +94,9 @@ describe("useSshSocket", () => {
   it("parses incoming frames and forwards them to onMessage", () => {
     const { opts, socket } = setup();
     socket().openSocket(DETAILS);
-    MockWebSocket.last().onmessage?.({ data: encodeMessage({ t: "pong", ts: 5 }) });
+    MockWebSocket.last().onmessage?.({
+      data: encodeMessage({ t: "pong", ts: 5 }),
+    });
     expect(opts.onMessage).toHaveBeenCalledWith({ t: "pong", ts: 5 });
     // A garbage frame is dropped, not forwarded.
     (opts.onMessage as ReturnType<typeof vi.fn>).mockClear();
@@ -103,7 +105,9 @@ describe("useSshSocket", () => {
   });
 
   it("on an unexpected close of a live session, schedules a reconnect", () => {
-    const reconnect = fakeReconnect({ beginReconnectAfterDrop: vi.fn(() => true) });
+    const reconnect = fakeReconnect({
+      beginReconnectAfterDrop: vi.fn(() => true),
+    });
     const { opts, socket } = setup({ reconnect });
     socket().openSocket(DETAILS);
     MockWebSocket.last().onclose?.();
@@ -113,7 +117,9 @@ describe("useSshSocket", () => {
   });
 
   it("on a close that never connected, reports a hard failure", () => {
-    const reconnect = fakeReconnect({ beginReconnectAfterDrop: vi.fn(() => false) });
+    const reconnect = fakeReconnect({
+      beginReconnectAfterDrop: vi.fn(() => false),
+    });
     const { opts, socket } = setup({ reconnect });
     socket().openSocket(DETAILS);
     MockWebSocket.last().onclose?.();
@@ -122,7 +128,9 @@ describe("useSshSocket", () => {
   });
 
   it("suppresses reconnect handling when the user closed the socket", () => {
-    const reconnect = fakeReconnect({ beginReconnectAfterDrop: vi.fn(() => true) });
+    const reconnect = fakeReconnect({
+      beginReconnectAfterDrop: vi.fn(() => true),
+    });
     const { opts, socket } = setup({
       reconnect,
       userClosedRef: { current: true },
@@ -135,16 +143,21 @@ describe("useSshSocket", () => {
   });
 
   it("the scheduled retry reopens a fresh socket via the latest openSocket", () => {
-    const reconnect = fakeReconnect({ beginReconnectAfterDrop: vi.fn(() => true) });
+    const reconnect = fakeReconnect({
+      beginReconnectAfterDrop: vi.fn(() => true),
+    });
     const { opts, socket } = setup({ reconnect });
     socket().openSocket(DETAILS);
     MockWebSocket.last().onclose?.();
     // Capture and invoke the retry callback schedule() was handed.
-    const retry = (reconnect.schedule as ReturnType<typeof vi.fn>).mock.calls[0][0] as () => void;
+    const retry = (reconnect.schedule as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as () => void;
     const before = MockWebSocket.instances.length;
     retry();
     expect(MockWebSocket.instances.length).toBe(before + 1);
-    expect(opts.wsRef.current).toBe(MockWebSocket.last() as unknown as WebSocket);
+    expect(opts.wsRef.current).toBe(
+      MockWebSocket.last() as unknown as WebSocket,
+    );
   });
 
   it("reports transport errors via onSocketError", () => {

@@ -66,7 +66,10 @@ function inline(text: string): string {
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/__([^_]+)__/g, "<strong>$1</strong>");
   s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-  s = s.replace(/(^|[^A-Za-z0-9])_([^_]+)_(?=$|[^A-Za-z0-9])/g, "$1<em>$2</em>");
+  s = s.replace(
+    /(^|[^A-Za-z0-9])_([^_]+)_(?=$|[^A-Za-z0-9])/g,
+    "$1<em>$2</em>",
+  );
 
   s = s.replace(
     new RegExp(`${CODE_MARK}(\\d+)${CODE_MARK}`, "g"),

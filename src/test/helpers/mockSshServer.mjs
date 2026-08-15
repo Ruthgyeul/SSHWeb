@@ -100,7 +100,8 @@ function handleSftp(sftp) {
     }
     // A write/create open (uploads) succeeds and just discards the bytes — the
     // mock has no real FS, but this exercises the bridge's write handlers.
-    const writable = (flags & (OPEN_MODE.WRITE | OPEN_MODE.CREAT | OPEN_MODE.TRUNC)) !== 0;
+    const writable =
+      (flags & (OPEN_MODE.WRITE | OPEN_MODE.CREAT | OPEN_MODE.TRUNC)) !== 0;
     if (writable) {
       const handle = Buffer.from(`file:${handleSeq++}`);
       openFiles.set(handle.toString(), MOCK_FILE_BUF); // placeholder, unused for writes
@@ -128,7 +129,10 @@ function handleSftp(sftp) {
     const buf = openFiles.get(handle.toString());
     if (!buf) return sftp.status(reqid, STATUS_CODE.FAILURE);
     if (offset >= buf.length) return sftp.status(reqid, STATUS_CODE.EOF);
-    sftp.data(reqid, buf.subarray(offset, Math.min(offset + length, buf.length)));
+    sftp.data(
+      reqid,
+      buf.subarray(offset, Math.min(offset + length, buf.length)),
+    );
   });
 
   sftp.on("CLOSE", (reqid, handle) => {

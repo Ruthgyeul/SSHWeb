@@ -116,9 +116,9 @@ describe("clientIpFromHeaders", () => {
   });
 
   it("ignores X-Forwarded-For when not trusting the proxy", () => {
-    expect(
-      clientIpFromHeaders("203.0.113.7", "192.168.1.5", false),
-    ).toBe("192.168.1.5");
+    expect(clientIpFromHeaders("203.0.113.7", "192.168.1.5", false)).toBe(
+      "192.168.1.5",
+    );
   });
 
   it("falls back to remoteAddress, then a stable sentinel", () => {

@@ -53,9 +53,9 @@ describe("createConcurrencyLimiter", () => {
     const running = limiter.run(() => gate.promise); // occupies the slot
     const queued = limiter.run(() => Promise.resolve("q")); // fills the queue
 
-    await expect(limiter.run(() => Promise.resolve("x"))).rejects.toBeInstanceOf(
-      QueueFullError,
-    );
+    await expect(
+      limiter.run(() => Promise.resolve("x")),
+    ).rejects.toBeInstanceOf(QueueFullError);
 
     gate.resolve();
     await running;

@@ -63,8 +63,13 @@ export function useToasts() {
       const text = clampToastMessage(message);
       if (text === "") return;
       const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      setToasts((list) => [...list, { id, kind, message: text }].slice(-MAX_VISIBLE));
-      timers.current[id] = window.setTimeout(() => dismiss(id), AUTO_DISMISS_MS);
+      setToasts((list) =>
+        [...list, { id, kind, message: text }].slice(-MAX_VISIBLE),
+      );
+      timers.current[id] = window.setTimeout(
+        () => dismiss(id),
+        AUTO_DISMISS_MS,
+      );
     },
     [dismiss],
   );

@@ -32,7 +32,14 @@ describe("parseConnectionProfiles", () => {
       { id: "a", host: "h", port: 22, username: "u" }, // no label/auth
       { id: "b", host: "", port: 22, username: "u" }, // empty host → dropped
       { id: "c", port: 22, username: "u" }, // no host → dropped
-      { id: "d", host: "h2", port: 2222, username: "bob", auth: "key", label: "prod" },
+      {
+        id: "d",
+        host: "h2",
+        port: 2222,
+        username: "bob",
+        auth: "key",
+        label: "prod",
+      },
     ]);
     const out = parseConnectionProfiles(raw);
     expect(out).toHaveLength(2);
@@ -70,8 +77,22 @@ describe("upsertProfile", () => {
 
   it("updates the same server in place (no duplicate, keeps id/position)", () => {
     const list: ConnectionProfile[] = [
-      { id: "x", host: "a", port: 22, username: "root", auth: "password", label: "a" },
-      { id: "y", host: "b", port: 22, username: "root", auth: "password", label: "b" },
+      {
+        id: "x",
+        host: "a",
+        port: 22,
+        username: "root",
+        auth: "password",
+        label: "a",
+      },
+      {
+        id: "y",
+        host: "b",
+        port: 22,
+        username: "root",
+        auth: "password",
+        label: "b",
+      },
     ];
     // Re-save server "a" but switch to key auth.
     const out = upsertProfile(
@@ -88,7 +109,13 @@ describe("upsertProfile", () => {
   it("honors an explicit label but ignores a blank one", () => {
     const withLabel = upsertProfile(
       [],
-      { host: "h", port: 22, username: "u", auth: "password", label: "  prod  " },
+      {
+        host: "h",
+        port: 22,
+        username: "u",
+        auth: "password",
+        label: "  prod  ",
+      },
       idSeq(),
     );
     expect(withLabel[0].label).toBe("prod");
@@ -104,8 +131,22 @@ describe("upsertProfile", () => {
 describe("removeConnectionProfile", () => {
   it("removes by id", () => {
     const list: ConnectionProfile[] = [
-      { id: "x", host: "a", port: 22, username: "u", auth: "password", label: "a" },
-      { id: "y", host: "b", port: 22, username: "u", auth: "password", label: "b" },
+      {
+        id: "x",
+        host: "a",
+        port: 22,
+        username: "u",
+        auth: "password",
+        label: "a",
+      },
+      {
+        id: "y",
+        host: "b",
+        port: 22,
+        username: "u",
+        auth: "password",
+        label: "b",
+      },
     ];
     expect(removeConnectionProfile(list, "x").map((p) => p.id)).toEqual(["y"]);
     expect(removeConnectionProfile(list, "nope")).toHaveLength(2);

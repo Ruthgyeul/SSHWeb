@@ -52,7 +52,12 @@ function press(
   init: KeyboardEventInit = {},
   target: EventTarget = window,
 ) {
-  const e = new KeyboardEvent("keydown", { key, cancelable: true, bubbles: true, ...init });
+  const e = new KeyboardEvent("keydown", {
+    key,
+    cancelable: true,
+    bubbles: true,
+    ...init,
+  });
   target.dispatchEvent(e);
   return e;
 }

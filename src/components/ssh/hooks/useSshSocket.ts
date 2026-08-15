@@ -60,14 +60,17 @@ export function useSshSocket(options: SshSocketOptions): SshSocket {
 
   // openSocket and the reconnect timer reference each other; a ref breaks the
   // cycle (the backoff timer retries via the latest openSocket through this ref).
-  const openSocketRef = useRef<((details: ConnectDetails) => void) | null>(null);
+  const openSocketRef = useRef<((details: ConnectDetails) => void) | null>(
+    null,
+  );
 
   // Schedule the next auto-reconnect attempt (or give up), retrying via the
   // latest openSocket only while we still hold connection details.
   const scheduleReconnect = useCallback(() => {
     const { reconnect, lastDetailsRef } = optsRef.current;
     reconnect.schedule(() => {
-      if (lastDetailsRef.current) openSocketRef.current?.(lastDetailsRef.current);
+      if (lastDetailsRef.current)
+        openSocketRef.current?.(lastDetailsRef.current);
     }, !!lastDetailsRef.current);
   }, []);
 

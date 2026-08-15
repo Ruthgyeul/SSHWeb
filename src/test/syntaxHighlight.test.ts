@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { escapeHtml, highlightToHtml, tokenizeLine } from "@/lib/syntaxHighlight";
+import {
+  escapeHtml,
+  highlightToHtml,
+  tokenizeLine,
+} from "@/lib/syntaxHighlight";
 
 describe("tokenizeLine", () => {
   it("tags a trailing comment", () => {
@@ -16,9 +20,9 @@ describe("tokenizeLine", () => {
 
   it("captures a whole string literal including quotes", () => {
     const toks = tokenizeLine('say("hi there")');
-    expect(toks.some((t) => t.type === "string" && t.value === '"hi there"')).toBe(
-      true,
-    );
+    expect(
+      toks.some((t) => t.type === "string" && t.value === '"hi there"'),
+    ).toBe(true);
   });
 
   it("does not end a string on an escaped quote", () => {

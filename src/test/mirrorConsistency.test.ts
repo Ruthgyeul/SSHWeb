@@ -69,9 +69,7 @@ describe("mirror consistency: sshProtocol.ts ↔ server.mjs", () => {
   it("mirrors the default preview-image quality", () => {
     // The server reads SSH_PREVIEW_IMAGE_QUALITY with a hardcoded default that
     // must equal the TypeScript constant.
-    const m = serverSource.match(
-      /SSH_PREVIEW_IMAGE_QUALITY \|\| "(\d+)"/,
-    );
+    const m = serverSource.match(/SSH_PREVIEW_IMAGE_QUALITY \|\| "(\d+)"/);
     expect(m, "default quality literal present in server.mjs").not.toBeNull();
     expect(Number(m![1])).toBe(PREVIEW_IMAGE_QUALITY);
   });

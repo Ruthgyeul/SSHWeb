@@ -89,7 +89,9 @@ describe("ConnectForm initial values", () => {
   it("defaults to empty fields with no `initial`", () => {
     render(<ConnectForm onConnect={() => {}} connecting={false} />);
     expect((screen.getByLabelText("Host") as HTMLInputElement).value).toBe("");
-    expect((screen.getByLabelText("Port") as HTMLInputElement).value).toBe("22");
+    expect((screen.getByLabelText("Port") as HTMLInputElement).value).toBe(
+      "22",
+    );
   });
 });
 

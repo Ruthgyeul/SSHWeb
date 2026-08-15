@@ -71,7 +71,11 @@ export function usePreviewKeyboard(options: PreviewKeyboardOptions): void {
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement;
       // Ctrl/⌘+F opens (and focuses) the find bar for a text preview.
-      if (isText && (e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+      if (
+        isText &&
+        (e.ctrlKey || e.metaKey) &&
+        (e.key === "f" || e.key === "F")
+      ) {
         e.preventDefault();
         setFindOpen(true);
         requestAnimationFrame(() => findInputRef.current?.focus());
@@ -92,16 +96,23 @@ export function usePreviewKeyboard(options: PreviewKeyboardOptions): void {
       // Shift+←/→ always steps the gallery, on every kind — including video/audio,
       // where the plain arrows are reserved for seeking. Lets the keyboard step
       // through a folder of clips without reaching for the on-screen ‹ › buttons.
-      if (hasGallery && e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      if (
+        hasGallery &&
+        e.shiftKey &&
+        (e.key === "ArrowLeft" || e.key === "ArrowRight")
+      ) {
         e.preventDefault();
         (e.key === "ArrowLeft" ? onPrev : onNext)?.();
         return;
       }
       // Let a focused <video>/<audio> keep its own arrow-key seeking; gallery
       // stepping for those is via Shift+←/→ (above) or the on-screen ‹ › buttons.
-      const mediaFocused =
-        kind === "video" || kind === "audio";
-      if (!mediaFocused && hasGallery && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      const mediaFocused = kind === "video" || kind === "audio";
+      if (
+        !mediaFocused &&
+        hasGallery &&
+        (e.key === "ArrowLeft" || e.key === "ArrowRight")
+      ) {
         e.preventDefault();
         (e.key === "ArrowLeft" ? onPrev : onNext)?.();
         return;

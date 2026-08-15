@@ -99,7 +99,9 @@ export function PreviewMedia({
                   }
                 }}
                 onError={video.onError}
-                onTimeUpdate={(e) => video.onTime?.(e.currentTarget.currentTime)}
+                onTimeUpdate={(e) =>
+                  video.onTime?.(e.currentTarget.currentTime)
+                }
                 className="max-h-full max-w-full"
               >
                 {video.subtitleSrc && (
@@ -136,7 +138,9 @@ export function PreviewMedia({
                   onImageLoad({ w: el.naturalWidth, h: el.naturalHeight });
                 }
               }}
-              onDoubleClick={() => (zoom > 1 ? resetView() : zoomBy(ZOOM_STEP * 1.5))}
+              onDoubleClick={() =>
+                zoom > 1 ? resetView() : zoomBy(ZOOM_STEP * 1.5)
+              }
               onPointerDown={transform.onPointerDown}
               onPointerMove={transform.onPointerMove}
               onPointerUp={transform.endDrag}
@@ -144,7 +148,9 @@ export function PreviewMedia({
               className={cn(
                 "max-h-full max-w-full object-contain",
                 loading && !src && "blur-md", // blur the low-res placeholder
-                zoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in",
+                zoom > 1
+                  ? "cursor-grab active:cursor-grabbing"
+                  : "cursor-zoom-in",
                 !dragging && "transition-transform",
               )}
               style={{
@@ -170,7 +176,8 @@ export function PreviewMedia({
               onClick={onDownload}
               className="flex items-center gap-1.5 rounded border border-term-accent/40 bg-term-accent/10 px-3 py-1.5 text-xs text-term-accent hover:bg-term-accent/20"
             >
-              <DownloadIcon className="h-3.5 w-3.5" /> Download to open it locally
+              <DownloadIcon className="h-3.5 w-3.5" /> Download to open it
+              locally
             </button>
           </div>
         )}

@@ -209,7 +209,9 @@ describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
     client.send({ t: "sftp-list", path: "." });
     const list = await client.waitFor((m) => m.t === "sftp-list");
     expect(list.path).toBe("/home/testuser");
-    const byName = Object.fromEntries(list.entries.map((e) => [e.name, e.type]));
+    const byName = Object.fromEntries(
+      list.entries.map((e) => [e.name, e.type]),
+    );
     expect(byName["readme.txt"]).toBe("file");
     expect(byName["projects"]).toBe("dir");
   });
@@ -228,9 +230,7 @@ describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
       (m) => m.t === "sftp-download-begin" && m.name === "download.zip",
     );
     const key = begin.path;
-    await client.waitFor(
-      (m) => m.t === "sftp-download-end" && m.path === key,
-    );
+    await client.waitFor((m) => m.t === "sftp-download-end" && m.path === key);
     // Reassemble the archive from the streamed chunk frames (inbox order).
     const zip = Buffer.concat(
       client.inbox
@@ -264,7 +264,9 @@ describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
 
   it("acknowledges mkdir with sftp-ok", async () => {
     client.send({ t: "sftp-mkdir", path: "/home/testuser/newdir" });
-    const ok = await client.waitFor((m) => m.t === "sftp-ok" && m.op === "mkdir");
+    const ok = await client.waitFor(
+      (m) => m.t === "sftp-ok" && m.op === "mkdir",
+    );
     expect(ok.path).toBe("/home/testuser/newdir");
   });
 
@@ -295,7 +297,9 @@ describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
       final: true,
       dataB64: Buffer.from("uploaded bytes").toString("base64"),
     });
-    const ok = await client.waitFor((m) => m.t === "sftp-ok" && m.op === "write");
+    const ok = await client.waitFor(
+      (m) => m.t === "sftp-ok" && m.op === "write",
+    );
     expect(ok.path).toBe("/home/testuser/upload.txt");
   });
 });

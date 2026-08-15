@@ -126,6 +126,13 @@ export function useReconnect(options: ReconnectOptions): Reconnect {
       resetForConnect,
       resetAttempts,
     }),
-    [markConnected, beginReconnectAfterDrop, schedule, cancelPending, resetForConnect, resetAttempts],
+    [
+      markConnected,
+      beginReconnectAfterDrop,
+      schedule,
+      cancelPending,
+      resetForConnect,
+      resetAttempts,
+    ],
   );
 }

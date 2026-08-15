@@ -226,7 +226,11 @@ function Thumbnail({
           className="pointer-events-none absolute flex h-8 w-8 items-center justify-center rounded-full bg-black/45 text-white drop-shadow"
           aria-hidden
         >
-          <svg viewBox="0 0 24 24" fill="currentColor" className="ml-0.5 h-4 w-4">
+          <svg
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            className="ml-0.5 h-4 w-4"
+          >
             <path d="M8 5v14l11-7z" />
           </svg>
         </span>
@@ -369,9 +373,10 @@ export function FileBrowser({
   // means the selection derives to empty on navigation (no effect needed), and
   // stale names left after a refresh are naturally ignored because every read
   // below intersects with the current listing.
-  const [selection, setSelection] = useState<{ cwd: string; names: Set<string> }>(
-    { cwd, names: new Set() },
-  );
+  const [selection, setSelection] = useState<{
+    cwd: string;
+    names: Set<string>;
+  }>({ cwd, names: new Set() });
   // In-CWD name filter, tagged with the directory it applies to. Tagging by
   // `cwd` makes it derive back to empty on navigation (no effect needed), the
   // same trick the selection above uses.
@@ -537,7 +542,10 @@ export function FileBrowser({
                 /
               </button>
               {segments.map((seg, i) => (
-                <span key={seg.path} className="flex flex-none items-center gap-0.5">
+                <span
+                  key={seg.path}
+                  className="flex flex-none items-center gap-0.5"
+                >
                   {i > 0 && <span className="text-term-faint">/</span>}
                   <button
                     type="button"
@@ -904,7 +912,9 @@ export function FileBrowser({
                     <div
                       className={cn(
                         "h-full transition-all",
-                        summary.interrupted ? "bg-term-yellow" : "bg-term-accent",
+                        summary.interrupted
+                          ? "bg-term-yellow"
+                          : "bg-term-accent",
                       )}
                       style={{ width: `${summary.pct}%` }}
                     />
@@ -922,7 +932,9 @@ export function FileBrowser({
                       <span className="flex shrink-0 items-center gap-2">
                         {interrupted ? (
                           <>
-                            <span className="text-term-yellow">interrupted</span>
+                            <span className="text-term-yellow">
+                              interrupted
+                            </span>
                             <button
                               type="button"
                               onClick={() => onResumeUpload(u.path)}
@@ -1154,7 +1166,9 @@ export function FileBrowser({
                               <span className="flex-none text-term-accent/70">
                                 :{r.line}
                               </span>
-                              <span className="min-w-0 truncate">{r.preview}</span>
+                              <span className="min-w-0 truncate">
+                                {r.preview}
+                              </span>
                             </span>
                           )}
                         </button>
@@ -1167,409 +1181,448 @@ export function FileBrowser({
           </div>
         ) : (
           <>
-        {loading && <p className="px-3 py-4 text-xs text-term-muted">Loading…</p>}
-        {!loading && sorted.length === 0 && (
-          <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
-            <FolderOpenIcon className="h-8 w-8 opacity-60" />
-            <p className="text-sm">This directory is empty</p>
-            <p className="text-xs text-term-faint">
-              Drag files here, or use “↑ upload” / “+ file” to add one.
-            </p>
-          </div>
-        )}
-        {!loading && sorted.length > 0 && visible.length === 0 && (
-          <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
-            <SearchIcon className="h-8 w-8 opacity-60" />
-            <p className="text-sm">No files match “{filter.trim()}”</p>
-            <button
-              type="button"
-              onClick={() => setFilter("")}
-              className="text-xs text-term-accent hover:text-term-accent-soft"
-            >
-              Clear filter
-            </button>
-          </div>
-        )}
-        {viewMode === "list" && (
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-term-border text-xs">
-              <th className="w-8" aria-hidden />
-              <SortHeader
-                label="Name"
-                col="name"
-                activeKey={sort.key}
-                dir={sort.dir}
-                onSort={toggleSort}
-                className="pl-1"
-              />
-              <SortHeader
-                label="Size"
-                col="size"
-                activeKey={sort.key}
-                dir={sort.dir}
-                onSort={toggleSort}
-                align="right"
-                className="hidden whitespace-nowrap sm:table-cell"
-              />
-              <th className="hidden px-2 py-1.5 text-left font-medium text-term-muted md:table-cell">
-                Perms
-              </th>
-              <SortHeader
-                label="Modified"
-                col="mtime"
-                activeKey={sort.key}
-                dir={sort.dir}
-                onSort={toggleSort}
-                className="hidden whitespace-nowrap lg:table-cell"
-              />
-              <th className="py-1.5 pl-2 pr-3" aria-hidden />
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((entry) => {
-              const isDir = entry.type === "dir";
-              const target = pathFor(entry.name);
-              const editable = !isDir && isProbablyTextFile(entry.name);
-              const previewable = !isDir && filePreviewKind(entry.name) !== null;
-              // Click opens by type — always *viewing* the file, never
-              // downloading it (download is only the explicit ↓ button): dir →
-              // navigate, image/video/audio → preview, text → editor, anything
-              // else → a download-only modal (the browser can't render it).
-              const open = () => {
-                if (isDir) onNavigate(target);
-                else if (previewable) onPreview(target, entry.name, previewSiblings);
-                else if (editable) onEdit(target, entry.name, entry.size);
-                else onOpenUnsupported(target, entry.name);
-              };
-              return (
-                <tr
-                  key={entry.name}
-                  draggable
-                  onDragStart={(e) => onEntryDragStart(e, target)}
-                  onDragOver={
-                    isDir ? (e) => onFolderDragOver(e, target) : undefined
-                  }
-                  onDragLeave={
-                    isDir
-                      ? () => setDropDir((d) => (d === target ? null : d))
-                      : undefined
-                  }
-                  onDrop={isDir ? (e) => onFolderDrop(e, target) : undefined}
-                  className={cn(
-                    "border-b border-term-border/50 hover:bg-term-panel/60",
-                    isSelected(entry.name) && "bg-term-accent/5",
-                    isDir &&
-                      dropDir === target &&
-                      "bg-term-accent/10 outline outline-2 -outline-offset-2 outline-term-accent",
-                  )}
+            {loading && (
+              <p className="px-3 py-4 text-xs text-term-muted">Loading…</p>
+            )}
+            {!loading && sorted.length === 0 && (
+              <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
+                <FolderOpenIcon className="h-8 w-8 opacity-60" />
+                <p className="text-sm">This directory is empty</p>
+                <p className="text-xs text-term-faint">
+                  Drag files here, or use “↑ upload” / “+ file” to add one.
+                </p>
+              </div>
+            )}
+            {!loading && sorted.length > 0 && visible.length === 0 && (
+              <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
+                <SearchIcon className="h-8 w-8 opacity-60" />
+                <p className="text-sm">No files match “{filter.trim()}”</p>
+                <button
+                  type="button"
+                  onClick={() => setFilter("")}
+                  className="text-xs text-term-accent hover:text-term-accent-soft"
                 >
-                  <td className="w-8 py-1.5 pl-3 pr-0 align-middle">
-                    <input
-                      type="checkbox"
-                      checked={isSelected(entry.name)}
-                      onChange={() => toggleOne(entry.name)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="accent-term-accent"
-                      aria-label={`Select ${entry.name}`}
+                  Clear filter
+                </button>
+              </div>
+            )}
+            {viewMode === "list" && (
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-term-border text-xs">
+                    <th className="w-8" aria-hidden />
+                    <SortHeader
+                      label="Name"
+                      col="name"
+                      activeKey={sort.key}
+                      dir={sort.dir}
+                      onSort={toggleSort}
+                      className="pl-1"
                     />
-                  </td>
-                  <td className="w-full py-1.5 pl-1 pr-2">
-                    <button
-                      type="button"
-                      onClick={open}
-                      title={
-                        entry.type === "link" && entry.target
-                          ? `${entry.name} → ${entry.target}`
-                          : isDir
-                            ? undefined
-                            : "Click to open"
-                      }
-                      className={cn(
-                        "flex max-w-full items-center gap-2 text-left",
-                        isDir ? "text-term-accent" : "text-term-dim",
-                      )}
-                    >
-                      <FileIcon entry={entry} />
-                      <span className="truncate">{entry.name}</span>
-                      {entry.type === "link" && entry.target && (
-                        <span className="truncate text-xs text-term-faint">
-                          → {entry.target}
-                        </span>
-                      )}
-                    </button>
-                  </td>
-                  <td className="hidden whitespace-nowrap px-2 py-1.5 text-right font-mono text-xs text-term-faint sm:table-cell">
-                    {formatSize(entry.size, entry.type)}
-                  </td>
-                  <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint md:table-cell">
-                    {formatMode(entry.mode, entry.type)}
-                  </td>
-                  <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint lg:table-cell">
-                    {formatMtime(entry.mtime)}
-                  </td>
-                  <td className="whitespace-nowrap py-1.5 pl-2 pr-3 text-right">
-                    {previewable && (
-                      <button
-                        type="button"
-                        onClick={() => onPreview(target, entry.name, previewSiblings)}
-                        className={cn(actionBtn, "hover:text-term-accent")}
-                        title="Preview"
+                    <SortHeader
+                      label="Size"
+                      col="size"
+                      activeKey={sort.key}
+                      dir={sort.dir}
+                      onSort={toggleSort}
+                      align="right"
+                      className="hidden whitespace-nowrap sm:table-cell"
+                    />
+                    <th className="hidden px-2 py-1.5 text-left font-medium text-term-muted md:table-cell">
+                      Perms
+                    </th>
+                    <SortHeader
+                      label="Modified"
+                      col="mtime"
+                      activeKey={sort.key}
+                      dir={sort.dir}
+                      onSort={toggleSort}
+                      className="hidden whitespace-nowrap lg:table-cell"
+                    />
+                    <th className="py-1.5 pl-2 pr-3" aria-hidden />
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((entry) => {
+                    const isDir = entry.type === "dir";
+                    const target = pathFor(entry.name);
+                    const editable = !isDir && isProbablyTextFile(entry.name);
+                    const previewable =
+                      !isDir && filePreviewKind(entry.name) !== null;
+                    // Click opens by type — always *viewing* the file, never
+                    // downloading it (download is only the explicit ↓ button): dir →
+                    // navigate, image/video/audio → preview, text → editor, anything
+                    // else → a download-only modal (the browser can't render it).
+                    const open = () => {
+                      if (isDir) onNavigate(target);
+                      else if (previewable)
+                        onPreview(target, entry.name, previewSiblings);
+                      else if (editable) onEdit(target, entry.name, entry.size);
+                      else onOpenUnsupported(target, entry.name);
+                    };
+                    return (
+                      <tr
+                        key={entry.name}
+                        draggable
+                        onDragStart={(e) => onEntryDragStart(e, target)}
+                        onDragOver={
+                          isDir ? (e) => onFolderDragOver(e, target) : undefined
+                        }
+                        onDragLeave={
+                          isDir
+                            ? () => setDropDir((d) => (d === target ? null : d))
+                            : undefined
+                        }
+                        onDrop={
+                          isDir ? (e) => onFolderDrop(e, target) : undefined
+                        }
+                        className={cn(
+                          "border-b border-term-border/50 hover:bg-term-panel/60",
+                          isSelected(entry.name) && "bg-term-accent/5",
+                          isDir &&
+                            dropDir === target &&
+                            "bg-term-accent/10 outline outline-2 -outline-offset-2 outline-term-accent",
+                        )}
                       >
-                        <EyeIcon />
-                      </button>
-                    )}
-                    {editable && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onPreview(target, entry.name, previewSiblings)
-                          }
-                          className={cn(actionBtn, "hover:text-term-accent")}
-                          title="Preview (read-only)"
-                        >
-                          <EyeIcon />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onEdit(target, entry.name, entry.size)}
-                          className={cn(actionBtn, "hover:text-term-accent")}
-                          title="Edit"
-                        >
-                          <PencilIcon />
-                        </button>
-                      </>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        isDir ? onDownloadDir(target) : onDownload(target)
-                      }
-                      className={cn(actionBtn, "hover:text-term-accent")}
-                      title={isDir ? "Download as zip" : "Download"}
-                      aria-label={isDir ? "Download as zip" : "Download"}
-                    >
-                      <DownloadIcon className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onRename(entry)}
-                      className={cn(actionBtn, "hover:text-term-text")}
-                      title="Rename"
-                    >
-                      mv
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onCopy(entry)}
-                      className={cn(actionBtn, "hover:text-term-text")}
-                      title="Duplicate"
-                    >
-                      cp
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onChmod(entry)}
-                      className={cn(actionBtn, "hover:text-term-text")}
-                      title="Change permissions"
-                    >
-                      chmod
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onDelete(entry)}
-                      className={cn(actionBtn, "hover:text-term-red")}
-                      title="Delete"
-                    >
-                      ✕
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        )}
-        {viewMode === "grid" && visible.length > 0 && (
-          <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-            {visible.map((entry) => {
-              const isDir = entry.type === "dir";
-              const target = pathFor(entry.name);
-              const editable = !isDir && isProbablyTextFile(entry.name);
-              const previewable = !isDir && filePreviewKind(entry.name) !== null;
-              // Click opens by type — always *viewing* the file, never
-              // downloading it (download is only the explicit ↓ button): dir →
-              // navigate, image/video/audio → preview, text → editor, anything
-              // else → a download-only modal (the browser can't render it).
-              const open = () => {
-                if (isDir) onNavigate(target);
-                else if (previewable) onPreview(target, entry.name, previewSiblings);
-                else if (editable) onEdit(target, entry.name, entry.size);
-                else onOpenUnsupported(target, entry.name);
-              };
-              return (
-                <div
-                  key={entry.name}
-                  draggable
-                  onDragStart={(e) => onEntryDragStart(e, target)}
-                  onDragOver={
-                    isDir ? (e) => onFolderDragOver(e, target) : undefined
-                  }
-                  onDragLeave={
-                    isDir
-                      ? () => setDropDir((d) => (d === target ? null : d))
-                      : undefined
-                  }
-                  onDrop={isDir ? (e) => onFolderDrop(e, target) : undefined}
-                  className={cn(
-                    "group relative flex flex-col gap-1.5 rounded border p-2 transition-colors hover:bg-term-panel/60",
-                    isSelected(entry.name)
-                      ? "border-term-accent/50 bg-term-accent/5"
-                      : "border-term-border/50",
-                    isDir &&
-                      dropDir === target &&
-                      "border-term-accent bg-term-accent/10 outline outline-2 -outline-offset-2 outline-term-accent",
-                  )}
-                >
-                  <input
-                    type="checkbox"
-                    checked={isSelected(entry.name)}
-                    onChange={() => toggleOne(entry.name)}
-                    onClick={(e) => e.stopPropagation()}
-                    onDoubleClick={(e) => e.stopPropagation()}
-                    className={cn(
-                      "absolute left-2 top-2 z-10 accent-term-accent transition-opacity",
-                      isSelected(entry.name)
-                        ? "opacity-100"
-                        : "opacity-0 group-hover:opacity-100",
-                    )}
-                    aria-label={`Select ${entry.name}`}
-                  />
-                  <button
-                    type="button"
-                    onClick={open}
-                    title={isDir ? entry.name : "Click to open"}
-                    className="cursor-pointer"
-                    aria-label={`Open ${entry.name}`}
-                  >
-                    <Thumbnail
-                      path={target}
-                      src={thumbnails[target]}
-                      kind={previewKind(entry.name)}
-                      thumbnailable={isThumbnailable(entry)}
-                      fallback={
-                        <FileIcon
-                          entry={entry}
-                          className={cn(
-                            "h-10 w-10",
-                            isDir ? "text-term-accent" : "text-term-muted",
+                        <td className="w-8 py-1.5 pl-3 pr-0 align-middle">
+                          <input
+                            type="checkbox"
+                            checked={isSelected(entry.name)}
+                            onChange={() => toggleOne(entry.name)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="accent-term-accent"
+                            aria-label={`Select ${entry.name}`}
+                          />
+                        </td>
+                        <td className="w-full py-1.5 pl-1 pr-2">
+                          <button
+                            type="button"
+                            onClick={open}
+                            title={
+                              entry.type === "link" && entry.target
+                                ? `${entry.name} → ${entry.target}`
+                                : isDir
+                                  ? undefined
+                                  : "Click to open"
+                            }
+                            className={cn(
+                              "flex max-w-full items-center gap-2 text-left",
+                              isDir ? "text-term-accent" : "text-term-dim",
+                            )}
+                          >
+                            <FileIcon entry={entry} />
+                            <span className="truncate">{entry.name}</span>
+                            {entry.type === "link" && entry.target && (
+                              <span className="truncate text-xs text-term-faint">
+                                → {entry.target}
+                              </span>
+                            )}
+                          </button>
+                        </td>
+                        <td className="hidden whitespace-nowrap px-2 py-1.5 text-right font-mono text-xs text-term-faint sm:table-cell">
+                          {formatSize(entry.size, entry.type)}
+                        </td>
+                        <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint md:table-cell">
+                          {formatMode(entry.mode, entry.type)}
+                        </td>
+                        <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint lg:table-cell">
+                          {formatMtime(entry.mtime)}
+                        </td>
+                        <td className="whitespace-nowrap py-1.5 pl-2 pr-3 text-right">
+                          {previewable && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onPreview(target, entry.name, previewSiblings)
+                              }
+                              className={cn(
+                                actionBtn,
+                                "hover:text-term-accent",
+                              )}
+                              title="Preview"
+                            >
+                              <EyeIcon />
+                            </button>
                           )}
-                        />
-                      }
-                      onRequest={onRequestThumbnail}
-                      onVisibility={onThumbnailVisibility}
-                    />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={open}
-                    title={
-                      entry.type === "link" && entry.target
-                        ? `${entry.name} → ${entry.target}`
-                        : isDir
-                          ? entry.name
-                          : "Click to open"
-                    }
-                    className={cn(
-                      "truncate text-left text-xs",
-                      isDir ? "text-term-accent" : "text-term-dim",
-                    )}
-                  >
-                    {entry.name}
-                    {entry.type === "link" && entry.target && (
-                      <span className="text-term-faint"> → {entry.target}</span>
-                    )}
-                  </button>
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="truncate font-mono text-[10px] text-term-faint">
-                      {formatSize(entry.size, entry.type)}
-                    </span>
-                    <div className="flex flex-none items-center opacity-0 transition-opacity group-hover:opacity-100">
-                      {previewable && (
-                        <button
-                          type="button"
-                          onClick={() => onPreview(target, entry.name, previewSiblings)}
-                          className={cn(actionBtn, "hover:text-term-accent")}
-                          title="Preview"
-                        >
-                          <EyeIcon />
-                        </button>
-                      )}
-                      {editable && (
-                        <>
+                          {editable && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onPreview(target, entry.name, previewSiblings)
+                                }
+                                className={cn(
+                                  actionBtn,
+                                  "hover:text-term-accent",
+                                )}
+                                title="Preview (read-only)"
+                              >
+                                <EyeIcon />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onEdit(target, entry.name, entry.size)
+                                }
+                                className={cn(
+                                  actionBtn,
+                                  "hover:text-term-accent",
+                                )}
+                                title="Edit"
+                              >
+                                <PencilIcon />
+                              </button>
+                            </>
+                          )}
                           <button
                             type="button"
                             onClick={() =>
-                              onPreview(target, entry.name, previewSiblings)
+                              isDir ? onDownloadDir(target) : onDownload(target)
                             }
                             className={cn(actionBtn, "hover:text-term-accent")}
-                            title="Preview (read-only)"
+                            title={isDir ? "Download as zip" : "Download"}
+                            aria-label={isDir ? "Download as zip" : "Download"}
                           >
-                            <EyeIcon />
+                            <DownloadIcon className="h-4 w-4" />
                           </button>
                           <button
                             type="button"
-                            onClick={() => onEdit(target, entry.name, entry.size)}
-                            className={cn(actionBtn, "hover:text-term-accent")}
-                            title="Edit"
+                            onClick={() => onRename(entry)}
+                            className={cn(actionBtn, "hover:text-term-text")}
+                            title="Rename"
                           >
-                            <PencilIcon />
+                            mv
                           </button>
-                        </>
+                          <button
+                            type="button"
+                            onClick={() => onCopy(entry)}
+                            className={cn(actionBtn, "hover:text-term-text")}
+                            title="Duplicate"
+                          >
+                            cp
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onChmod(entry)}
+                            className={cn(actionBtn, "hover:text-term-text")}
+                            title="Change permissions"
+                          >
+                            chmod
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onDelete(entry)}
+                            className={cn(actionBtn, "hover:text-term-red")}
+                            title="Delete"
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+            {viewMode === "grid" && visible.length > 0 && (
+              <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+                {visible.map((entry) => {
+                  const isDir = entry.type === "dir";
+                  const target = pathFor(entry.name);
+                  const editable = !isDir && isProbablyTextFile(entry.name);
+                  const previewable =
+                    !isDir && filePreviewKind(entry.name) !== null;
+                  // Click opens by type — always *viewing* the file, never
+                  // downloading it (download is only the explicit ↓ button): dir →
+                  // navigate, image/video/audio → preview, text → editor, anything
+                  // else → a download-only modal (the browser can't render it).
+                  const open = () => {
+                    if (isDir) onNavigate(target);
+                    else if (previewable)
+                      onPreview(target, entry.name, previewSiblings);
+                    else if (editable) onEdit(target, entry.name, entry.size);
+                    else onOpenUnsupported(target, entry.name);
+                  };
+                  return (
+                    <div
+                      key={entry.name}
+                      draggable
+                      onDragStart={(e) => onEntryDragStart(e, target)}
+                      onDragOver={
+                        isDir ? (e) => onFolderDragOver(e, target) : undefined
+                      }
+                      onDragLeave={
+                        isDir
+                          ? () => setDropDir((d) => (d === target ? null : d))
+                          : undefined
+                      }
+                      onDrop={
+                        isDir ? (e) => onFolderDrop(e, target) : undefined
+                      }
+                      className={cn(
+                        "group relative flex flex-col gap-1.5 rounded border p-2 transition-colors hover:bg-term-panel/60",
+                        isSelected(entry.name)
+                          ? "border-term-accent/50 bg-term-accent/5"
+                          : "border-term-border/50",
+                        isDir &&
+                          dropDir === target &&
+                          "border-term-accent bg-term-accent/10 outline outline-2 -outline-offset-2 outline-term-accent",
                       )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected(entry.name)}
+                        onChange={() => toggleOne(entry.name)}
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        className={cn(
+                          "absolute left-2 top-2 z-10 accent-term-accent transition-opacity",
+                          isSelected(entry.name)
+                            ? "opacity-100"
+                            : "opacity-0 group-hover:opacity-100",
+                        )}
+                        aria-label={`Select ${entry.name}`}
+                      />
                       <button
                         type="button"
-                        onClick={() =>
-                          isDir ? onDownloadDir(target) : onDownload(target)
+                        onClick={open}
+                        title={isDir ? entry.name : "Click to open"}
+                        className="cursor-pointer"
+                        aria-label={`Open ${entry.name}`}
+                      >
+                        <Thumbnail
+                          path={target}
+                          src={thumbnails[target]}
+                          kind={previewKind(entry.name)}
+                          thumbnailable={isThumbnailable(entry)}
+                          fallback={
+                            <FileIcon
+                              entry={entry}
+                              className={cn(
+                                "h-10 w-10",
+                                isDir ? "text-term-accent" : "text-term-muted",
+                              )}
+                            />
+                          }
+                          onRequest={onRequestThumbnail}
+                          onVisibility={onThumbnailVisibility}
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={open}
+                        title={
+                          entry.type === "link" && entry.target
+                            ? `${entry.name} → ${entry.target}`
+                            : isDir
+                              ? entry.name
+                              : "Click to open"
                         }
-                        className={cn(actionBtn, "hover:text-term-accent")}
-                        title={isDir ? "Download as zip" : "Download"}
-                        aria-label={isDir ? "Download as zip" : "Download"}
+                        className={cn(
+                          "truncate text-left text-xs",
+                          isDir ? "text-term-accent" : "text-term-dim",
+                        )}
                       >
-                        <DownloadIcon className="h-4 w-4" />
+                        {entry.name}
+                        {entry.type === "link" && entry.target && (
+                          <span className="text-term-faint">
+                            {" "}
+                            → {entry.target}
+                          </span>
+                        )}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => onRename(entry)}
-                        className={cn(actionBtn, "hover:text-term-text")}
-                        title="Rename"
-                      >
-                        mv
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onCopy(entry)}
-                        className={cn(actionBtn, "hover:text-term-text")}
-                        title="Duplicate"
-                      >
-                        cp
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onDelete(entry)}
-                        className={cn(actionBtn, "hover:text-term-red")}
-                        title="Delete"
-                      >
-                        ✕
-                      </button>
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="truncate font-mono text-[10px] text-term-faint">
+                          {formatSize(entry.size, entry.type)}
+                        </span>
+                        <div className="flex flex-none items-center opacity-0 transition-opacity group-hover:opacity-100">
+                          {previewable && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onPreview(target, entry.name, previewSiblings)
+                              }
+                              className={cn(
+                                actionBtn,
+                                "hover:text-term-accent",
+                              )}
+                              title="Preview"
+                            >
+                              <EyeIcon />
+                            </button>
+                          )}
+                          {editable && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onPreview(target, entry.name, previewSiblings)
+                                }
+                                className={cn(
+                                  actionBtn,
+                                  "hover:text-term-accent",
+                                )}
+                                title="Preview (read-only)"
+                              >
+                                <EyeIcon />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onEdit(target, entry.name, entry.size)
+                                }
+                                className={cn(
+                                  actionBtn,
+                                  "hover:text-term-accent",
+                                )}
+                                title="Edit"
+                              >
+                                <PencilIcon />
+                              </button>
+                            </>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              isDir ? onDownloadDir(target) : onDownload(target)
+                            }
+                            className={cn(actionBtn, "hover:text-term-accent")}
+                            title={isDir ? "Download as zip" : "Download"}
+                            aria-label={isDir ? "Download as zip" : "Download"}
+                          >
+                            <DownloadIcon className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onRename(entry)}
+                            className={cn(actionBtn, "hover:text-term-text")}
+                            title="Rename"
+                          >
+                            mv
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onCopy(entry)}
+                            className={cn(actionBtn, "hover:text-term-text")}
+                            title="Duplicate"
+                          >
+                            cp
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onDelete(entry)}
+                            className={cn(actionBtn, "hover:text-term-red")}
+                            title="Delete"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                  );
+                })}
+              </div>
+            )}
           </>
         )}
       </div>

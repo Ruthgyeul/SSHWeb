@@ -424,7 +424,9 @@ async function encodePreviewImage(buffer) {
         withoutEnlargement: true,
       });
     if (PREVIEW_IMAGE_FORMAT === "avif") {
-      const bytes = await pipe.avif({ quality: PREVIEW_IMAGE_QUALITY }).toBuffer();
+      const bytes = await pipe
+        .avif({ quality: PREVIEW_IMAGE_QUALITY })
+        .toBuffer();
       return { bytes, mime: "image/avif", srcWidth, srcHeight };
     }
     if (PREVIEW_IMAGE_FORMAT === "webp-lossless") {
@@ -466,7 +468,8 @@ function grepFirstMatch(text, query, maxPreview = 160) {
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].toLowerCase().includes(needle)) {
       let preview = lines[i].replace(/^\s+/, "");
-      if (preview.length > maxPreview) preview = `${preview.slice(0, maxPreview)}…`;
+      if (preview.length > maxPreview)
+        preview = `${preview.slice(0, maxPreview)}…`;
       return { line: i + 1, preview };
     }
   }
@@ -996,7 +999,9 @@ function computeMaxPayloadBytes(maxUploadBytes) {
 /** Whether a request arrived over HTTPS (Secure-cookie gate; serverSecurity.ts). */
 function isSecureRequest(forwardedProto, encrypted) {
   if (encrypted) return true;
-  const raw = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+  const raw = Array.isArray(forwardedProto)
+    ? forwardedProto[0]
+    : forwardedProto;
   return typeof raw === "string" && raw.toLowerCase().includes("https");
 }
 
@@ -1241,18 +1246,28 @@ const server = createServer((req, res) => {
           };
           try {
             proc = spawn("ffmpeg", [
-              "-loglevel", "error",
-              "-i", "pipe:0",
-              "-c:v", "libx264",
-              "-preset", "veryfast",
-              "-crf", "23",
-              "-pix_fmt", "yuv420p",
-              "-c:a", "aac",
-              "-b:a", "128k",
+              "-loglevel",
+              "error",
+              "-i",
+              "pipe:0",
+              "-c:v",
+              "libx264",
+              "-preset",
+              "veryfast",
+              "-crf",
+              "23",
+              "-pix_fmt",
+              "yuv420p",
+              "-c:a",
+              "aac",
+              "-b:a",
+              "128k",
               // Fragmented MP4 so playback can start before the whole file is
               // converted (a normal MP4 needs its index written last).
-              "-movflags", "frag_keyframe+empty_moov+faststart",
-              "-f", "mp4",
+              "-movflags",
+              "frag_keyframe+empty_moov+faststart",
+              "-f",
+              "mp4",
               "pipe:1",
             ]);
           } catch {
@@ -1365,7 +1380,9 @@ server.on("upgrade", (req, socket, head) => {
   if (pathname === WS_PATH) {
     // Refuse new sessions once a graceful shutdown has begun.
     if (shuttingDown) {
-      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      socket.write(
+        "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n",
+      );
       socket.destroy();
       return;
     }
@@ -1419,7 +1436,8 @@ function crc32Init() {
 }
 function crc32Update(crc, buf) {
   let c = crc >>> 0;
-  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  for (let i = 0; i < buf.length; i++)
+    c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
   return c >>> 0;
 }
 function crc32Final(crc) {
@@ -1958,7 +1976,8 @@ wss.on("connection", (ws, req) => {
             ),
           );
         };
-        chan.on("ready", onReady)
+        chan
+          .on("ready", onReady)
           .on("error", onError)
           .on("exit", onExit)
           .on("close", onExit);
@@ -2008,7 +2027,8 @@ wss.on("connection", (ws, req) => {
       );
     }
     if (!ssh) return sendError("Not connected.", "sftp");
-    if (elevated && elevatedSftp) return send({ t: "sftp-sudo", enabled: true });
+    if (elevated && elevatedSftp)
+      return send({ t: "sftp-sudo", enabled: true });
     const password = typeof msg.password === "string" ? msg.password : "";
     openElevatedSftp(password, (err, s) => {
       if (err) {
@@ -2033,7 +2053,9 @@ wss.on("connection", (ws, req) => {
   function handleFind(msg) {
     withSftp((s) => {
       const root = String(msg.path || ".");
-      const query = String(msg.query || "").trim().toLowerCase();
+      const query = String(msg.query || "")
+        .trim()
+        .toLowerCase();
       const reply = (entries, truncated) =>
         send({
           t: "sftp-find-result",
@@ -2066,50 +2088,49 @@ wss.on("connection", (ws, req) => {
   // the search concurrency limiter. Calls `finish(entries, truncated)` exactly
   // once when the walk completes.
   function runFind(s, root, query, finish) {
-      const results = [];
-      let visited = 0;
-      let truncated = false;
-      const join = (dir, name) =>
-        (dir.endsWith("/") ? dir : `${dir}/`) + name;
+    const results = [];
+    let visited = 0;
+    let truncated = false;
+    const join = (dir, name) => (dir.endsWith("/") ? dir : `${dir}/`) + name;
 
-      const walk = (dir, cb) => {
-        if (truncated) return cb();
-        s.readdir(dir, (err, list) => {
-          if (err) return cb(); // unreadable directory — skip it, keep going
-          let i = 0;
-          const nextEntry = () => {
-            if (truncated || i >= list.length) return cb();
-            const item = list[i++];
-            if (++visited > MAX_FIND_NODES) {
+    const walk = (dir, cb) => {
+      if (truncated) return cb();
+      s.readdir(dir, (err, list) => {
+        if (err) return cb(); // unreadable directory — skip it, keep going
+        let i = 0;
+        const nextEntry = () => {
+          if (truncated || i >= list.length) return cb();
+          const item = list[i++];
+          if (++visited > MAX_FIND_NODES) {
+            truncated = true;
+            return cb();
+          }
+          const name = item.filename;
+          const type = toEntryType(item.attrs);
+          const childPath = join(dir, name);
+          if (name.toLowerCase().includes(query)) {
+            results.push({
+              name,
+              path: childPath,
+              type,
+              size: item.attrs.size || 0,
+              mtime: (item.attrs.mtime || 0) * 1000,
+              mode: (item.attrs.mode || 0) & 0o777,
+            });
+            if (results.length >= MAX_FIND_RESULTS) {
               truncated = true;
               return cb();
             }
-            const name = item.filename;
-            const type = toEntryType(item.attrs);
-            const childPath = join(dir, name);
-            if (name.toLowerCase().includes(query)) {
-              results.push({
-                name,
-                path: childPath,
-                type,
-                size: item.attrs.size || 0,
-                mtime: (item.attrs.mtime || 0) * 1000,
-                mode: (item.attrs.mode || 0) & 0o777,
-              });
-              if (results.length >= MAX_FIND_RESULTS) {
-                truncated = true;
-                return cb();
-              }
-            }
-            // Descend real directories only (never symlinks → no cycles).
-            if (type === "dir") walk(childPath, nextEntry);
-            else nextEntry();
-          };
-          nextEntry();
-        });
-      };
+          }
+          // Descend real directories only (never symlinks → no cycles).
+          if (type === "dir") walk(childPath, nextEntry);
+          else nextEntry();
+        };
+        nextEntry();
+      });
+    };
 
-      walk(root, () => finish(results, truncated));
+    walk(root, () => finish(results, truncated));
   }
 
   // Recursive content search (grep): walk the tree like handleFind, but open each
@@ -2150,67 +2171,66 @@ wss.on("connection", (ws, req) => {
   // The recursive content-search walk, factored out so handleGrep can run it
   // under the search concurrency limiter. Calls `finish` exactly once.
   function runGrep(s, root, query, finish) {
-      const results = [];
-      let visited = 0;
-      let bytesRead = 0;
-      let truncated = false;
-      const join = (dir, name) =>
-        (dir.endsWith("/") ? dir : `${dir}/`) + name;
+    const results = [];
+    let visited = 0;
+    let bytesRead = 0;
+    let truncated = false;
+    const join = (dir, name) => (dir.endsWith("/") ? dir : `${dir}/`) + name;
 
-      const walk = (dir, cb) => {
-        if (truncated) return cb();
-        s.readdir(dir, (err, list) => {
-          if (err) return cb(); // unreadable directory — skip it, keep going
-          let i = 0;
-          const nextEntry = () => {
-            if (truncated || i >= list.length) return cb();
-            const item = list[i++];
-            if (++visited > MAX_FIND_NODES) {
-              truncated = true;
-              return cb();
-            }
-            const name = item.filename;
-            const type = toEntryType(item.attrs);
-            const childPath = join(dir, name);
-            if (type === "dir") return walk(childPath, nextEntry); // descend
-            // Only scan regular files within the per-file and total read caps.
-            const size = item.attrs.size || 0;
-            if (type !== "file" || size === 0 || size > GREP_MAX_FILE_BYTES) {
-              return nextEntry();
-            }
-            if (bytesRead + size > GREP_MAX_TOTAL_BYTES) {
-              truncated = true;
-              return cb();
-            }
-            s.readFile(childPath, (readErr, buffer) => {
-              if (!readErr && buffer && !looksBinary(buffer)) {
-                bytesRead += buffer.length;
-                const hit = grepFirstMatch(buffer.toString("utf8"), query);
-                if (hit) {
-                  results.push({
-                    name,
-                    path: childPath,
-                    type,
-                    size,
-                    mtime: (item.attrs.mtime || 0) * 1000,
-                    mode: (item.attrs.mode || 0) & 0o777,
-                    line: hit.line,
-                    preview: hit.preview,
-                  });
-                  if (results.length >= MAX_FIND_RESULTS) {
-                    truncated = true;
-                    return cb();
-                  }
+    const walk = (dir, cb) => {
+      if (truncated) return cb();
+      s.readdir(dir, (err, list) => {
+        if (err) return cb(); // unreadable directory — skip it, keep going
+        let i = 0;
+        const nextEntry = () => {
+          if (truncated || i >= list.length) return cb();
+          const item = list[i++];
+          if (++visited > MAX_FIND_NODES) {
+            truncated = true;
+            return cb();
+          }
+          const name = item.filename;
+          const type = toEntryType(item.attrs);
+          const childPath = join(dir, name);
+          if (type === "dir") return walk(childPath, nextEntry); // descend
+          // Only scan regular files within the per-file and total read caps.
+          const size = item.attrs.size || 0;
+          if (type !== "file" || size === 0 || size > GREP_MAX_FILE_BYTES) {
+            return nextEntry();
+          }
+          if (bytesRead + size > GREP_MAX_TOTAL_BYTES) {
+            truncated = true;
+            return cb();
+          }
+          s.readFile(childPath, (readErr, buffer) => {
+            if (!readErr && buffer && !looksBinary(buffer)) {
+              bytesRead += buffer.length;
+              const hit = grepFirstMatch(buffer.toString("utf8"), query);
+              if (hit) {
+                results.push({
+                  name,
+                  path: childPath,
+                  type,
+                  size,
+                  mtime: (item.attrs.mtime || 0) * 1000,
+                  mode: (item.attrs.mode || 0) & 0o777,
+                  line: hit.line,
+                  preview: hit.preview,
+                });
+                if (results.length >= MAX_FIND_RESULTS) {
+                  truncated = true;
+                  return cb();
                 }
               }
-              nextEntry();
-            });
-          };
-          nextEntry();
-        });
-      };
+            }
+            nextEntry();
+          });
+        };
+        nextEntry();
+      });
+    };
 
-      walk(root, () => finish(results, truncated));
+    walk(root, () => finish(results, truncated));
   }
 
   /** Copy (duplicate) a file or directory to a new path over SFTP. */
@@ -2519,7 +2539,6 @@ wss.on("connection", (ws, req) => {
     appendUploadChunk(existing, path, buffer, msg.final === true);
   }
 
-
   // The file-read handler: thumbnails, previews (streamed/optimized),
   // edit reads and streamed downloads/transcodes. Extracted verbatim from the
   // message switch to keep the dispatcher thin.
@@ -2735,7 +2754,10 @@ wss.on("connection", (ws, req) => {
             // Send the transcode when it saved bytes, or whenever the raw
             // bytes can't be rendered by the browser (HEIC/HEIF) — there the
             // transcode is the only viewable form, size regardless.
-            if (encoded && (mustTranscode || encoded.bytes.length < buffer.length)) {
+            if (
+              encoded &&
+              (mustTranscode || encoded.bytes.length < buffer.length)
+            ) {
               const webp = encoded.bytes;
               const CHUNK = 256 * 1024;
               send({
@@ -2800,9 +2822,7 @@ wss.on("connection", (ws, req) => {
         // client-supplied cap to the download cap so `maxBytes` can never be
         // abused to stream more than an ordinary download would allow.
         let cap =
-          isPreview &&
-          typeof msg.maxBytes === "number" &&
-          msg.maxBytes > 0
+          isPreview && typeof msg.maxBytes === "number" && msg.maxBytes > 0
             ? msg.maxBytes
             : 0;
         if (cap && MAX_DOWNLOAD_BYTES > 0 && cap > MAX_DOWNLOAD_BYTES) {
@@ -2863,8 +2883,7 @@ wss.on("connection", (ws, req) => {
           if (links.length === 0) {
             return send({ t: "sftp-list", path: dir, entries });
           }
-          const join = (name) =>
-            (dir.endsWith("/") ? dir : `${dir}/`) + name;
+          const join = (name) => (dir.endsWith("/") ? dir : `${dir}/`) + name;
           let pending = links.length;
           for (const entry of links) {
             s.readlink(join(entry.name), (lErr, target) => {
@@ -3096,181 +3115,188 @@ wss.on("connection", (ws, req) => {
     // session instead of an uncaught exception that would crash the shared
     // process and drop every concurrent session.
     try {
-    switch (msg.t) {
-      case "connect":
-        handleConnect(msg);
-        break;
+      switch (msg.t) {
+        case "connect":
+          handleConnect(msg);
+          break;
 
-      case "data":
-        if (shell) {
-          bytesUp += Buffer.byteLength(msg.data || "", "utf8");
-          shell.write(msg.data, "utf8");
-        }
-        break;
+        case "data":
+          if (shell) {
+            bytesUp += Buffer.byteLength(msg.data || "", "utf8");
+            shell.write(msg.data, "utf8");
+          }
+          break;
 
-      case "resize":
-        if (shell)
-          shell.setWindow(Number(msg.rows) || 24, Number(msg.cols) || 80, 0, 0);
-        break;
+        case "resize":
+          if (shell)
+            shell.setWindow(
+              Number(msg.rows) || 24,
+              Number(msg.cols) || 80,
+              0,
+              0,
+            );
+          break;
 
-      case "ping":
-        // Latency probe: echo the timestamp straight back so the client can
-        // measure round-trip time without disturbing the shell.
-        send({ t: "pong", ts: Number(msg.ts) || 0 });
-        break;
+        case "ping":
+          // Latency probe: echo the timestamp straight back so the client can
+          // measure round-trip time without disturbing the shell.
+          send({ t: "pong", ts: Number(msg.ts) || 0 });
+          break;
 
-      case "hostkey-response":
-        if (pendingHostVerify) {
-          clearPromptTimeout();
-          const verify = pendingHostVerify;
-          pendingHostVerify = null;
-          verify(msg.accept === true);
-        }
-        break;
+        case "hostkey-response":
+          if (pendingHostVerify) {
+            clearPromptTimeout();
+            const verify = pendingHostVerify;
+            pendingHostVerify = null;
+            verify(msg.accept === true);
+          }
+          break;
 
-      case "kbd-response":
-        if (pendingKbdFinish) {
-          clearPromptTimeout();
-          const finish = pendingKbdFinish;
-          pendingKbdFinish = null;
-          finish(Array.isArray(msg.responses) ? msg.responses.map(String) : []);
-        }
-        break;
+        case "kbd-response":
+          if (pendingKbdFinish) {
+            clearPromptTimeout();
+            const finish = pendingKbdFinish;
+            pendingKbdFinish = null;
+            finish(
+              Array.isArray(msg.responses) ? msg.responses.map(String) : [],
+            );
+          }
+          break;
 
-      case "sftp-list":
-        handleList(msg);
-        break;
+        case "sftp-list":
+          handleList(msg);
+          break;
 
-      case "sftp-read":
-        handleRead(msg);
-        break;
+        case "sftp-read":
+          handleRead(msg);
+          break;
 
-      case "sftp-write":
-        handleWrite(msg);
-        break;
+        case "sftp-write":
+          handleWrite(msg);
+          break;
 
-      case "sftp-write-resume":
-        // Report the partial destination's current size so a resumed upload
-        // knows where to continue. A missing file (or any stat error) yields
-        // offset 0, telling the client to restart the upload from the start.
-        withSftp((s) =>
-          s.stat(msg.path, (err, st) => {
-            const offset = err || !st ? 0 : Math.max(0, st.size || 0);
-            send({ t: "sftp-write-at", path: msg.path, offset });
-          }),
-        );
-        break;
+        case "sftp-write-resume":
+          // Report the partial destination's current size so a resumed upload
+          // knows where to continue. A missing file (or any stat error) yields
+          // offset 0, telling the client to restart the upload from the start.
+          withSftp((s) =>
+            s.stat(msg.path, (err, st) => {
+              const offset = err || !st ? 0 : Math.max(0, st.size || 0);
+              send({ t: "sftp-write-at", path: msg.path, offset });
+            }),
+          );
+          break;
 
-      case "sftp-upload-cancel":
-        // Abort an in-flight (or interrupted) upload and remove the partial
-        // destination file so a half-written upload never lingers. The client
-        // has already dropped its progress row.
-        {
-          const entry = uploads.get(msg.path);
-          if (entry) {
-            uploads.delete(msg.path);
-            try {
-              entry.stream.destroy();
-            } catch {
-              /* stream already gone */
+        case "sftp-upload-cancel":
+          // Abort an in-flight (or interrupted) upload and remove the partial
+          // destination file so a half-written upload never lingers. The client
+          // has already dropped its progress row.
+          {
+            const entry = uploads.get(msg.path);
+            if (entry) {
+              uploads.delete(msg.path);
+              try {
+                entry.stream.destroy();
+              } catch {
+                /* stream already gone */
+              }
+            }
+            // Best-effort: remove the partial (ignore "no such file").
+            withSftp((s) => s.unlink(msg.path, () => {}));
+          }
+          break;
+
+        case "sftp-download-cancel":
+          // Abort an in-flight streamed download. Remove the map entry first so the
+          // stream's error/close handler stays silent (see the download handler),
+          // then tear the read stream down. The source file is only read.
+          {
+            const stream = downloads.get(msg.path);
+            if (stream) {
+              downloads.delete(msg.path);
+              try {
+                stream.destroy();
+              } catch {
+                /* stream already gone */
+              }
             }
           }
-          // Best-effort: remove the partial (ignore "no such file").
-          withSftp((s) => s.unlink(msg.path, () => {}));
-        }
-        break;
+          break;
 
-      case "sftp-download-cancel":
-        // Abort an in-flight streamed download. Remove the map entry first so the
-        // stream's error/close handler stays silent (see the download handler),
-        // then tear the read stream down. The source file is only read.
-        {
-          const stream = downloads.get(msg.path);
-          if (stream) {
-            downloads.delete(msg.path);
-            try {
-              stream.destroy();
-            } catch {
-              /* stream already gone */
-            }
+        case "sftp-rename":
+          withSftp((s) =>
+            s.rename(msg.from, msg.to, (err) => {
+              if (err) return sendError(err.message, "sftp");
+              send({ t: "sftp-ok", op: "rename", path: msg.to });
+            }),
+          );
+          break;
+
+        case "sftp-chmod":
+          withSftp((s) =>
+            s.chmod(msg.path, Number(msg.mode) & 0o777, (err) => {
+              if (err) return sendError(err.message, "sftp");
+              send({ t: "sftp-ok", op: "chmod", path: msg.path });
+            }),
+          );
+          break;
+
+        case "sftp-download-dir":
+          handleDownloadDir(msg);
+          break;
+
+        case "sftp-download-many":
+          handleDownloadMany(msg);
+          break;
+
+        case "sftp-sudo":
+          handleSudo(msg);
+          break;
+
+        case "sftp-find":
+          handleFind(msg);
+          break;
+
+        case "sftp-grep":
+          handleGrep(msg);
+          break;
+
+        case "sftp-copy":
+          handleCopy(msg);
+          break;
+
+        case "sftp-mkdir":
+          withSftp((s) =>
+            s.mkdir(msg.path, (err) => {
+              if (err) return sendError(err.message, "sftp");
+              send({ t: "sftp-ok", op: "mkdir", path: msg.path });
+            }),
+          );
+          break;
+
+        case "sftp-rm":
+          withSftp((s) => {
+            const done = (err) => {
+              if (err) return sendError(err.message, "sftp");
+              send({ t: "sftp-ok", op: "rm", path: msg.path });
+            };
+            if (msg.dir) s.rmdir(msg.path, done);
+            else s.unlink(msg.path, done);
+          });
+          break;
+
+        case "thumb-purge":
+          // Drop this connection's cached tiles (both login-user and elevated).
+          if (sessionScope) {
+            thumbCachePurge([`${sessionScope} `, `${sessionScope}#root `]);
           }
-        }
-        break;
+          break;
 
-      case "sftp-rename":
-        withSftp((s) =>
-          s.rename(msg.from, msg.to, (err) => {
-            if (err) return sendError(err.message, "sftp");
-            send({ t: "sftp-ok", op: "rename", path: msg.to });
-          }),
-        );
-        break;
-
-      case "sftp-chmod":
-        withSftp((s) =>
-          s.chmod(msg.path, Number(msg.mode) & 0o777, (err) => {
-            if (err) return sendError(err.message, "sftp");
-            send({ t: "sftp-ok", op: "chmod", path: msg.path });
-          }),
-        );
-        break;
-
-      case "sftp-download-dir":
-        handleDownloadDir(msg);
-        break;
-
-      case "sftp-download-many":
-        handleDownloadMany(msg);
-        break;
-
-      case "sftp-sudo":
-        handleSudo(msg);
-        break;
-
-      case "sftp-find":
-        handleFind(msg);
-        break;
-
-      case "sftp-grep":
-        handleGrep(msg);
-        break;
-
-      case "sftp-copy":
-        handleCopy(msg);
-        break;
-
-      case "sftp-mkdir":
-        withSftp((s) =>
-          s.mkdir(msg.path, (err) => {
-            if (err) return sendError(err.message, "sftp");
-            send({ t: "sftp-ok", op: "mkdir", path: msg.path });
-          }),
-        );
-        break;
-
-      case "sftp-rm":
-        withSftp((s) => {
-          const done = (err) => {
-            if (err) return sendError(err.message, "sftp");
-            send({ t: "sftp-ok", op: "rm", path: msg.path });
-          };
-          if (msg.dir) s.rmdir(msg.path, done);
-          else s.unlink(msg.path, done);
-        });
-        break;
-
-      case "thumb-purge":
-        // Drop this connection's cached tiles (both login-user and elevated).
-        if (sessionScope) {
-          thumbCachePurge([`${sessionScope} `, `${sessionScope}#root `]);
-        }
-        break;
-
-      case "disconnect":
-        cleanup();
-        ws.close();
-        break;
-    }
+        case "disconnect":
+          cleanup();
+          ws.close();
+          break;
+      }
     } catch {
       sshErrors += 1;
       logEvent("handler-error", { ip: clientIp, kind: String(msg.t) });

@@ -215,7 +215,11 @@ const SUBTITLE_MAX_BYTES = 4 * 1024 * 1024;
  * buffering the whole original into a blob. With `transcode`, the bridge converts
  * a non-natively-playable container to fragmented MP4 on the fly (progressive,
  * no seeking) instead of range-serving the raw bytes. */
-function mediaStreamSrc(token: string, path: string, transcode = false): string {
+function mediaStreamSrc(
+  token: string,
+  path: string,
+  transcode = false,
+): string {
   const base = `${PREVIEW_STREAM_PATH}?token=${encodeURIComponent(token)}&path=${encodeURIComponent(path)}`;
   return transcode ? `${base}&transcode=1` : base;
 }
@@ -260,9 +264,9 @@ function previewFieldsFromBytes(
   // name, so trust the bridge's `mimeOverride` when it sends one.
   const mime =
     mimeOverride ??
-    ((kind === "pdf"
+    (kind === "pdf"
       ? "application/pdf"
-      : (kind === "video"
+      : ((kind === "video"
           ? videoMimeType(name)
           : kind === "audio"
             ? audioMimeType(name)
@@ -411,9 +415,9 @@ export function SshSession({
   // download handlers convert it to a WebVTT `blob:` and attach it to the video
   // preview (rather than treating it as its own preview). `blob:` URL revoked on
   // preview close.
-  const subtitleReadsRef = useRef<Map<string, { videoPath: string; name: string }>>(
-    new Map(),
-  );
+  const subtitleReadsRef = useRef<
+    Map<string, { videoPath: string; name: string }>
+  >(new Map());
   const subtitleUrlRef = useRef<string | null>(null);
   // Cached grid-view image thumbnails, keyed by remote path → `data:` URL.
   // Populated lazily as tiles scroll into view; cleared on each directory change
@@ -542,9 +546,9 @@ export function SshSession({
   // Values to pre-fill the connect form with after a failed login (never the
   // password). Set from the callback that sees the failure, so no ref is read
   // during render.
-  const [formInitial, setFormInitial] = useState<ConnectFormInitial | undefined>(
-    undefined,
-  );
+  const [formInitial, setFormInitial] = useState<
+    ConnectFormInitial | undefined
+  >(undefined);
 
   // Reconnection bookkeeping (refs so the ws close handler sees fresh values).
   const lastDetailsRef = useRef<ConnectDetails | null>(null);
@@ -652,7 +656,6 @@ export function SshSession({
     [previewCacheKeyFor],
   );
 
-
   // Stream the gallery neighbours of `path` (the previous & next previewable
   // file) into the preview cache ahead of a ←/→ step, so paging through a folder
   // is instant. Images prefetch as the light downscaled WebP; small,
@@ -686,7 +689,12 @@ export function SshSession({
           if (size > PREFETCH_MAX_BYTES) continue;
           prefetchPathsRef.current.add(nb.path);
           // Prefetch the light WebP (the same downscaled preview open uses).
-          send({ t: "sftp-read", path: nb.path, preview: true, previewResize: true });
+          send({
+            t: "sftp-read",
+            path: nb.path,
+            preview: true,
+            previewResize: true,
+          });
           continue;
         }
         // Only whole-cache media that reliably plays from a blob, small enough to
@@ -780,7 +788,10 @@ export function SshSession({
           setElevated(msg.enabled);
           setElevatedPending(false);
           if (msg.enabled) {
-            notify("success", "Elevated access on — file operations run as root.");
+            notify(
+              "success",
+              "Elevated access on — file operations run as root.",
+            );
           }
           // The access identity just changed, so drop every cached thumbnail:
           // an image only root could read must not linger after dropping root
@@ -882,7 +893,11 @@ export function SshSession({
             // a stale begin the user already navigated away from.
             const isPrefetch = prefetchPathsRef.current.has(msg.path);
             const isSubtitle = subtitleReadsRef.current.has(msg.path);
-            if (previewPathRef.current !== msg.path && !isPrefetch && !isSubtitle)
+            if (
+              previewPathRef.current !== msg.path &&
+              !isPrefetch &&
+              !isSubtitle
+            )
               break;
             previewBuffersRef.current[msg.path] = [];
             // A `mime` here means the bridge sent a transcoded (WebP) preview
@@ -972,7 +987,10 @@ export function SshSession({
               const subChunks = previewBuffersRef.current[msg.path];
               delete previewBuffersRef.current[msg.path];
               delete previewMimeRef.current[msg.path];
-              if (subChunks && previewPathRef.current === subtitleTarget.videoPath) {
+              if (
+                subChunks &&
+                previewPathRef.current === subtitleTarget.videoPath
+              ) {
                 try {
                   const text = new TextDecoder().decode(concatBytes(subChunks));
                   const vtt = subtitleNeedsConversion(subtitleTarget.name)
@@ -1012,7 +1030,9 @@ export function SshSession({
             const wasPrefetch = prefetchPathsRef.current.delete(msg.path);
             // An on-demand original load (zoom / "load original") replacing an
             // optimized preview: paint it but keep the fast WebP in the cache.
-            const isOriginalLoad = originalLoadPathsRef.current.delete(msg.path);
+            const isOriginalLoad = originalLoadPathsRef.current.delete(
+              msg.path,
+            );
             if (!chunks) break;
             const bytes = concatBytes(chunks);
             const name = msg.path.split("/").pop() || "file";
@@ -1038,7 +1058,8 @@ export function SshSession({
               fields.kind !== "markdown" &&
               fields.kind !== "unsupported"
             ) {
-              if (fields.src.startsWith("blob:")) URL.revokeObjectURL(fields.src);
+              if (fields.src.startsWith("blob:"))
+                URL.revokeObjectURL(fields.src);
               send({ t: "sftp-read", path: msg.path, preview: true });
               break;
             }
@@ -1058,7 +1079,8 @@ export function SshSession({
             );
             // With the viewed file painted, warm its neighbours for the next
             // ←/→ step (unless this stream was itself a promoted prefetch).
-            if (!wasPrefetch) prefetchNeighbors(msg.path, previewRef.current?.siblings);
+            if (!wasPrefetch)
+              prefetchNeighbors(msg.path, previewRef.current?.siblings);
             break;
           }
           const buf = downloadBuffersRef.current[msg.path];
@@ -1158,7 +1180,18 @@ export function SshSession({
           break;
       }
     },
-    [listDir, send, notify, onThumbReplied, resetThumbs, enqueueUpload, cachePreview, clearPreviewCache, prefetchNeighbors, reconnect],
+    [
+      listDir,
+      send,
+      notify,
+      onThumbReplied,
+      resetThumbs,
+      enqueueUpload,
+      cachePreview,
+      clearPreviewCache,
+      prefetchNeighbors,
+      reconnect,
+    ],
   );
 
   // Send the `connect` handshake once the socket opens (with the current
@@ -1337,7 +1370,11 @@ export function SshSession({
   // instant placeholder, if any) and streams the bytes in. `siblings` lets the
   // modal step ←/→ through the other previewable files in the same view.
   const openPreviewFile = useCallback(
-    (path: string, name: string, siblings?: { path: string; name: string }[]) => {
+    (
+      path: string,
+      name: string,
+      siblings?: { path: string; name: string }[],
+    ) => {
       // Video AND audio with a stream token (non-elevated) play over the
       // seekable HTTP endpoint: no whole-file transfer, original quality, and the
       // browser can seek instantly. Elevated sessions keep the blob path (the
@@ -1379,13 +1416,17 @@ export function SshSession({
         // A container the browser can't play natively streams as a bridge
         // transcode from the start; a natively-playable one streams raw but keeps
         // the transcode URL as a fallback for when a codec turns out unplayable.
-        const needsTranscode = mediaKind === "video" && videoNeedsTranscode(name);
+        const needsTranscode =
+          mediaKind === "video" && videoNeedsTranscode(name);
         // A small, natively-playable clip is fetched whole and cached (falls
         // through below) so re-opening is instant; everything else streams. The
         // whole-file fetch is bounded by the bridge's download cap so it can never
         // pull more than an ordinary download would.
         const cap = downloadCapRef.current;
-        const budget = cap > 0 ? Math.min(MEDIA_CACHE_MAX_BYTES, cap) : MEDIA_CACHE_MAX_BYTES;
+        const budget =
+          cap > 0
+            ? Math.min(MEDIA_CACHE_MAX_BYTES, cap)
+            : MEDIA_CACHE_MAX_BYTES;
         const version = entryVersionRef.current.get(path);
         const size = version ? parseInt(version.split(":")[0], 10) : 0;
         // Only whole-cache formats that reliably play from a blob — audio, and the
@@ -1578,7 +1619,8 @@ export function SshSession({
   useEffect(() => {
     const base = cwd.replace(/\/$/, "");
     const versions = new Map<string, string>();
-    for (const e of entries) versions.set(`${base}/${e.name}`, fileVersionTag(e));
+    for (const e of entries)
+      versions.set(`${base}/${e.name}`, fileVersionTag(e));
     entryVersionRef.current = versions;
   }, [entries, cwd]);
 
@@ -1775,9 +1817,7 @@ export function SshSession({
         ctl.running = false;
         ctl.interrupted = true;
         setUploads((u) =>
-          u[path]
-            ? { ...u, [path]: { ...u[path], status: "interrupted" } }
-            : u,
+          u[path] ? { ...u, [path]: { ...u[path], status: "interrupted" } } : u,
         );
         releaseSlot();
       };
@@ -1872,7 +1912,13 @@ export function SshSession({
       };
       setUploads((u) => ({
         ...u,
-        [path]: { path, name: rel, sent: 0, total: file.size, status: "queued" },
+        [path]: {
+          path,
+          name: rel,
+          sent: 0,
+          total: file.size,
+          status: "queued",
+        },
       }));
       enqueueUpload({ path, startOffset: 0 });
     },
@@ -1937,7 +1983,8 @@ export function SshSession({
       input: { label: "Directory name", placeholder: "e.g. logs" },
       confirmLabel: "Create",
       validate: (v) => (v.trim() ? null : "Please enter a name."),
-      onConfirm: (v) => send({ t: "sftp-mkdir", path: joinPath(cwd, v.trim()) }),
+      onConfirm: (v) =>
+        send({ t: "sftp-mkdir", path: joinPath(cwd, v.trim()) }),
     });
   };
   const onTouch = () => {
@@ -2005,7 +2052,10 @@ export function SshSession({
   const onChmod = (entry: FileEntry) => {
     setDialog({
       title: `Permissions for “${entry.name}”`,
-      input: { label: "Octal mode (e.g. 644)", initialValue: modeToOctal(entry.mode) },
+      input: {
+        label: "Octal mode (e.g. 644)",
+        initialValue: modeToOctal(entry.mode),
+      },
       confirmLabel: "Apply",
       validate: (v) =>
         parseOctalMode(v) === null ? "Use 3–4 octal digits like 644." : null,
@@ -2030,7 +2080,11 @@ export function SshSession({
       title: "Elevated file access",
       message:
         "Run file operations as root via sudo. Enter the sudo password, or leave blank if passwordless sudo is configured.",
-      input: { label: "sudo password", placeholder: "(blank for NOPASSWD)", password: true },
+      input: {
+        label: "sudo password",
+        placeholder: "(blank for NOPASSWD)",
+        password: true,
+      },
       confirmLabel: "Enable",
       onConfirm: (password) => {
         setElevatedPending(true);
@@ -2050,7 +2104,11 @@ export function SshSession({
       return;
     }
     setSearch({ query: q, mode, loading: true, results: [], truncated: false });
-    send({ t: mode === "content" ? "sftp-grep" : "sftp-find", path: cwd, query: q });
+    send({
+      t: mode === "content" ? "sftp-grep" : "sftp-find",
+      path: cwd,
+      query: q,
+    });
   };
   const onClearSearch = () => setSearch(null);
 
@@ -2086,7 +2144,11 @@ export function SshSession({
     const remaining = editors.filter((e) => e.path !== path);
     setEditors(remaining);
     setActiveEditor((cur) =>
-      cur !== path ? cur : remaining.length ? remaining[remaining.length - 1].path : null,
+      cur !== path
+        ? cur
+        : remaining.length
+          ? remaining[remaining.length - 1].path
+          : null,
     );
   };
   const closeAllEditors = () => {
@@ -2243,7 +2305,9 @@ export function SshSession({
               onRefresh={() => listDir(cwd)}
               onDownload={(path) => send({ t: "sftp-read", path })}
               onDownloadDir={(path) => send({ t: "sftp-download-dir", path })}
-              onDownloadMany={(paths) => send({ t: "sftp-download-many", paths })}
+              onDownloadMany={(paths) =>
+                send({ t: "sftp-download-many", paths })
+              }
               onDelete={onDelete}
               onDeleteMany={onDeleteMany}
               onUpload={(file, relPath) => uploadFile(file, cwd, relPath)}
@@ -2304,10 +2368,14 @@ export function SshSession({
                 videoFallbackSrc={preview.videoFallbackSrc}
                 subtitleSrc={preview.subtitleSrc}
                 subtitleTrackLabel={preview.subtitleLabel}
-                getStartTime={() => videoTimesRef.current.get(preview.path) ?? 0}
+                getStartTime={() =>
+                  videoTimesRef.current.get(preview.path) ?? 0
+                }
                 onTime={(t) => videoTimesRef.current.set(preview.path, t)}
                 hasGallery={(preview.siblings?.length ?? 0) > 1}
-                index={preview.siblings?.findIndex((s) => s.path === preview.path)}
+                index={preview.siblings?.findIndex(
+                  (s) => s.path === preview.path,
+                )}
                 count={preview.siblings?.length}
                 filmstrip={preview.siblings?.map((s) => ({
                   path: s.path,
@@ -2335,11 +2403,16 @@ export function SshSession({
                     ? () => {
                         // Stop an in-flight preview stream before switching.
                         if (preview.loading || preview.received !== undefined) {
-                          send({ t: "sftp-download-cancel", path: preview.path });
+                          send({
+                            t: "sftp-download-cancel",
+                            path: preview.path,
+                          });
                           delete previewBuffersRef.current[preview.path];
                         }
                         closeSubtitleTrack();
-                        const version = entryVersionRef.current.get(preview.path);
+                        const version = entryVersionRef.current.get(
+                          preview.path,
+                        );
                         const size = version
                           ? parseInt(version.split(":")[0], 10)
                           : 0;
@@ -2440,7 +2513,8 @@ export function SshSession({
                       className="select-none font-mono text-2xl text-term-accent"
                       aria-hidden
                     >
-                      &gt;<span className="term-cursor ml-0.5 align-middle" />
+                      &gt;
+                      <span className="term-cursor ml-0.5 align-middle" />
                     </span>
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold text-term-text">
@@ -2493,7 +2567,9 @@ export function SshSession({
                             >
                               ↳
                             </span>
-                            <span className="truncate font-mono">{c.label}</span>
+                            <span className="truncate font-mono">
+                              {c.label}
+                            </span>
                           </button>
                         ))}
                       </div>

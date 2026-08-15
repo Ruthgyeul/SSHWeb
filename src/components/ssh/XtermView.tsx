@@ -114,30 +114,26 @@ export const XtermView = forwardRef<
     termRef.current?.focus();
   };
 
-  useImperativeHandle(
-    ref,
-    () => {
-      // Run now if the terminal is ready, otherwise queue until it is.
-      const enqueue = (fn: (term: XTerminal) => void) => {
-        if (termRef.current) fn(termRef.current);
-        else pendingRef.current.push(fn);
-      };
-      return {
-        write: (bytes) => enqueue((t) => t.write(bytes)),
-        writeln: (text) => enqueue((t) => t.writeln(text)),
-        fit: () => {
-          fitRef.current?.fit();
-          const term = termRef.current;
-          return term ? { cols: term.cols, rows: term.rows } : null;
-        },
-        focus: () => termRef.current?.focus(),
-        clear: () => termRef.current?.clear(),
-        getSelection: () => termRef.current?.getSelection() ?? "",
-        openSearch,
-      };
-    },
-    [],
-  );
+  useImperativeHandle(ref, () => {
+    // Run now if the terminal is ready, otherwise queue until it is.
+    const enqueue = (fn: (term: XTerminal) => void) => {
+      if (termRef.current) fn(termRef.current);
+      else pendingRef.current.push(fn);
+    };
+    return {
+      write: (bytes) => enqueue((t) => t.write(bytes)),
+      writeln: (text) => enqueue((t) => t.writeln(text)),
+      fit: () => {
+        fitRef.current?.fit();
+        const term = termRef.current;
+        return term ? { cols: term.cols, rows: term.rows } : null;
+      },
+      focus: () => termRef.current?.focus(),
+      clear: () => termRef.current?.clear(),
+      getSelection: () => termRef.current?.getSelection() ?? "",
+      openSearch,
+    };
+  }, []);
 
   useEffect(() => {
     let disposed = false;

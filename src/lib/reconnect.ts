@@ -27,15 +27,17 @@ export interface BackoffOptions {
  */
 export function reconnectBackoffMs(
   attempt: number,
-  { baseMs = DEFAULT_RECONNECT_BASE_MS, maxMs = DEFAULT_RECONNECT_MAX_MS }: BackoffOptions = {},
+  {
+    baseMs = DEFAULT_RECONNECT_BASE_MS,
+    maxMs = DEFAULT_RECONNECT_MAX_MS,
+  }: BackoffOptions = {},
 ): number {
   if (attempt < 1) return 0;
   return Math.min(baseMs * 2 ** (attempt - 1), maxMs);
 }
 
 export type ReconnectPlan =
-  | { reconnect: false }
-  | { reconnect: true; attempt: number; delayMs: number };
+  { reconnect: false } | { reconnect: true; attempt: number; delayMs: number };
 
 /**
  * Decide the next reconnect step. Given the number of attempts already made
@@ -50,5 +52,9 @@ export function planReconnect(
 ): ReconnectPlan {
   const attempt = currentAttempt + 1;
   if (attempt > maxAttempts) return { reconnect: false };
-  return { reconnect: true, attempt, delayMs: reconnectBackoffMs(attempt, opts) };
+  return {
+    reconnect: true,
+    attempt,
+    delayMs: reconnectBackoffMs(attempt, opts),
+  };
 }

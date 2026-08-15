@@ -52,7 +52,8 @@ describe("exceedsZip32", () => {
 });
 
 describe("record layouts", () => {
-  const dv = (b: Uint8Array) => new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const dv = (b: Uint8Array) =>
+    new DataView(b.buffer, b.byteOffset, b.byteLength);
 
   it("writes a store + data-descriptor local header with zeroed sizes", () => {
     const h = zipLocalHeader(5);
@@ -78,7 +79,12 @@ describe("record layouts", () => {
   });
 
   it("writes a central header carrying crc/size/offset", () => {
-    const h = zipCentralHeader({ nameLength: 3, crc: 0xabc, size: 9, offset: 42 });
+    const h = zipCentralHeader({
+      nameLength: 3,
+      crc: 0xabc,
+      size: 9,
+      offset: 42,
+    });
     expect(h.length).toBe(46);
     const v = dv(h);
     expect(v.getUint32(0, true)).toBe(0x02014b50);
@@ -102,7 +108,12 @@ function buildZip(files: { name: string; data: Uint8Array }[]): Uint8Array {
     const dd = zipDataDescriptor(crc, f.data.length);
     parts.push(local, nameBuf, f.data, dd);
     central.push(
-      zipCentralHeader({ nameLength: nameBuf.length, crc, size: f.data.length, offset }),
+      zipCentralHeader({
+        nameLength: nameBuf.length,
+        crc,
+        size: f.data.length,
+        offset,
+      }),
       nameBuf,
     );
     offset += local.length + nameBuf.length + f.data.length + dd.length;

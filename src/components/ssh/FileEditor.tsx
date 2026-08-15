@@ -499,7 +499,11 @@ export function FileEditor({
             autoCapitalize="off"
             autoCorrect="off"
             className="absolute inset-0 resize-none overflow-auto bg-transparent text-transparent outline-none"
-            style={{ ...TEXT_STYLE, padding: PAD, caretColor: "var(--color-term-text)" }}
+            style={{
+              ...TEXT_STYLE,
+              padding: PAD,
+              caretColor: "var(--color-term-text)",
+            }}
           />
         </div>
       </div>

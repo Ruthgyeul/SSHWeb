@@ -56,7 +56,9 @@ export function LoadingScreen({
           </ul>
         )}
 
-        <p className={cn("text-sm text-term-muted", steps.length > 0 && "mt-1")}>
+        <p
+          className={cn("text-sm text-term-muted", steps.length > 0 && "mt-1")}
+        >
           <span className="text-term-yellow">…</span> working
           <span className="term-cursor ml-1 align-middle" aria-hidden />
           <span className="sr-only">Loading, please wait.</span>
