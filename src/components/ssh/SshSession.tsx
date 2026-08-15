@@ -723,6 +723,238 @@ export function SshSession({
     [send, previewCacheKeyFor],
   );
 
+  // The streamed-transfer domain of the server-message handler: the chunked
+  // download / preview state machine (`sftp-download-begin/chunk/end`). Split
+  // out of `handleServerMessage` so that giant switch stays a dispatcher — a
+  // preview buffers chunks and drives the modal, a plain download assembles the
+  // file and hands it to `triggerDownload`, and a sidecar-subtitle / prefetch
+  // read buffers silently. Moved verbatim; behaviour is characterized in
+  // `SshSession.download.test.tsx`.
+  const handleTransferMessage = useCallback(
+    (
+      msg: Extract<
+        ServerMessage,
+        {
+          t:
+            "sftp-download-begin" | "sftp-download-chunk" | "sftp-download-end";
+        }
+      >,
+    ) => {
+      switch (msg.t) {
+        case "sftp-download-begin": {
+          if (msg.preview) {
+            // A preview stream: buffer chunks and drive the modal's progress bar
+            // instead of registering a download row. A prefetch (adjacent gallery
+            // image) and a sidecar-subtitle read buffer silently; otherwise ignore
+            // a stale begin the user already navigated away from.
+            const isPrefetch = prefetchPathsRef.current.has(msg.path);
+            const isSubtitle = subtitleReadsRef.current.has(msg.path);
+            if (
+              previewPathRef.current !== msg.path &&
+              !isPrefetch &&
+              !isSubtitle
+            )
+              break;
+            previewBuffersRef.current[msg.path] = [];
+            // A `mime` here means the bridge sent a transcoded (WebP) preview
+            // rather than the original bytes; remember it for the end frame.
+            if (msg.mime) previewMimeRef.current[msg.path] = msg.mime;
+            else delete previewMimeRef.current[msg.path];
+            // The original image's true dimensions (transcoded image previews
+            // only), for the true-size read-out + the large-original gate.
+            const originalDims =
+              msg.origWidth && msg.origHeight
+                ? { w: msg.origWidth, h: msg.origHeight }
+                : undefined;
+            setPreview((prev) =>
+              prev && prev.path === msg.path
+                ? { ...prev, received: 0, total: msg.size, originalDims }
+                : prev,
+            );
+            break;
+          }
+          downloadBuffersRef.current[msg.path] = { name: msg.name, chunks: [] };
+          setDownloads((d) => ({
+            ...d,
+            [msg.path]: {
+              path: msg.path,
+              name: msg.name,
+              received: 0,
+              total: msg.size,
+            },
+          }));
+          break;
+        }
+
+        case "sftp-download-chunk": {
+          if (msg.preview) {
+            const chunks = previewBuffersRef.current[msg.path];
+            if (!chunks) break;
+            const bytes = base64ToBytes(msg.dataB64);
+            chunks.push(bytes);
+            // Progressive text/markdown: decode what's arrived so far and paint it
+            // as the modal fills, instead of showing only a spinner until the whole
+            // (up to `TEXT_PREVIEW_MAX_BYTES`) transfer completes. A large log's head
+            // appears almost immediately. Only for the actively-viewed text/markdown
+            // preview (prefetches are images); media/PDF still buffer to a blob. Any
+            // trailing partial multi-byte char is resolved on the next chunk / end.
+            const cur = previewRef.current;
+            const progressive =
+              previewPathRef.current === msg.path &&
+              cur?.path === msg.path &&
+              (cur.kind === "text" || cur.kind === "markdown");
+            const partialText = progressive
+              ? new TextDecoder().decode(concatBytes(chunks))
+              : null;
+            setPreview((prev) =>
+              prev && prev.path === msg.path
+                ? {
+                    ...prev,
+                    received: (prev.received ?? 0) + bytes.length,
+                    ...(partialText !== null
+                      ? { text: partialText, loading: false }
+                      : {}),
+                  }
+                : prev,
+            );
+            break;
+          }
+          const buf = downloadBuffersRef.current[msg.path];
+          if (!buf) break;
+          const bytes = base64ToBytes(msg.dataB64);
+          buf.chunks.push(bytes);
+          setDownloads((d) => {
+            const cur = d[msg.path];
+            if (!cur) return d;
+            return {
+              ...d,
+              [msg.path]: { ...cur, received: cur.received + bytes.length },
+            };
+          });
+          break;
+        }
+
+        case "sftp-download-end": {
+          if (msg.preview) {
+            // A sidecar-subtitle read: convert to WebVTT and attach it to the
+            // open video preview (never painted as its own preview).
+            const subtitleTarget = subtitleReadsRef.current.get(msg.path);
+            if (subtitleTarget) {
+              subtitleReadsRef.current.delete(msg.path);
+              const subChunks = previewBuffersRef.current[msg.path];
+              delete previewBuffersRef.current[msg.path];
+              delete previewMimeRef.current[msg.path];
+              if (
+                subChunks &&
+                previewPathRef.current === subtitleTarget.videoPath
+              ) {
+                try {
+                  const text = new TextDecoder().decode(concatBytes(subChunks));
+                  const vtt = subtitleNeedsConversion(subtitleTarget.name)
+                    ? srtToVtt(text)
+                    : text;
+                  const url = URL.createObjectURL(
+                    new Blob([vtt], { type: "text/vtt" }),
+                  );
+                  if (subtitleUrlRef.current)
+                    URL.revokeObjectURL(subtitleUrlRef.current);
+                  subtitleUrlRef.current = url;
+                  setPreview((prev) =>
+                    prev && prev.path === subtitleTarget.videoPath
+                      ? {
+                          ...prev,
+                          subtitleSrc: url,
+                          subtitleLabel: subtitleLabel(
+                            prev.name,
+                            subtitleTarget.name,
+                          ),
+                        }
+                      : prev,
+                  );
+                } catch {
+                  /* undecodable subtitle — silently skip */
+                }
+              }
+              break;
+            }
+            const chunks = previewBuffersRef.current[msg.path];
+            delete previewBuffersRef.current[msg.path];
+            const serverMime = previewMimeRef.current[msg.path];
+            delete previewMimeRef.current[msg.path];
+            // A server mime means these bytes are a downscaled WebP preview, not
+            // the original — so Download must re-fetch the original.
+            const optimized = !!serverMime;
+            const wasPrefetch = prefetchPathsRef.current.delete(msg.path);
+            // An on-demand original load (zoom / "load original") replacing an
+            // optimized preview: paint it but keep the fast WebP in the cache.
+            const isOriginalLoad = originalLoadPathsRef.current.delete(
+              msg.path,
+            );
+            if (!chunks) break;
+            const bytes = concatBytes(chunks);
+            const name = msg.path.split("/").pop() || "file";
+            // Cache the fully-received bytes even if the user has since stepped
+            // away — the next visit reuses them without re-transfer. A truncated
+            // (head-only) text read is never cached: a re-open must re-read. An
+            // original-load isn't cached either, so re-opening still paints the
+            // light WebP first and zoom re-fetches the original.
+            if (!msg.truncated && !isOriginalLoad)
+              cachePreview(msg.path, name, bytes, optimized, serverMime);
+            // Only paint if still viewing this file (modal open, same path). A
+            // prefetch that finished in the background just stays cached.
+            if (previewPathRef.current !== msg.path) break;
+            // Build the render fields (may create a blob URL) only now that we're
+            // committing to paint this file.
+            const fields = previewFieldsFromBytes(name, bytes, serverMime);
+            // A capped (head-only) read that magic-byte-sniffs as media was a
+            // mis-named/extensionless media file requested as text — its head
+            // can't render, so discard it and re-read the whole file uncapped.
+            if (
+              msg.truncated &&
+              fields.kind !== "text" &&
+              fields.kind !== "markdown" &&
+              fields.kind !== "unsupported"
+            ) {
+              if (fields.src.startsWith("blob:"))
+                URL.revokeObjectURL(fields.src);
+              send({ t: "sftp-read", path: msg.path, preview: true });
+              break;
+            }
+            setPreview((prev) =>
+              prev && prev.path === msg.path
+                ? {
+                    ...prev,
+                    ...fields,
+                    loading: false,
+                    received: undefined,
+                    total: undefined,
+                    truncated: msg.truncated === true,
+                    optimized,
+                    loadingOriginal: false,
+                  }
+                : prev,
+            );
+            // With the viewed file painted, warm its neighbours for the next
+            // ←/→ step (unless this stream was itself a promoted prefetch).
+            if (!wasPrefetch)
+              prefetchNeighbors(msg.path, previewRef.current?.siblings);
+            break;
+          }
+          const buf = downloadBuffersRef.current[msg.path];
+          delete downloadBuffersRef.current[msg.path];
+          setDownloads((d) => {
+            const rest = { ...d };
+            delete rest[msg.path];
+            return rest;
+          });
+          if (buf) triggerDownload(buf.name, concatBytes(buf.chunks));
+          break;
+        }
+      }
+    },
+    [send, cachePreview, prefetchNeighbors],
+  );
+
   const handleServerMessage = useCallback(
     (msg: ServerMessage) => {
       switch (msg.t) {
@@ -896,213 +1128,10 @@ export function SshSession({
           break;
 
         case "sftp-download-begin":
-          if (msg.preview) {
-            // A preview stream: buffer chunks and drive the modal's progress bar
-            // instead of registering a download row. A prefetch (adjacent gallery
-            // image) and a sidecar-subtitle read buffer silently; otherwise ignore
-            // a stale begin the user already navigated away from.
-            const isPrefetch = prefetchPathsRef.current.has(msg.path);
-            const isSubtitle = subtitleReadsRef.current.has(msg.path);
-            if (
-              previewPathRef.current !== msg.path &&
-              !isPrefetch &&
-              !isSubtitle
-            )
-              break;
-            previewBuffersRef.current[msg.path] = [];
-            // A `mime` here means the bridge sent a transcoded (WebP) preview
-            // rather than the original bytes; remember it for the end frame.
-            if (msg.mime) previewMimeRef.current[msg.path] = msg.mime;
-            else delete previewMimeRef.current[msg.path];
-            // The original image's true dimensions (transcoded image previews
-            // only), for the true-size read-out + the large-original gate.
-            const originalDims =
-              msg.origWidth && msg.origHeight
-                ? { w: msg.origWidth, h: msg.origHeight }
-                : undefined;
-            setPreview((prev) =>
-              prev && prev.path === msg.path
-                ? { ...prev, received: 0, total: msg.size, originalDims }
-                : prev,
-            );
-            break;
-          }
-          downloadBuffersRef.current[msg.path] = { name: msg.name, chunks: [] };
-          setDownloads((d) => ({
-            ...d,
-            [msg.path]: {
-              path: msg.path,
-              name: msg.name,
-              received: 0,
-              total: msg.size,
-            },
-          }));
+        case "sftp-download-chunk":
+        case "sftp-download-end":
+          handleTransferMessage(msg);
           break;
-
-        case "sftp-download-chunk": {
-          if (msg.preview) {
-            const chunks = previewBuffersRef.current[msg.path];
-            if (!chunks) break;
-            const bytes = base64ToBytes(msg.dataB64);
-            chunks.push(bytes);
-            // Progressive text/markdown: decode what's arrived so far and paint it
-            // as the modal fills, instead of showing only a spinner until the whole
-            // (up to `TEXT_PREVIEW_MAX_BYTES`) transfer completes. A large log's head
-            // appears almost immediately. Only for the actively-viewed text/markdown
-            // preview (prefetches are images); media/PDF still buffer to a blob. Any
-            // trailing partial multi-byte char is resolved on the next chunk / end.
-            const cur = previewRef.current;
-            const progressive =
-              previewPathRef.current === msg.path &&
-              cur?.path === msg.path &&
-              (cur.kind === "text" || cur.kind === "markdown");
-            const partialText = progressive
-              ? new TextDecoder().decode(concatBytes(chunks))
-              : null;
-            setPreview((prev) =>
-              prev && prev.path === msg.path
-                ? {
-                    ...prev,
-                    received: (prev.received ?? 0) + bytes.length,
-                    ...(partialText !== null
-                      ? { text: partialText, loading: false }
-                      : {}),
-                  }
-                : prev,
-            );
-            break;
-          }
-          const buf = downloadBuffersRef.current[msg.path];
-          if (!buf) break;
-          const bytes = base64ToBytes(msg.dataB64);
-          buf.chunks.push(bytes);
-          setDownloads((d) => {
-            const cur = d[msg.path];
-            if (!cur) return d;
-            return {
-              ...d,
-              [msg.path]: { ...cur, received: cur.received + bytes.length },
-            };
-          });
-          break;
-        }
-
-        case "sftp-download-end": {
-          if (msg.preview) {
-            // A sidecar-subtitle read: convert to WebVTT and attach it to the
-            // open video preview (never painted as its own preview).
-            const subtitleTarget = subtitleReadsRef.current.get(msg.path);
-            if (subtitleTarget) {
-              subtitleReadsRef.current.delete(msg.path);
-              const subChunks = previewBuffersRef.current[msg.path];
-              delete previewBuffersRef.current[msg.path];
-              delete previewMimeRef.current[msg.path];
-              if (
-                subChunks &&
-                previewPathRef.current === subtitleTarget.videoPath
-              ) {
-                try {
-                  const text = new TextDecoder().decode(concatBytes(subChunks));
-                  const vtt = subtitleNeedsConversion(subtitleTarget.name)
-                    ? srtToVtt(text)
-                    : text;
-                  const url = URL.createObjectURL(
-                    new Blob([vtt], { type: "text/vtt" }),
-                  );
-                  if (subtitleUrlRef.current)
-                    URL.revokeObjectURL(subtitleUrlRef.current);
-                  subtitleUrlRef.current = url;
-                  setPreview((prev) =>
-                    prev && prev.path === subtitleTarget.videoPath
-                      ? {
-                          ...prev,
-                          subtitleSrc: url,
-                          subtitleLabel: subtitleLabel(
-                            prev.name,
-                            subtitleTarget.name,
-                          ),
-                        }
-                      : prev,
-                  );
-                } catch {
-                  /* undecodable subtitle — silently skip */
-                }
-              }
-              break;
-            }
-            const chunks = previewBuffersRef.current[msg.path];
-            delete previewBuffersRef.current[msg.path];
-            const serverMime = previewMimeRef.current[msg.path];
-            delete previewMimeRef.current[msg.path];
-            // A server mime means these bytes are a downscaled WebP preview, not
-            // the original — so Download must re-fetch the original.
-            const optimized = !!serverMime;
-            const wasPrefetch = prefetchPathsRef.current.delete(msg.path);
-            // An on-demand original load (zoom / "load original") replacing an
-            // optimized preview: paint it but keep the fast WebP in the cache.
-            const isOriginalLoad = originalLoadPathsRef.current.delete(
-              msg.path,
-            );
-            if (!chunks) break;
-            const bytes = concatBytes(chunks);
-            const name = msg.path.split("/").pop() || "file";
-            // Cache the fully-received bytes even if the user has since stepped
-            // away — the next visit reuses them without re-transfer. A truncated
-            // (head-only) text read is never cached: a re-open must re-read. An
-            // original-load isn't cached either, so re-opening still paints the
-            // light WebP first and zoom re-fetches the original.
-            if (!msg.truncated && !isOriginalLoad)
-              cachePreview(msg.path, name, bytes, optimized, serverMime);
-            // Only paint if still viewing this file (modal open, same path). A
-            // prefetch that finished in the background just stays cached.
-            if (previewPathRef.current !== msg.path) break;
-            // Build the render fields (may create a blob URL) only now that we're
-            // committing to paint this file.
-            const fields = previewFieldsFromBytes(name, bytes, serverMime);
-            // A capped (head-only) read that magic-byte-sniffs as media was a
-            // mis-named/extensionless media file requested as text — its head
-            // can't render, so discard it and re-read the whole file uncapped.
-            if (
-              msg.truncated &&
-              fields.kind !== "text" &&
-              fields.kind !== "markdown" &&
-              fields.kind !== "unsupported"
-            ) {
-              if (fields.src.startsWith("blob:"))
-                URL.revokeObjectURL(fields.src);
-              send({ t: "sftp-read", path: msg.path, preview: true });
-              break;
-            }
-            setPreview((prev) =>
-              prev && prev.path === msg.path
-                ? {
-                    ...prev,
-                    ...fields,
-                    loading: false,
-                    received: undefined,
-                    total: undefined,
-                    truncated: msg.truncated === true,
-                    optimized,
-                    loadingOriginal: false,
-                  }
-                : prev,
-            );
-            // With the viewed file painted, warm its neighbours for the next
-            // ←/→ step (unless this stream was itself a promoted prefetch).
-            if (!wasPrefetch)
-              prefetchNeighbors(msg.path, previewRef.current?.siblings);
-            break;
-          }
-          const buf = downloadBuffersRef.current[msg.path];
-          delete downloadBuffersRef.current[msg.path];
-          setDownloads((d) => {
-            const rest = { ...d };
-            delete rest[msg.path];
-            return rest;
-          });
-          if (buf) triggerDownload(buf.name, concatBytes(buf.chunks));
-          break;
-        }
 
         case "sftp-write-at": {
           // Resume handshake reply: the bridge told us how much of the partial it
@@ -1197,9 +1226,8 @@ export function SshSession({
       onThumbReplied,
       resetThumbs,
       enqueueUpload,
-      cachePreview,
       clearPreviewCache,
-      prefetchNeighbors,
+      handleTransferMessage,
       reconnect,
     ],
   );
