@@ -1,0 +1,12 @@
+# Build output & caches
+.next/
+out/
+coverage/
+node_modules/
+
+# Generated / vendored
+package-lock.json
+public/
+
+# Content that isn't ours to reformat
+*.md
