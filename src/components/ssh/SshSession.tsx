@@ -14,11 +14,7 @@ import {
   isLargeForEditor,
   isProbablyTextFile,
   joinPath,
-  modeToOctal,
-  parentPath,
-  parseOctalMode,
   sniffMediaKind,
-  suggestCopyName,
   TEXT_PREVIEW_MAX_BYTES,
   videoMimeType,
   videoNeedsTranscode,
@@ -78,6 +74,7 @@ import { useThumbnailQueue } from "./hooks/useThumbnailQueue";
 import { useUploadQueue, type UploadJob } from "./hooks/useUploadQueue";
 import { useReconnect } from "./hooks/useReconnect";
 import { useSshSocket } from "./hooks/useSshSocket";
+import { useFileActions } from "./hooks/useFileActions";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -571,6 +568,19 @@ export function SshSession({
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(encodeMessage(msg));
   }, []);
+
+  // File-browser mutating actions (delete/mkdir/touch/rename/copy/move/chmod):
+  // each builds a PromptDialog request and, on confirm, sends the SFTP message.
+  const {
+    onDelete,
+    onDeleteMany,
+    onMkdir,
+    onTouch,
+    onRename,
+    onCopy,
+    onMove,
+    onChmod,
+  } = useFileActions({ cwd, entries, send, setDialog });
 
   const {
     request: requestThumbnail,
@@ -1731,47 +1741,6 @@ export function SshSession({
   };
 
   // --- File browser actions (in-app dialogs, not window.prompt/confirm) ---
-  const onDelete = (entry: FileEntry) => {
-    setDialog({
-      title: `Delete “${entry.name}”?`,
-      message:
-        entry.type === "dir"
-          ? "The directory must be empty. This cannot be undone."
-          : "This cannot be undone.",
-      confirmLabel: "Delete",
-      danger: true,
-      onConfirm: () =>
-        send({
-          t: "sftp-rm",
-          path: joinPath(cwd, entry.name),
-          dir: entry.type === "dir",
-        }),
-    });
-  };
-  // Bulk delete: one confirm for the whole selection, then a `sftp-rm` per
-  // entry (same per-item semantics as a single delete — directories must be
-  // empty). Each ok refreshes the listing, which prunes the selection.
-  const onDeleteMany = (items: FileEntry[]) => {
-    if (items.length === 0) return;
-    const hasDir = items.some((e) => e.type === "dir");
-    setDialog({
-      title: `Delete ${items.length} item${items.length > 1 ? "s" : ""}?`,
-      message: hasDir
-        ? "Selected directories must be empty. This cannot be undone."
-        : "This cannot be undone.",
-      confirmLabel: "Delete",
-      danger: true,
-      onConfirm: () => {
-        for (const entry of items) {
-          send({
-            t: "sftp-rm",
-            path: joinPath(cwd, entry.name),
-            dir: entry.type === "dir",
-          });
-        }
-      },
-    });
-  };
   const clearUploadRow = useCallback((path: string) => {
     setUploads((u) => {
       const rest = { ...u };
@@ -1977,96 +1946,6 @@ export function SshSession({
   useEffect(() => {
     setUploadStart(startUpload);
   }, [startUpload, setUploadStart]);
-  const onMkdir = () => {
-    setDialog({
-      title: "New directory",
-      input: { label: "Directory name", placeholder: "e.g. logs" },
-      confirmLabel: "Create",
-      validate: (v) => (v.trim() ? null : "Please enter a name."),
-      onConfirm: (v) =>
-        send({ t: "sftp-mkdir", path: joinPath(cwd, v.trim()) }),
-    });
-  };
-  const onTouch = () => {
-    setDialog({
-      title: "New file",
-      input: { label: "File name", placeholder: "e.g. notes.txt" },
-      confirmLabel: "Create",
-      validate: (v) => (v.trim() ? null : "Please enter a name."),
-      onConfirm: (v) =>
-        send({ t: "sftp-write", path: joinPath(cwd, v.trim()), dataB64: "" }),
-    });
-  };
-  const onRename = (entry: FileEntry) => {
-    setDialog({
-      title: `Rename “${entry.name}”`,
-      input: { label: "New name", initialValue: entry.name },
-      confirmLabel: "Rename",
-      validate: (v) => (v.trim() ? null : "Please enter a name."),
-      onConfirm: (v) => {
-        const next = v.trim();
-        if (next && next !== entry.name) {
-          send({
-            t: "sftp-rename",
-            from: joinPath(cwd, entry.name),
-            to: joinPath(cwd, next),
-          });
-        }
-      },
-    });
-  };
-  // Duplicate a file/directory in place: pre-fill a non-colliding "… copy" name
-  // and copy on confirm. The server streams the copy (original only read).
-  const onCopy = (entry: FileEntry) => {
-    const suggested = suggestCopyName(
-      entry.name,
-      entries.map((e) => e.name),
-    );
-    setDialog({
-      title: `Duplicate “${entry.name}”`,
-      input: { label: "New name", initialValue: suggested },
-      confirmLabel: "Duplicate",
-      validate: (v) => (v.trim() ? null : "Please enter a name."),
-      onConfirm: (v) => {
-        const next = v.trim();
-        if (next && next !== entry.name) {
-          send({
-            t: "sftp-copy",
-            from: joinPath(cwd, entry.name),
-            to: joinPath(cwd, next),
-          });
-        }
-      },
-    });
-  };
-  // Move (drag-drop onto a folder): rename the item under the target directory.
-  // Guards against no-op and moving a directory into itself or its own subtree.
-  const onMove = (fromPath: string, toDir: string) => {
-    const name = fromPath.split("/").pop() || "";
-    if (!name) return;
-    if (toDir === parentPath(fromPath)) return; // already there
-    if (toDir === fromPath || toDir.startsWith(`${fromPath}/`)) return; // into self
-    const to = joinPath(toDir, name);
-    if (to !== fromPath) send({ t: "sftp-rename", from: fromPath, to });
-  };
-  const onChmod = (entry: FileEntry) => {
-    setDialog({
-      title: `Permissions for “${entry.name}”`,
-      input: {
-        label: "Octal mode (e.g. 644)",
-        initialValue: modeToOctal(entry.mode),
-      },
-      confirmLabel: "Apply",
-      validate: (v) =>
-        parseOctalMode(v) === null ? "Use 3–4 octal digits like 644." : null,
-      onConfirm: (v) => {
-        const mode = parseOctalMode(v);
-        if (mode !== null) {
-          send({ t: "sftp-chmod", path: joinPath(cwd, entry.name), mode });
-        }
-      },
-    });
-  };
   // Toggle elevated (sudo) file access. Turning it on prompts for an optional
   // sudo password (blank = passwordless / NOPASSWD); turning it off is immediate.
   const toggleElevated = () => {
