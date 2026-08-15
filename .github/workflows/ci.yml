@@ -1,7 +1,8 @@
 name: CI
 
-# Lint, typecheck, test and build on every push/PR. This does not deploy — it
-# just guarantees the template always builds and stays green.
+# Format, lint, typecheck, test (with coverage), build and audit on every
+# push/PR, across the Node versions the project supports. This does not deploy —
+# it just guarantees the template always builds and stays green.
 
 on:
   push:
@@ -20,19 +21,29 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      # Run both legs even if one fails, so a version-specific break is obvious.
+      fail-fast: false
+      matrix:
+        # engines requires Node >= 22; test the floor and the .nvmrc version.
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
-          node-version-file: .nvmrc
+          node-version: ${{ matrix.node }}
           cache: npm
 
       - run: npm ci
+      - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test
+      # Unit tests with the src/lib coverage threshold gate.
+      - run: npm run test:coverage
       - run: npm run build
       # End-to-end smoke test of the WS↔SSH bridge. Runs after the build so it
       # exercises the production server against an in-memory ssh2 target.
       - run: npm run test:integration
+      # Fail the build on a known high/critical advisory in the dependency tree.
+      - run: npm audit --audit-level=high
