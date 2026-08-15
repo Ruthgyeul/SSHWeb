@@ -955,6 +955,31 @@ export function SshSession({
     [send, cachePreview, prefetchNeighbors],
   );
 
+  // The recursive-search domain of the server-message handler: reconcile a
+  // find (name) / grep (content) result against the still-showing search,
+  // dropping a stale reply for an earlier query or the wrong axis.
+  const handleSearchResult = useCallback(
+    (
+      msg: Extract<
+        ServerMessage,
+        { t: "sftp-find-result" | "sftp-grep-result" }
+      >,
+    ) => {
+      const mode = msg.t === "sftp-find-result" ? "name" : "content";
+      setSearch((prev) =>
+        prev && prev.mode === mode && prev.query === msg.query
+          ? {
+              ...prev,
+              loading: false,
+              results: msg.entries,
+              truncated: msg.truncated,
+            }
+          : prev,
+      );
+    },
+    [],
+  );
+
   const handleServerMessage = useCallback(
     (msg: ServerMessage) => {
       switch (msg.t) {
@@ -1066,33 +1091,8 @@ export function SshSession({
           break;
 
         case "sftp-find-result":
-          // Apply only if it answers the name search we're still showing (a
-          // stale reply for an earlier query, or a find reply arriving after the
-          // user switched to a content search, is dropped).
-          setSearch((prev) =>
-            prev && prev.mode === "name" && prev.query === msg.query
-              ? {
-                  ...prev,
-                  loading: false,
-                  results: msg.entries,
-                  truncated: msg.truncated,
-                }
-              : prev,
-          );
-          break;
-
         case "sftp-grep-result":
-          // Same reconciliation as find, but for the content (grep) axis.
-          setSearch((prev) =>
-            prev && prev.mode === "content" && prev.query === msg.query
-              ? {
-                  ...prev,
-                  loading: false,
-                  results: msg.entries,
-                  truncated: msg.truncated,
-                }
-              : prev,
-          );
+          handleSearchResult(msg);
           break;
 
         case "sftp-read":
@@ -1228,6 +1228,7 @@ export function SshSession({
       enqueueUpload,
       clearPreviewCache,
       handleTransferMessage,
+      handleSearchResult,
       reconnect,
     ],
   );
