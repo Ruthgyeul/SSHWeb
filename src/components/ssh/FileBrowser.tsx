@@ -12,7 +12,6 @@ import {
   pathSegments,
   previewKind,
   sortEntriesBy,
-  summarizeUploads,
   type FileEntry,
   type FindEntry,
   type GrepEntry,
@@ -22,17 +21,17 @@ import {
 import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcon";
 import {
-  EyeIcon,
   FolderOpenIcon,
   GridIcon,
   ListIcon,
-  PencilIcon,
-  DownloadIcon,
   RefreshIcon,
   SearchIcon,
   UploadIcon,
   WarningIcon,
 } from "./icons";
+import { FileEntryActions } from "./FileEntryActions";
+import { SearchResults } from "./SearchResults";
+import { TransferProgress } from "./TransferProgress";
 import { collectDroppedFiles, droppedEntries } from "./dom/dropUpload";
 import { useFileViewMode } from "./hooks/useFileViewMode";
 import { useFileSort } from "./hooks/useFileSort";
@@ -70,14 +69,6 @@ export interface SearchState {
   results: (FindEntry | GrepEntry)[];
   truncated: boolean;
 }
-
-/** Type guard: a content-search hit (carries a matching line + preview). */
-function isGrepHit(entry: FindEntry | GrepEntry): entry is GrepEntry {
-  return "preview" in entry;
-}
-
-const actionBtn =
-  "rounded px-1.5 py-0.5 text-xs text-term-muted transition-colors";
 
 /** DataTransfer type carrying an in-app dragged entry's absolute path (move). */
 const DRAG_TYPE = "application/x-sshweb-path";
@@ -867,149 +858,15 @@ export function FileBrowser({
         </div>
       )}
 
-      {/* Upload progress. For a batch (>1 file) an aggregate bar summarizes the
-          whole queue with a single Cancel-all, and only the actively
-          streaming/interrupted files get their own row — the ones still waiting
-          behind the concurrency limit collapse into a "N queued" line so a big
-          folder upload doesn't render hundreds of rows. */}
-      {uploads.length > 0 &&
-        (() => {
-          const summary = summarizeUploads(uploads);
-          const showAggregate = uploads.length > 1;
-          const rows = showAggregate
-            ? uploads.filter((u) => u.status !== "queued")
-            : uploads;
-          return (
-            <div className="flex flex-col gap-1.5 border-b border-term-border bg-term-panel/50 px-3 py-2">
-              {showAggregate && (
-                <div className="text-xs">
-                  <div className="flex items-center justify-between gap-2 text-term-muted">
-                    <span className="truncate font-medium">
-                      ↑ Uploading {summary.files} file
-                      {summary.files === 1 ? "" : "s"}
-                      {summary.queued > 0 && (
-                        <span className="text-term-faint">
-                          {" "}
-                          · {summary.queued} queued
-                        </span>
-                      )}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-2">
-                      <span className="tabular-nums text-term-faint">
-                        {summary.pct}%
-                      </span>
-                      <button
-                        type="button"
-                        onClick={onCancelAllUploads}
-                        className="rounded px-1 text-term-faint hover:bg-term-border hover:text-term-red"
-                        title="Cancel all uploads"
-                      >
-                        Cancel all
-                      </button>
-                    </span>
-                  </div>
-                  <div className="mt-1 h-1 overflow-hidden rounded bg-term-border">
-                    <div
-                      className={cn(
-                        "h-full transition-all",
-                        summary.interrupted
-                          ? "bg-term-yellow"
-                          : "bg-term-accent",
-                      )}
-                      style={{ width: `${summary.pct}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-              {rows.map((u) => {
-                const pct =
-                  u.total > 0 ? Math.round((u.sent / u.total) * 100) : 100;
-                const interrupted = u.status === "interrupted";
-                return (
-                  <div key={u.path} className="text-xs">
-                    <div className="flex items-center justify-between gap-2 text-term-muted">
-                      <span className="truncate">↑ {u.name}</span>
-                      <span className="flex shrink-0 items-center gap-2">
-                        {interrupted ? (
-                          <>
-                            <span className="text-term-yellow">
-                              interrupted
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => onResumeUpload(u.path)}
-                              className="rounded px-1 text-term-accent hover:bg-term-border"
-                              title="Resume upload"
-                            >
-                              Resume
-                            </button>
-                          </>
-                        ) : (
-                          <span className="tabular-nums text-term-faint">
-                            {pct}%
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => onCancelUpload(u.path)}
-                          className="rounded px-1 text-term-faint hover:bg-term-border hover:text-term-red"
-                          title="Cancel upload"
-                          aria-label={`Cancel upload ${u.name}`}
-                        >
-                          ✕
-                        </button>
-                      </span>
-                    </div>
-                    <div className="mt-1 h-1 overflow-hidden rounded bg-term-border">
-                      <div
-                        className={cn(
-                          "h-full transition-all",
-                          interrupted ? "bg-term-yellow" : "bg-term-accent",
-                        )}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })()}
-
-      {/* Download progress */}
-      {downloads.length > 0 && (
-        <div className="flex flex-col gap-1.5 border-b border-term-border bg-term-panel/50 px-3 py-2">
-          {downloads.map((d) => {
-            const pct =
-              d.total > 0 ? Math.round((d.received / d.total) * 100) : 100;
-            return (
-              <div key={d.path} className="text-xs">
-                <div className="flex items-center justify-between gap-2 text-term-muted">
-                  <span className="truncate">↓ {d.name}</span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    <span className="tabular-nums text-term-faint">{pct}%</span>
-                    <button
-                      type="button"
-                      onClick={() => onCancelDownload(d.path)}
-                      className="rounded px-1 text-term-faint hover:bg-term-border hover:text-term-red"
-                      title="Cancel download"
-                      aria-label={`Cancel download ${d.name}`}
-                    >
-                      ✕
-                    </button>
-                  </span>
-                </div>
-                <div className="mt-1 h-1 overflow-hidden rounded bg-term-border">
-                  <div
-                    className="h-full bg-term-green transition-all"
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {/* Upload + download progress panels (in-flight transfers). */}
+      <TransferProgress
+        uploads={uploads}
+        downloads={downloads}
+        onCancelUpload={onCancelUpload}
+        onCancelAllUploads={onCancelAllUploads}
+        onResumeUpload={onResumeUpload}
+        onCancelDownload={onCancelDownload}
+      />
 
       {/* Selection bar: select-all + bulk actions on the checked entries */}
       {!search && sorted.length > 0 && (
@@ -1086,99 +943,13 @@ export function FileBrowser({
           </div>
         )}
         {search ? (
-          <div className="flex h-full flex-col">
-            <div className="flex items-center gap-2 border-b border-term-border bg-term-panel/40 px-3 py-1.5 text-xs">
-              <span className="min-w-0 truncate text-term-muted">
-                {search.loading
-                  ? `Searching ${
-                      search.mode === "content" ? "file contents" : "names"
-                    } for “${search.query}”…`
-                  : `${search.results.length}${search.truncated ? "+" : ""} result${
-                      search.results.length === 1 ? "" : "s"
-                    } for “${search.query}”${
-                      search.mode === "content" ? " in file contents" : ""
-                    }`}
-              </span>
-              {search.truncated && !search.loading && (
-                <span className="flex-none text-term-faint">
-                  (first {search.results.length})
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={onClearSearch}
-                className="ml-auto flex-none rounded px-2 py-0.5 text-term-muted hover:text-term-text"
-              >
-                Clear
-              </button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-auto">
-              {search.loading ? (
-                <div className="flex items-center justify-center py-12">
-                  <span
-                    className="h-7 w-7 animate-spin rounded-full border-2 border-term-border border-t-term-accent"
-                    role="status"
-                    aria-label="Searching"
-                  />
-                </div>
-              ) : search.results.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
-                  <SearchIcon className="h-8 w-8 opacity-60" />
-                  <p className="text-sm">
-                    {search.mode === "content"
-                      ? `No file contents matched “${search.query}”`
-                      : `No matches for “${search.query}”`}
-                  </p>
-                  <p className="text-xs text-term-faint">
-                    Searched {cwd} and its subfolders.
-                  </p>
-                </div>
-              ) : (
-                <ul>
-                  {search.results.map((r) => {
-                    const grep = isGrepHit(r);
-                    return (
-                      <li key={r.path}>
-                        <button
-                          type="button"
-                          onClick={() => openResult(r)}
-                          title={r.path}
-                          className="flex w-full flex-col gap-0.5 border-b border-term-border/50 px-3 py-1.5 text-left text-sm hover:bg-term-panel/60"
-                        >
-                          <span className="flex w-full items-center gap-2">
-                            <FileIcon entry={r} />
-                            <span
-                              className={cn(
-                                "min-w-0 flex-1 truncate",
-                                r.type === "dir"
-                                  ? "text-term-accent"
-                                  : "text-term-dim",
-                              )}
-                            >
-                              {relTo(r.path)}
-                            </span>
-                            <span className="flex-none font-mono text-xs text-term-faint">
-                              {formatSize(r.size, r.type)}
-                            </span>
-                          </span>
-                          {grep && (
-                            <span className="flex min-w-0 items-baseline gap-2 pl-6 font-mono text-xs text-term-faint">
-                              <span className="flex-none text-term-accent/70">
-                                :{r.line}
-                              </span>
-                              <span className="min-w-0 truncate">
-                                {r.preview}
-                              </span>
-                            </span>
-                          )}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          </div>
+          <SearchResults
+            search={search}
+            cwd={cwd}
+            onClear={onClearSearch}
+            onOpen={openResult}
+            relativePath={relTo}
+          />
         ) : (
           <>
             {loading && (
@@ -1329,94 +1100,23 @@ export function FileBrowser({
                           {formatMtime(entry.mtime)}
                         </td>
                         <td className="whitespace-nowrap py-1.5 pl-2 pr-3 text-right">
-                          {previewable && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onPreview(target, entry.name, previewSiblings)
-                              }
-                              className={cn(
-                                actionBtn,
-                                "hover:text-term-accent",
-                              )}
-                              title="Preview"
-                            >
-                              <EyeIcon />
-                            </button>
-                          )}
-                          {editable && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onPreview(target, entry.name, previewSiblings)
-                                }
-                                className={cn(
-                                  actionBtn,
-                                  "hover:text-term-accent",
-                                )}
-                                title="Preview (read-only)"
-                              >
-                                <EyeIcon />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onEdit(target, entry.name, entry.size)
-                                }
-                                className={cn(
-                                  actionBtn,
-                                  "hover:text-term-accent",
-                                )}
-                                title="Edit"
-                              >
-                                <PencilIcon />
-                              </button>
-                            </>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              isDir ? onDownloadDir(target) : onDownload(target)
-                            }
-                            className={cn(actionBtn, "hover:text-term-accent")}
-                            title={isDir ? "Download as zip" : "Download"}
-                            aria-label={isDir ? "Download as zip" : "Download"}
-                          >
-                            <DownloadIcon className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onRename(entry)}
-                            className={cn(actionBtn, "hover:text-term-text")}
-                            title="Rename"
-                          >
-                            mv
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onCopy(entry)}
-                            className={cn(actionBtn, "hover:text-term-text")}
-                            title="Duplicate"
-                          >
-                            cp
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onChmod(entry)}
-                            className={cn(actionBtn, "hover:text-term-text")}
-                            title="Change permissions"
-                          >
-                            chmod
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onDelete(entry)}
-                            className={cn(actionBtn, "hover:text-term-red")}
-                            title="Delete"
-                          >
-                            ✕
-                          </button>
+                          <FileEntryActions
+                            entry={entry}
+                            target={target}
+                            isDir={isDir}
+                            editable={editable}
+                            previewable={previewable}
+                            previewSiblings={previewSiblings}
+                            showChmod
+                            onPreview={onPreview}
+                            onEdit={onEdit}
+                            onDownload={onDownload}
+                            onDownloadDir={onDownloadDir}
+                            onRename={onRename}
+                            onCopy={onCopy}
+                            onChmod={onChmod}
+                            onDelete={onDelete}
+                          />
                         </td>
                       </tr>
                     );
@@ -1536,86 +1236,22 @@ export function FileBrowser({
                           {formatSize(entry.size, entry.type)}
                         </span>
                         <div className="flex flex-none items-center opacity-0 transition-opacity group-hover:opacity-100 touch:opacity-100">
-                          {previewable && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onPreview(target, entry.name, previewSiblings)
-                              }
-                              className={cn(
-                                actionBtn,
-                                "hover:text-term-accent",
-                              )}
-                              title="Preview"
-                            >
-                              <EyeIcon />
-                            </button>
-                          )}
-                          {editable && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onPreview(target, entry.name, previewSiblings)
-                                }
-                                className={cn(
-                                  actionBtn,
-                                  "hover:text-term-accent",
-                                )}
-                                title="Preview (read-only)"
-                              >
-                                <EyeIcon />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onEdit(target, entry.name, entry.size)
-                                }
-                                className={cn(
-                                  actionBtn,
-                                  "hover:text-term-accent",
-                                )}
-                                title="Edit"
-                              >
-                                <PencilIcon />
-                              </button>
-                            </>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              isDir ? onDownloadDir(target) : onDownload(target)
-                            }
-                            className={cn(actionBtn, "hover:text-term-accent")}
-                            title={isDir ? "Download as zip" : "Download"}
-                            aria-label={isDir ? "Download as zip" : "Download"}
-                          >
-                            <DownloadIcon className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onRename(entry)}
-                            className={cn(actionBtn, "hover:text-term-text")}
-                            title="Rename"
-                          >
-                            mv
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onCopy(entry)}
-                            className={cn(actionBtn, "hover:text-term-text")}
-                            title="Duplicate"
-                          >
-                            cp
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onDelete(entry)}
-                            className={cn(actionBtn, "hover:text-term-red")}
-                            title="Delete"
-                          >
-                            ✕
-                          </button>
+                          <FileEntryActions
+                            entry={entry}
+                            target={target}
+                            isDir={isDir}
+                            editable={editable}
+                            previewable={previewable}
+                            previewSiblings={previewSiblings}
+                            onPreview={onPreview}
+                            onEdit={onEdit}
+                            onDownload={onDownload}
+                            onDownloadDir={onDownloadDir}
+                            onRename={onRename}
+                            onCopy={onCopy}
+                            onChmod={onChmod}
+                            onDelete={onDelete}
+                          />
                         </div>
                       </div>
                     </div>
