@@ -21,6 +21,13 @@ const holder = vi.hoisted(() => ({
   onMessage: null as null | ((m: ServerMessage) => void),
   onOpen: null as null | ((d: unknown) => void),
   fbProps: null as null | Record<string, (...args: unknown[]) => void>,
+  fbSearch: null as null | {
+    query: string;
+    mode: string;
+    loading: boolean;
+    results: { path: string; line?: number }[];
+    truncated: boolean;
+  },
   previewProps: null as null | Record<string, unknown>,
   triggerDownload: vi.fn(),
 }));
@@ -36,6 +43,7 @@ vi.mock("@/components/ssh/dom/download", () => ({
 vi.mock("@/components/ssh/FileBrowser", () => ({
   FileBrowser: (props: Record<string, (...a: unknown[]) => void>) => {
     holder.fbProps = props;
+    holder.fbSearch = (props as { search?: typeof holder.fbSearch }).search;
     return <div data-testid="filebrowser" />;
   },
 }));
@@ -115,6 +123,7 @@ beforeEach(() => {
   holder.onMessage = null;
   holder.onOpen = null;
   holder.fbProps = null;
+  holder.fbSearch = null;
   holder.previewProps = null;
   holder.triggerDownload = vi.fn();
   // jsdom lacks blob-URL helpers; a preview image builds one.
@@ -385,5 +394,119 @@ describe("SshSession download/preview assembly", () => {
       }),
     ).not.toThrow();
     expect(holder.triggerDownload).not.toHaveBeenCalled();
+  });
+});
+
+describe("SshSession search-result reconciliation", () => {
+  it("applies a name (find) result to the active name search", () => {
+    connectToFiles();
+    act(() => holder.fbProps!.onSearch("foo", "name"));
+    expect(holder.fbSearch).toMatchObject({ loading: true, results: [] });
+
+    drive({
+      t: "sftp-find-result",
+      path: "/home/me",
+      query: "foo",
+      entries: [
+        {
+          name: "foo.txt",
+          type: "file",
+          size: 1,
+          mtime: 0,
+          mode: 0o644,
+          path: "/home/me/sub/foo.txt",
+        },
+      ],
+      truncated: false,
+    });
+
+    expect(holder.fbSearch).toMatchObject({ loading: false, truncated: false });
+    expect(holder.fbSearch!.results).toHaveLength(1);
+    expect(holder.fbSearch!.results[0].path).toBe("/home/me/sub/foo.txt");
+  });
+
+  it("applies a content (grep) result to the active content search", () => {
+    connectToFiles();
+    act(() => holder.fbProps!.onSearch("needle", "content"));
+
+    drive({
+      t: "sftp-grep-result",
+      path: "/home/me",
+      query: "needle",
+      entries: [
+        {
+          name: "a.txt",
+          type: "file",
+          size: 1,
+          mtime: 0,
+          mode: 0o644,
+          path: "/home/me/a.txt",
+          line: 7,
+          preview: "the needle here",
+        },
+      ],
+      truncated: true,
+    });
+
+    expect(holder.fbSearch).toMatchObject({ loading: false, truncated: true });
+    expect(holder.fbSearch!.results[0].line).toBe(7);
+  });
+
+  it("ignores a stale result for a query the user has moved on from", () => {
+    connectToFiles();
+    act(() => holder.fbProps!.onSearch("current", "name"));
+
+    // A late reply for an earlier query must not overwrite the live search.
+    drive({
+      t: "sftp-find-result",
+      path: "/home/me",
+      query: "stale",
+      entries: [
+        {
+          name: "x",
+          type: "file",
+          size: 0,
+          mtime: 0,
+          mode: 0o644,
+          path: "/home/me/x",
+        },
+      ],
+      truncated: false,
+    });
+
+    expect(holder.fbSearch).toMatchObject({
+      query: "current",
+      loading: true,
+      results: [],
+    });
+  });
+
+  it("ignores a find result after the user switched to a content search", () => {
+    connectToFiles();
+    act(() => holder.fbProps!.onSearch("q", "content"));
+
+    // A find (name) reply arriving after switching axes is dropped.
+    drive({
+      t: "sftp-find-result",
+      path: "/home/me",
+      query: "q",
+      entries: [
+        {
+          name: "y",
+          type: "file",
+          size: 0,
+          mtime: 0,
+          mode: 0o644,
+          path: "/home/me/y",
+        },
+      ],
+      truncated: false,
+    });
+
+    expect(holder.fbSearch).toMatchObject({
+      mode: "content",
+      loading: true,
+      results: [],
+    });
   });
 });
