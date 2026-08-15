@@ -1479,7 +1479,7 @@ export function FileBrowser({
                           "absolute left-2 top-2 z-10 accent-term-accent transition-opacity",
                           isSelected(entry.name)
                             ? "opacity-100"
-                            : "opacity-0 group-hover:opacity-100",
+                            : "opacity-0 group-hover:opacity-100 touch:opacity-100",
                         )}
                         aria-label={`Select ${entry.name}`}
                       />
@@ -1535,7 +1535,7 @@ export function FileBrowser({
                         <span className="truncate font-mono text-[10px] text-term-faint">
                           {formatSize(entry.size, entry.type)}
                         </span>
-                        <div className="flex flex-none items-center opacity-0 transition-opacity group-hover:opacity-100">
+                        <div className="flex flex-none items-center opacity-0 transition-opacity group-hover:opacity-100 touch:opacity-100">
                           {previewable && (
                             <button
                               type="button"

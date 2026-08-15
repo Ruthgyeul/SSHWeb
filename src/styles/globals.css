@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+/* A `touch:` variant that matches devices without hover (touch screens). Used
+   to reveal controls that are otherwise hover-only — the grid view's select
+   checkbox and per-tile action buttons — so they're usable on phones/tablets,
+   where `group-hover` never fires. */
+@custom-variant touch (@media (hover: none));
+
 /* ---------------------------------------------------------------------------
    Terminal palette
 
