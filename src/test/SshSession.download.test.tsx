@@ -46,10 +46,12 @@ vi.mock("@/components/ssh/FilePreview", () => ({
     return (
       <div
         data-testid="preview"
+        data-path={String(props.path)}
         data-kind={String(props.kind)}
         data-loading={String(props.loading)}
         data-truncated={String(props.truncated)}
         data-optimized={String(props.optimized)}
+        data-subtitle={String(!!props.subtitleSrc)}
       >
         {String(props.text ?? "")}
       </div>
@@ -258,6 +260,115 @@ describe("SshSession download/preview assembly", () => {
     // A server `mime` means these are a downscaled WebP, not the original — so
     // the modal is flagged optimized (Download re-fetches the original).
     expect(modal).toHaveAttribute("data-optimized", "true");
+  });
+
+  it("attaches a sidecar subtitle to an open video preview", () => {
+    connectToFiles();
+    // Re-list so the video + its .srt sidecar are both present.
+    drive({
+      t: "sftp-list",
+      path: "/home/me",
+      entries: [
+        { name: "clip.mp4", type: "file", size: 100, mtime: 0, mode: 0o644 },
+        { name: "clip.srt", type: "file", size: 40, mtime: 0, mode: 0o644 },
+      ],
+    });
+    act(() => holder.fbProps!.onPreview("/home/me/clip.mp4", "clip.mp4"));
+
+    // The video streams in and paints as a blob first.
+    drive({
+      t: "sftp-download-begin",
+      path: "/home/me/clip.mp4",
+      name: "clip.mp4",
+      size: 100,
+      preview: true,
+    });
+    drive({
+      t: "sftp-download-chunk",
+      path: "/home/me/clip.mp4",
+      dataB64: bytesToBase64(new Uint8Array([0, 0, 0, 24])),
+      preview: true,
+    });
+    drive({ t: "sftp-download-end", path: "/home/me/clip.mp4", preview: true });
+
+    // The sidecar read (requested on open) streams in and attaches as a track.
+    const srt = "1\n00:00:00,000 --> 00:00:01,000\nHi\n";
+    drive({
+      t: "sftp-download-begin",
+      path: "/home/me/clip.srt",
+      name: "clip.srt",
+      size: srt.length,
+      preview: true,
+    });
+    drive({
+      t: "sftp-download-chunk",
+      path: "/home/me/clip.srt",
+      dataB64: bytesToBase64(new TextEncoder().encode(srt)),
+      preview: true,
+    });
+    drive({ t: "sftp-download-end", path: "/home/me/clip.srt", preview: true });
+
+    const modal = screen.getByTestId("preview");
+    // The modal still shows the video, now with a subtitle track attached.
+    expect(modal).toHaveAttribute("data-path", "/home/me/clip.mp4");
+    expect(modal).toHaveAttribute("data-kind", "video");
+    expect(modal).toHaveAttribute("data-subtitle", "true");
+  });
+
+  it("buffers a prefetched neighbour silently without repainting", () => {
+    connectToFiles();
+    drive({
+      t: "sftp-list",
+      path: "/home/me",
+      entries: [
+        { name: "1.jpg", type: "file", size: 50, mtime: 0, mode: 0o644 },
+        { name: "2.jpg", type: "file", size: 50, mtime: 0, mode: 0o644 },
+      ],
+    });
+    const siblings = [
+      { path: "/home/me/1.jpg", name: "1.jpg" },
+      { path: "/home/me/2.jpg", name: "2.jpg" },
+    ];
+    act(() => holder.fbProps!.onPreview("/home/me/1.jpg", "1.jpg", siblings));
+
+    // 1.jpg paints; on end it warms the neighbour (2.jpg) into the cache.
+    drive({
+      t: "sftp-download-begin",
+      path: "/home/me/1.jpg",
+      name: "1.jpg",
+      size: 4,
+      preview: true,
+      mime: "image/webp",
+    });
+    drive({
+      t: "sftp-download-chunk",
+      path: "/home/me/1.jpg",
+      dataB64: bytesToBase64(new Uint8Array([255, 216, 255, 224])),
+      preview: true,
+    });
+    drive({ t: "sftp-download-end", path: "/home/me/1.jpg", preview: true });
+
+    // The prefetched 2.jpg frames arrive — they must buffer silently and NOT
+    // flip the visible modal away from 1.jpg.
+    drive({
+      t: "sftp-download-begin",
+      path: "/home/me/2.jpg",
+      name: "2.jpg",
+      size: 4,
+      preview: true,
+      mime: "image/webp",
+    });
+    drive({
+      t: "sftp-download-chunk",
+      path: "/home/me/2.jpg",
+      dataB64: bytesToBase64(new Uint8Array([255, 216, 255, 224])),
+      preview: true,
+    });
+    drive({ t: "sftp-download-end", path: "/home/me/2.jpg", preview: true });
+
+    const modal = screen.getByTestId("preview");
+    expect(modal).toHaveAttribute("data-path", "/home/me/1.jpg");
+    expect(modal).toHaveAttribute("data-kind", "image");
   });
 
   it("ignores a stale download-begin for a file the user already left", () => {
