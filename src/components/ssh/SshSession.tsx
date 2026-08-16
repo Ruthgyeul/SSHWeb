@@ -25,7 +25,6 @@ import {
 } from "@/lib/subtitles";
 import { getThemePreset } from "@/lib/terminalTheme";
 import { fileVersionTag } from "@/lib/thumbnailCache";
-import { ByteLruCache } from "@/lib/byteLruCache";
 import {
   KNOWN_HOSTS_KEY,
   parseKnownHosts,
@@ -76,6 +75,7 @@ import { useUploadQueue, type UploadJob } from "./hooks/useUploadQueue";
 import { useReconnect } from "./hooks/useReconnect";
 import { useSshSocket } from "./hooks/useSshSocket";
 import { useFileActions } from "./hooks/useFileActions";
+import { usePreviewCache } from "./hooks/usePreviewCache";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -95,37 +95,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * serves cache hits without an SSH read or transcode, so a higher ceiling
  * mainly speeds the first paint of a fresh folder. */
 const MAX_INFLIGHT_THUMBS = 12;
-
-/** In-memory budget for the recently-viewed preview cache (raw file bytes). A
- * revisited file re-opens instantly with no re-transfer; the LRU evicts the
- * oldest entries once the total exceeds this. Bytes (not blob URLs) are cached
- * so each open builds a fresh, independently-revoked `blob:` URL. Kept modest to
- * bound how much decoded file data sits in the tab's memory at once (a
- * confidentiality/RAM-residual choice) — since image previews are light lossy
- * WebP (a few hundred KB each) this still holds a good stretch of a gallery for
- * instant ←/→ stepping, and the bridge's own cache keeps a further re-open fast.
- * Held in memory only, so it's dropped on logout / sudo toggle (nothing
- * lingers). */
-const MAX_PREVIEW_CACHE_BYTES = 64 * 1024 * 1024;
-
-/** How long a cached preview stays reusable. A file not re-opened within this
- * window is dropped so decoded copies of your files don't linger in the tab's
- * memory indefinitely — the same confidentiality/RAM-residual TTL the bridge's
- * thumbnail cache uses (30 min). A re-open within the window still paints
- * instantly and refreshes the entry's age. */
-const PREVIEW_CACHE_TTL_MS = 30 * 60 * 1000;
-
-/** One entry in the recently-viewed preview cache: the raw file bytes plus the
- * metadata needed to re-open them (the display name, and — when the bytes are a
- * downscaled WebP preview rather than the original — an `optimized` flag + the
- * WebP content type so Download re-fetches the untouched original). The LRU's
- * age/eviction bookkeeping lives in {@link ByteLruCache}, not here. */
-interface PreviewCacheEntry {
-  name: string;
-  bytes: Uint8Array<ArrayBuffer>;
-  optimized?: boolean;
-  mime?: string;
-}
 
 /** Don't prefetch a gallery neighbour bigger than this — prefetching is a
  * latency nicety for the common case (folders of photos), not a reason to pull
@@ -344,19 +313,16 @@ export function SshSession({
   // WebP preview — its presence marks the bytes as an *optimized* (non-original)
   // preview so Download re-fetches the original.
   const previewMimeRef = useRef<Record<string, string>>({});
-  // LRU cache of recently-viewed preview file bytes, keyed by path + version
-  // (size:mtime) so an edited file re-fetches. The byte-bounded, TTL-aware LRU
-  // primitive lives in `@/lib/byteLruCache` (unit-tested); it tracks the running
-  // byte total and eviction/TTL internally so this component just calls
-  // get/set/has/clear. Elevated (root) reads are cached here too, so it's dropped
-  // on every `sudo` toggle and on logout — nothing lingers after de-elevate.
-  const previewCacheRef = useRef(
-    new ByteLruCache<PreviewCacheEntry>({
-      maxBytes: MAX_PREVIEW_CACHE_BYTES,
-      ttlMs: PREVIEW_CACHE_TTL_MS,
-      sizeOf: (e) => e.bytes.length,
-    }),
-  );
+  // Recently-viewed preview byte cache (an in-memory, byte-bounded TTL LRU keyed
+  // by path + version). Owns the LRU; the listing's version map keys it. See
+  // `usePreviewCache`.
+  const {
+    get: previewCacheGet,
+    has: previewCacheHas,
+    store: cachePreview,
+    clear: previewCacheClearOnly,
+    sizeBytes: previewCacheSizeBytes,
+  } = usePreviewCache(entryVersionRef);
   // Text captured at save time per path, so `sftp-ok` can reconcile the editor's
   // saved content (marking that file clean) without a re-read.
   const editorSaveTextRef = useRef<Record<string, string>>({});
@@ -493,9 +459,9 @@ export function SshSession({
   // in-memory copies and let the visible tiles re-request — a fresh generation
   // (clearing `requestedThumbsRef` un-blocks their intersection observers).
   const clearPreviewCache = useCallback(() => {
-    previewCacheRef.current.clear();
+    previewCacheClearOnly();
     prefetchPathsRef.current.clear();
-  }, []);
+  }, [previewCacheClearOnly]);
 
   // Approximate bytes a `data:…;base64,` URL decodes to (the tile's real size).
   const dataUrlBytes = useCallback((url: string) => {
@@ -510,12 +476,12 @@ export function SshSession({
   // grid thumbnails + the recently-viewed preview LRU. Surfaced next to the
   // settings "Clear thumbnail cache" action so the RAM residual is visible.
   const clientCacheBytes = useCallback(() => {
-    let total = previewCacheRef.current.bytes;
+    let total = previewCacheSizeBytes();
     for (const url of Object.values(thumbnailsRef.current)) {
       total += dataUrlBytes(url);
     }
     return total;
-  }, [dataUrlBytes]);
+  }, [dataUrlBytes, previewCacheSizeBytes]);
 
   const clearThumbnails = useCallback(() => {
     send({ t: "thumb-purge" });
@@ -525,37 +491,6 @@ export function SshSession({
     // "clear" empties the whole in-memory media cache, not just grid tiles.
     clearPreviewCache();
   }, [send, clearPreviewCache, resetThumbs]);
-
-  // Cache key for a path: path + its version tag (size:mtime) so an edited file
-  // misses and re-fetches. Falls back to the bare path when the version is
-  // unknown (e.g. a search hit not in the current listing).
-  const previewCacheKeyFor = useCallback((path: string) => {
-    const version = entryVersionRef.current.get(path);
-    return version ? `${path} ${version}` : path;
-  }, []);
-
-  // Store a fully-loaded preview's bytes in the LRU (unless bigger than the whole
-  // budget), evicting the oldest entries once over budget. This in-memory cache
-  // holds elevated (root) reads too — it's dropped on every `sudo` toggle and on
-  // logout, so a root-read file never lingers in the browser after either.
-  const cachePreview = useCallback(
-    (
-      path: string,
-      name: string,
-      bytes: Uint8Array<ArrayBuffer>,
-      optimized?: boolean,
-      mime?: string,
-    ) => {
-      // TTL sweep, over-budget skip, and LRU eviction all live in ByteLruCache.
-      previewCacheRef.current.set(previewCacheKeyFor(path), {
-        name,
-        bytes,
-        optimized,
-        mime,
-      });
-    },
-    [previewCacheKeyFor],
-  );
 
   // Stream the gallery neighbours of `path` (the previous & next previewable
   // file) into the preview cache ahead of a ←/→ step, so paging through a folder
@@ -581,7 +516,7 @@ export function SshSession({
       for (const delta of [1, -1]) {
         const nb = siblings[(idx + delta + n) % n];
         if (!nb || nb.path === path) continue;
-        if (previewCacheRef.current.has(previewCacheKeyFor(nb.path))) continue;
+        if (previewCacheHas(nb.path)) continue;
         if (prefetchPathsRef.current.has(nb.path)) continue;
         const kind = filePreviewKind(nb.name);
         const version = entryVersionRef.current.get(nb.path);
@@ -611,7 +546,7 @@ export function SshSession({
         send({ t: "sftp-read", path: nb.path, preview: true });
       }
     },
-    [send, previewCacheKeyFor],
+    [send, previewCacheHas],
   );
 
   // The streamed-transfer domain of the server-message handler: the chunked
@@ -1234,7 +1169,7 @@ export function SshSession({
     downloadBuffersRef.current = {};
     previewBuffersRef.current = {};
     previewMimeRef.current = {};
-    previewCacheRef.current.clear();
+    previewCacheClearOnly();
     prefetchPathsRef.current.clear();
     originalLoadPathsRef.current.clear();
     streamTokenRef.current = null;
@@ -1256,7 +1191,7 @@ export function SshSession({
     setCtrlArmed(false);
     setAltArmed(false);
     xtermRef.current?.clear();
-  }, [send, resetThumbs, resetUploads, reconnect]);
+  }, [send, resetThumbs, resetUploads, reconnect, previewCacheClearOnly]);
 
   // Look for a sidecar subtitle (`clip.srt` / `clip.en.vtt`) next to an opening
   // video and, if found, read it so the modal can attach it as a WebVTT track.
@@ -1322,7 +1257,7 @@ export function SshSession({
       // so a cached small video/audio re-opens as a fully-seekable blob.
       // A fresh hit (within TTL) re-opens instantly; the cache drops an expired
       // entry and refreshes/touches a live one for us, returning null on a miss.
-      const hit = previewCacheRef.current.get(previewCacheKeyFor(path));
+      const hit = previewCacheGet(path);
       if (hit) {
         setPreview({
           path,
@@ -1424,7 +1359,7 @@ export function SshSession({
         });
       }
     },
-    [send, previewCacheKeyFor, prefetchNeighbors, requestSubtitleFor],
+    [send, previewCacheGet, prefetchNeighbors, requestSubtitleFor],
   );
 
   // Fetch the full-resolution original of an open, optimized (WebP) image preview
