@@ -3,20 +3,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   applyKeyModifiers,
-  audioMimeType,
   compareHostKey,
   encodeMessage,
   filePreviewKind,
   formatSize,
   hostKeyId,
-  imageMimeType,
   isBrowserRenderableImage,
   isLargeForEditor,
   isProbablyTextFile,
   joinPath,
-  sniffMediaKind,
   TEXT_PREVIEW_MAX_BYTES,
-  videoMimeType,
   videoNeedsTranscode,
   type FileEntry,
   type ServerMessage,
@@ -29,7 +25,6 @@ import {
 } from "@/lib/subtitles";
 import { getThemePreset } from "@/lib/terminalTheme";
 import { fileVersionTag } from "@/lib/thumbnailCache";
-import { ByteLruCache } from "@/lib/byteLruCache";
 import {
   KNOWN_HOSTS_KEY,
   parseKnownHosts,
@@ -61,7 +56,12 @@ import {
   type SearchMode,
 } from "./FileBrowser";
 import { FileEditor, type EditorFile } from "./FileEditor";
-import { FilePreview, type PreviewMode } from "./FilePreview";
+import type { PreviewState } from "./preview/previewState";
+import {
+  previewFieldsFromBytes,
+  previewRenderKind,
+} from "./preview/previewFields";
+import { FilePreview } from "./FilePreview";
 import { PasteConfirm } from "./PasteConfirm";
 import { PromptDialog, type DialogRequest } from "./PromptDialog";
 import { MobileKeys } from "./MobileKeys";
@@ -75,6 +75,7 @@ import { useUploadQueue, type UploadJob } from "./hooks/useUploadQueue";
 import { useReconnect } from "./hooks/useReconnect";
 import { useSshSocket } from "./hooks/useSshSocket";
 import { useFileActions } from "./hooks/useFileActions";
+import { usePreviewCache } from "./hooks/usePreviewCache";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -88,100 +89,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** A file open in the preview modal (media viewed inline, or a download-only
  * fallback for types the browser can't render). */
-interface PreviewState {
-  path: string;
-  name: string;
-  /** Which surface to render; `unsupported` shows a download-only card. */
-  kind: PreviewMode;
-  /** `blob:` URL for the media/PDF element; empty until loaded / for markdown. */
-  src: string;
-  /** Decoded text for the `markdown` kind (rendered to HTML in the modal). */
-  text?: string;
-  /** True from the click until the file's bytes arrive — the modal opens
-   * immediately in a loading state instead of waiting silently for transfer. */
-  loading: boolean;
-  /** Cached grid thumbnail (`data:` URL), painted instantly behind the spinner
-   * while the full-resolution media loads. Absent in list view / for audio. */
-  placeholder?: string;
-  /** Raw bytes, kept so "Download" doesn't need a second round-trip. Absent for
-   * `unsupported` previews, which stream the file only if the user downloads.
-   * When `optimized` is set these are the *downscaled WebP preview*, not the
-   * original — so Download must re-fetch the original instead of saving these. */
-  bytes?: Uint8Array<ArrayBuffer>;
-  /** True when `bytes`/`src` are a bridge-downscaled WebP preview of an image
-   * rather than the original file. Keeps the view light while routing the
-   * Download button to the untouched original. */
-  optimized?: boolean;
-  /** True while the full-resolution original is being fetched on demand (zoom /
-   * "load original") to replace an `optimized` preview — drives a small badge;
-   * the WebP stays visible until the original arrives. */
-  loadingOriginal?: boolean;
-  /** Bytes received so far while the preview streams in — drives the modal's
-   * progress bar. Set once the `sftp-download-begin` for this preview arrives. */
-  received?: number;
-  /** Total size announced by `sftp-download-begin`, for the progress bar. */
-  total?: number;
-  /** The ORIGINAL image's pixel dimensions (from a transcoded preview's begin
-   * frame), so the modal shows the true size and can gate loading a very large
-   * original. Undefined for non-image previews or when unknown. */
-  originalDims?: { w: number; h: number };
-  /** For a video that the browser can't play natively, the `/api/preview`
-   * transcode URL to fall back to when native playback errors (or immediately,
-   * for a known-unplayable container). Absent for natively-playable media. */
-  videoFallbackSrc?: string;
-  /** `blob:` URL of a WebVTT subtitle track (converted from a sibling `.srt`/
-   * `.vtt`), shown on the `<video>`. Revoked when the preview closes. */
-  subtitleSrc?: string;
-  /** Short label for the subtitle track (e.g. `EN`, or `Subtitles`). */
-  subtitleLabel?: string;
-  /** Previewable files in the same view (display order), so the modal can step
-   * ←/→ through them like a gallery. Empty/undefined for one-off opens. */
-  siblings?: { path: string; name: string }[];
-  /** True when a text preview was capped at `TEXT_PREVIEW_MAX_BYTES` and the
-   * file is actually longer — the modal flags it's showing only the head. */
-  truncated?: boolean;
-  /** True when the decoded text contained U+FFFD replacement chars — a hint the
-   * file isn't valid UTF-8 (a legacy encoding, or actually binary). */
-  encodingWarning?: boolean;
-}
-
 /** Max concurrent grid-thumbnail reads. Enough to fill a visible screen of tiles
  * quickly without swamping the single bridge WebSocket when a folder holds
  * hundreds of images; the rest queue and drain as replies arrive. The bridge
  * serves cache hits without an SSH read or transcode, so a higher ceiling
  * mainly speeds the first paint of a fresh folder. */
 const MAX_INFLIGHT_THUMBS = 12;
-
-/** In-memory budget for the recently-viewed preview cache (raw file bytes). A
- * revisited file re-opens instantly with no re-transfer; the LRU evicts the
- * oldest entries once the total exceeds this. Bytes (not blob URLs) are cached
- * so each open builds a fresh, independently-revoked `blob:` URL. Kept modest to
- * bound how much decoded file data sits in the tab's memory at once (a
- * confidentiality/RAM-residual choice) — since image previews are light lossy
- * WebP (a few hundred KB each) this still holds a good stretch of a gallery for
- * instant ←/→ stepping, and the bridge's own cache keeps a further re-open fast.
- * Held in memory only, so it's dropped on logout / sudo toggle (nothing
- * lingers). */
-const MAX_PREVIEW_CACHE_BYTES = 64 * 1024 * 1024;
-
-/** How long a cached preview stays reusable. A file not re-opened within this
- * window is dropped so decoded copies of your files don't linger in the tab's
- * memory indefinitely — the same confidentiality/RAM-residual TTL the bridge's
- * thumbnail cache uses (30 min). A re-open within the window still paints
- * instantly and refreshes the entry's age. */
-const PREVIEW_CACHE_TTL_MS = 30 * 60 * 1000;
-
-/** One entry in the recently-viewed preview cache: the raw file bytes plus the
- * metadata needed to re-open them (the display name, and — when the bytes are a
- * downscaled WebP preview rather than the original — an `optimized` flag + the
- * WebP content type so Download re-fetches the untouched original). The LRU's
- * age/eviction bookkeeping lives in {@link ByteLruCache}, not here. */
-interface PreviewCacheEntry {
-  name: string;
-  bytes: Uint8Array<ArrayBuffer>;
-  optimized?: boolean;
-  mime?: string;
-}
 
 /** Don't prefetch a gallery neighbour bigger than this — prefetching is a
  * latency nicety for the common case (folders of photos), not a reason to pull
@@ -219,59 +132,6 @@ function mediaStreamSrc(
 ): string {
   const base = `${PREVIEW_STREAM_PATH}?token=${encodeURIComponent(token)}&path=${encodeURIComponent(path)}`;
   return transcode ? `${base}&transcode=1` : base;
-}
-
-/** The preview surface for a filename by extension: a media/PDF/Markdown kind,
- * a read-only `text` view for anything editable-as-text, or `unsupported`. Used
- * for the modal's loading state before bytes arrive (a cache hit / stream then
- * refines it, including magic-byte sniffing for mis-named media). */
-function previewRenderKind(name: string): PreviewMode {
-  return (
-    filePreviewKind(name) ?? (isProbablyTextFile(name) ? "text" : "unsupported")
-  );
-}
-
-/** Fields the preview modal needs to render a fully-loaded file, built from its
- * raw bytes. The kind is resolved by extension, then — for a `text`/`unsupported`
- * name — upgraded by sniffing the bytes' magic number, so a mis-named or
- * extensionless media file (a JPEG called `photo`) still previews as media.
- * Markdown/text decode to text (rendered in the modal); media/PDF get a `blob:`
- * URL. Shared by the streamed-in path and a preview-cache hit. */
-function previewFieldsFromBytes(
-  name: string,
-  bytes: Uint8Array<ArrayBuffer>,
-  mimeOverride?: string,
-): Pick<PreviewState, "kind" | "src" | "text" | "bytes" | "encodingWarning"> {
-  let kind = previewRenderKind(name);
-  if (kind === "text" || kind === "unsupported") {
-    const sniffed = sniffMediaKind(bytes);
-    if (sniffed) kind = sniffed;
-  }
-  if (kind === "markdown" || kind === "text") {
-    const text = new TextDecoder().decode(bytes);
-    // A non-fatal decode substitutes U+FFFD for undecodable bytes; their
-    // presence flags a likely non-UTF-8 (legacy-encoded or binary) file.
-    return { kind, src: "", text, bytes, encodingWarning: text.includes("�") };
-  }
-  if (kind === "unsupported") {
-    // Not decodable as media and not text — offer download only, no blob.
-    return { kind, src: "", bytes };
-  }
-  // A server-transcoded image preview arrives as WebP regardless of the file's
-  // name, so trust the bridge's `mimeOverride` when it sends one.
-  const mime =
-    mimeOverride ??
-    (kind === "pdf"
-      ? "application/pdf"
-      : ((kind === "video"
-          ? videoMimeType(name)
-          : kind === "audio"
-            ? audioMimeType(name)
-            : imageMimeType(name)) ?? "application/octet-stream"));
-  // A blob: URL renders large images/video/PDFs far faster than a giant data:
-  // URL and lets <video> seek; revoked by the effect that watches preview.src.
-  const src = URL.createObjectURL(new Blob([bytes], { type: mime }));
-  return { kind, src, bytes };
 }
 
 /** What a session reports up to the tab manager for its tab chip. */
@@ -453,19 +313,16 @@ export function SshSession({
   // WebP preview — its presence marks the bytes as an *optimized* (non-original)
   // preview so Download re-fetches the original.
   const previewMimeRef = useRef<Record<string, string>>({});
-  // LRU cache of recently-viewed preview file bytes, keyed by path + version
-  // (size:mtime) so an edited file re-fetches. The byte-bounded, TTL-aware LRU
-  // primitive lives in `@/lib/byteLruCache` (unit-tested); it tracks the running
-  // byte total and eviction/TTL internally so this component just calls
-  // get/set/has/clear. Elevated (root) reads are cached here too, so it's dropped
-  // on every `sudo` toggle and on logout — nothing lingers after de-elevate.
-  const previewCacheRef = useRef(
-    new ByteLruCache<PreviewCacheEntry>({
-      maxBytes: MAX_PREVIEW_CACHE_BYTES,
-      ttlMs: PREVIEW_CACHE_TTL_MS,
-      sizeOf: (e) => e.bytes.length,
-    }),
-  );
+  // Recently-viewed preview byte cache (an in-memory, byte-bounded TTL LRU keyed
+  // by path + version). Owns the LRU; the listing's version map keys it. See
+  // `usePreviewCache`.
+  const {
+    get: previewCacheGet,
+    has: previewCacheHas,
+    store: cachePreview,
+    clear: previewCacheClearOnly,
+    sizeBytes: previewCacheSizeBytes,
+  } = usePreviewCache(entryVersionRef);
   // Text captured at save time per path, so `sftp-ok` can reconcile the editor's
   // saved content (marking that file clean) without a re-read.
   const editorSaveTextRef = useRef<Record<string, string>>({});
@@ -602,9 +459,9 @@ export function SshSession({
   // in-memory copies and let the visible tiles re-request — a fresh generation
   // (clearing `requestedThumbsRef` un-blocks their intersection observers).
   const clearPreviewCache = useCallback(() => {
-    previewCacheRef.current.clear();
+    previewCacheClearOnly();
     prefetchPathsRef.current.clear();
-  }, []);
+  }, [previewCacheClearOnly]);
 
   // Approximate bytes a `data:…;base64,` URL decodes to (the tile's real size).
   const dataUrlBytes = useCallback((url: string) => {
@@ -619,12 +476,12 @@ export function SshSession({
   // grid thumbnails + the recently-viewed preview LRU. Surfaced next to the
   // settings "Clear thumbnail cache" action so the RAM residual is visible.
   const clientCacheBytes = useCallback(() => {
-    let total = previewCacheRef.current.bytes;
+    let total = previewCacheSizeBytes();
     for (const url of Object.values(thumbnailsRef.current)) {
       total += dataUrlBytes(url);
     }
     return total;
-  }, [dataUrlBytes]);
+  }, [dataUrlBytes, previewCacheSizeBytes]);
 
   const clearThumbnails = useCallback(() => {
     send({ t: "thumb-purge" });
@@ -634,37 +491,6 @@ export function SshSession({
     // "clear" empties the whole in-memory media cache, not just grid tiles.
     clearPreviewCache();
   }, [send, clearPreviewCache, resetThumbs]);
-
-  // Cache key for a path: path + its version tag (size:mtime) so an edited file
-  // misses and re-fetches. Falls back to the bare path when the version is
-  // unknown (e.g. a search hit not in the current listing).
-  const previewCacheKeyFor = useCallback((path: string) => {
-    const version = entryVersionRef.current.get(path);
-    return version ? `${path} ${version}` : path;
-  }, []);
-
-  // Store a fully-loaded preview's bytes in the LRU (unless bigger than the whole
-  // budget), evicting the oldest entries once over budget. This in-memory cache
-  // holds elevated (root) reads too — it's dropped on every `sudo` toggle and on
-  // logout, so a root-read file never lingers in the browser after either.
-  const cachePreview = useCallback(
-    (
-      path: string,
-      name: string,
-      bytes: Uint8Array<ArrayBuffer>,
-      optimized?: boolean,
-      mime?: string,
-    ) => {
-      // TTL sweep, over-budget skip, and LRU eviction all live in ByteLruCache.
-      previewCacheRef.current.set(previewCacheKeyFor(path), {
-        name,
-        bytes,
-        optimized,
-        mime,
-      });
-    },
-    [previewCacheKeyFor],
-  );
 
   // Stream the gallery neighbours of `path` (the previous & next previewable
   // file) into the preview cache ahead of a ←/→ step, so paging through a folder
@@ -690,7 +516,7 @@ export function SshSession({
       for (const delta of [1, -1]) {
         const nb = siblings[(idx + delta + n) % n];
         if (!nb || nb.path === path) continue;
-        if (previewCacheRef.current.has(previewCacheKeyFor(nb.path))) continue;
+        if (previewCacheHas(nb.path)) continue;
         if (prefetchPathsRef.current.has(nb.path)) continue;
         const kind = filePreviewKind(nb.name);
         const version = entryVersionRef.current.get(nb.path);
@@ -720,7 +546,7 @@ export function SshSession({
         send({ t: "sftp-read", path: nb.path, preview: true });
       }
     },
-    [send, previewCacheKeyFor],
+    [send, previewCacheHas],
   );
 
   // The streamed-transfer domain of the server-message handler: the chunked
@@ -1343,7 +1169,7 @@ export function SshSession({
     downloadBuffersRef.current = {};
     previewBuffersRef.current = {};
     previewMimeRef.current = {};
-    previewCacheRef.current.clear();
+    previewCacheClearOnly();
     prefetchPathsRef.current.clear();
     originalLoadPathsRef.current.clear();
     streamTokenRef.current = null;
@@ -1365,7 +1191,7 @@ export function SshSession({
     setCtrlArmed(false);
     setAltArmed(false);
     xtermRef.current?.clear();
-  }, [send, resetThumbs, resetUploads, reconnect]);
+  }, [send, resetThumbs, resetUploads, reconnect, previewCacheClearOnly]);
 
   // Look for a sidecar subtitle (`clip.srt` / `clip.en.vtt`) next to an opening
   // video and, if found, read it so the modal can attach it as a WebVTT track.
@@ -1431,7 +1257,7 @@ export function SshSession({
       // so a cached small video/audio re-opens as a fully-seekable blob.
       // A fresh hit (within TTL) re-opens instantly; the cache drops an expired
       // entry and refreshes/touches a live one for us, returning null on a miss.
-      const hit = previewCacheRef.current.get(previewCacheKeyFor(path));
+      const hit = previewCacheGet(path);
       if (hit) {
         setPreview({
           path,
@@ -1533,7 +1359,7 @@ export function SshSession({
         });
       }
     },
-    [send, previewCacheKeyFor, prefetchNeighbors, requestSubtitleFor],
+    [send, previewCacheGet, prefetchNeighbors, requestSubtitleFor],
   );
 
   // Fetch the full-resolution original of an open, optimized (WebP) image preview
