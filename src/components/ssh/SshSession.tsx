@@ -3,20 +3,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   applyKeyModifiers,
-  audioMimeType,
   compareHostKey,
   encodeMessage,
   filePreviewKind,
   formatSize,
   hostKeyId,
-  imageMimeType,
   isBrowserRenderableImage,
   isLargeForEditor,
   isProbablyTextFile,
   joinPath,
-  sniffMediaKind,
   TEXT_PREVIEW_MAX_BYTES,
-  videoMimeType,
   videoNeedsTranscode,
   type FileEntry,
   type ServerMessage,
@@ -61,7 +57,12 @@ import {
   type SearchMode,
 } from "./FileBrowser";
 import { FileEditor, type EditorFile } from "./FileEditor";
-import { FilePreview, type PreviewMode } from "./FilePreview";
+import type { PreviewState } from "./preview/previewState";
+import {
+  previewFieldsFromBytes,
+  previewRenderKind,
+} from "./preview/previewFields";
+import { FilePreview } from "./FilePreview";
 import { PasteConfirm } from "./PasteConfirm";
 import { PromptDialog, type DialogRequest } from "./PromptDialog";
 import { MobileKeys } from "./MobileKeys";
@@ -88,63 +89,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** A file open in the preview modal (media viewed inline, or a download-only
  * fallback for types the browser can't render). */
-interface PreviewState {
-  path: string;
-  name: string;
-  /** Which surface to render; `unsupported` shows a download-only card. */
-  kind: PreviewMode;
-  /** `blob:` URL for the media/PDF element; empty until loaded / for markdown. */
-  src: string;
-  /** Decoded text for the `markdown` kind (rendered to HTML in the modal). */
-  text?: string;
-  /** True from the click until the file's bytes arrive — the modal opens
-   * immediately in a loading state instead of waiting silently for transfer. */
-  loading: boolean;
-  /** Cached grid thumbnail (`data:` URL), painted instantly behind the spinner
-   * while the full-resolution media loads. Absent in list view / for audio. */
-  placeholder?: string;
-  /** Raw bytes, kept so "Download" doesn't need a second round-trip. Absent for
-   * `unsupported` previews, which stream the file only if the user downloads.
-   * When `optimized` is set these are the *downscaled WebP preview*, not the
-   * original — so Download must re-fetch the original instead of saving these. */
-  bytes?: Uint8Array<ArrayBuffer>;
-  /** True when `bytes`/`src` are a bridge-downscaled WebP preview of an image
-   * rather than the original file. Keeps the view light while routing the
-   * Download button to the untouched original. */
-  optimized?: boolean;
-  /** True while the full-resolution original is being fetched on demand (zoom /
-   * "load original") to replace an `optimized` preview — drives a small badge;
-   * the WebP stays visible until the original arrives. */
-  loadingOriginal?: boolean;
-  /** Bytes received so far while the preview streams in — drives the modal's
-   * progress bar. Set once the `sftp-download-begin` for this preview arrives. */
-  received?: number;
-  /** Total size announced by `sftp-download-begin`, for the progress bar. */
-  total?: number;
-  /** The ORIGINAL image's pixel dimensions (from a transcoded preview's begin
-   * frame), so the modal shows the true size and can gate loading a very large
-   * original. Undefined for non-image previews or when unknown. */
-  originalDims?: { w: number; h: number };
-  /** For a video that the browser can't play natively, the `/api/preview`
-   * transcode URL to fall back to when native playback errors (or immediately,
-   * for a known-unplayable container). Absent for natively-playable media. */
-  videoFallbackSrc?: string;
-  /** `blob:` URL of a WebVTT subtitle track (converted from a sibling `.srt`/
-   * `.vtt`), shown on the `<video>`. Revoked when the preview closes. */
-  subtitleSrc?: string;
-  /** Short label for the subtitle track (e.g. `EN`, or `Subtitles`). */
-  subtitleLabel?: string;
-  /** Previewable files in the same view (display order), so the modal can step
-   * ←/→ through them like a gallery. Empty/undefined for one-off opens. */
-  siblings?: { path: string; name: string }[];
-  /** True when a text preview was capped at `TEXT_PREVIEW_MAX_BYTES` and the
-   * file is actually longer — the modal flags it's showing only the head. */
-  truncated?: boolean;
-  /** True when the decoded text contained U+FFFD replacement chars — a hint the
-   * file isn't valid UTF-8 (a legacy encoding, or actually binary). */
-  encodingWarning?: boolean;
-}
-
 /** Max concurrent grid-thumbnail reads. Enough to fill a visible screen of tiles
  * quickly without swamping the single bridge WebSocket when a folder holds
  * hundreds of images; the rest queue and drain as replies arrive. The bridge
@@ -219,59 +163,6 @@ function mediaStreamSrc(
 ): string {
   const base = `${PREVIEW_STREAM_PATH}?token=${encodeURIComponent(token)}&path=${encodeURIComponent(path)}`;
   return transcode ? `${base}&transcode=1` : base;
-}
-
-/** The preview surface for a filename by extension: a media/PDF/Markdown kind,
- * a read-only `text` view for anything editable-as-text, or `unsupported`. Used
- * for the modal's loading state before bytes arrive (a cache hit / stream then
- * refines it, including magic-byte sniffing for mis-named media). */
-function previewRenderKind(name: string): PreviewMode {
-  return (
-    filePreviewKind(name) ?? (isProbablyTextFile(name) ? "text" : "unsupported")
-  );
-}
-
-/** Fields the preview modal needs to render a fully-loaded file, built from its
- * raw bytes. The kind is resolved by extension, then — for a `text`/`unsupported`
- * name — upgraded by sniffing the bytes' magic number, so a mis-named or
- * extensionless media file (a JPEG called `photo`) still previews as media.
- * Markdown/text decode to text (rendered in the modal); media/PDF get a `blob:`
- * URL. Shared by the streamed-in path and a preview-cache hit. */
-function previewFieldsFromBytes(
-  name: string,
-  bytes: Uint8Array<ArrayBuffer>,
-  mimeOverride?: string,
-): Pick<PreviewState, "kind" | "src" | "text" | "bytes" | "encodingWarning"> {
-  let kind = previewRenderKind(name);
-  if (kind === "text" || kind === "unsupported") {
-    const sniffed = sniffMediaKind(bytes);
-    if (sniffed) kind = sniffed;
-  }
-  if (kind === "markdown" || kind === "text") {
-    const text = new TextDecoder().decode(bytes);
-    // A non-fatal decode substitutes U+FFFD for undecodable bytes; their
-    // presence flags a likely non-UTF-8 (legacy-encoded or binary) file.
-    return { kind, src: "", text, bytes, encodingWarning: text.includes("�") };
-  }
-  if (kind === "unsupported") {
-    // Not decodable as media and not text — offer download only, no blob.
-    return { kind, src: "", bytes };
-  }
-  // A server-transcoded image preview arrives as WebP regardless of the file's
-  // name, so trust the bridge's `mimeOverride` when it sends one.
-  const mime =
-    mimeOverride ??
-    (kind === "pdf"
-      ? "application/pdf"
-      : ((kind === "video"
-          ? videoMimeType(name)
-          : kind === "audio"
-            ? audioMimeType(name)
-            : imageMimeType(name)) ?? "application/octet-stream"));
-  // A blob: URL renders large images/video/PDFs far faster than a giant data:
-  // URL and lets <video> seek; revoked by the effect that watches preview.src.
-  const src = URL.createObjectURL(new Blob([bytes], { type: mime }));
-  return { kind, src, bytes };
 }
 
 /** What a session reports up to the tab manager for its tab chip. */
