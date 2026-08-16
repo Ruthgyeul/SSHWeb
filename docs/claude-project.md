@@ -178,7 +178,8 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   natively-playable clip whose codec turns out unplayable falls back to the same
   transcode on a `<video>` error. **Small, natively-playable clips are fetched
   whole and cached in memory instead of streamed** (bounded by the smaller of
-  `MEDIA_CACHE_MAX_BYTES` and the bridge's download cap, advertised in
+  `NEXT_PUBLIC_SSH_MEDIA_CACHE_MAX_MB` (24 MB by default) and the bridge's
+  download cap, advertised in
   `caps.maxDownloadBytes`) so stepping the gallery away and back re-opens them
   instantly and fully seekable — memory-only, dropped on logout. **Image previews
   are downscaled to a compact preview transcode for viewing**: clicking a photo

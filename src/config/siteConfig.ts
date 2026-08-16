@@ -74,3 +74,15 @@ export const THEME_COLOR = "#0a0d13";
  */
 export const SSH_WS_PATH = env("NEXT_PUBLIC_SSH_WS_PATH", "/api/ssh");
 export const SSH_ALLOWED_HOSTS = env("NEXT_PUBLIC_SSH_ALLOWED_HOSTS", "");
+
+/**
+ * Largest natively playable video/audio clip cached whole in browser memory.
+ * Invalid or negative values retain the 24 MB default; zero disables whole-file
+ * media caching so every eligible clip uses the HTTP Range endpoint.
+ */
+function mediaCacheMaxMb(): number {
+  const parsed = Number(env("NEXT_PUBLIC_SSH_MEDIA_CACHE_MAX_MB", "24"));
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 24;
+}
+
+export const SSH_MEDIA_CACHE_MAX_BYTES = mediaCacheMaxMb() * 1024 * 1024;

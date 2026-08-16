@@ -14,6 +14,7 @@ import {
   videoNeedsTranscode,
 } from "@/lib/sshProtocol";
 import { base64ToBytes, concatBytes } from "@/lib/bytes";
+import { SSH_MEDIA_CACHE_MAX_BYTES } from "@/config/siteConfig";
 import {
   findSubtitleSidecar,
   srtToVtt,
@@ -42,7 +43,7 @@ const PREFETCH_MAX_BYTES = 16 * 1024 * 1024;
  * clips keep streaming over the seekable HTTP endpoint (fast start, no whole-file
  * transfer). Effective threshold is clamped to the bridge's download cap so a
  * whole-file fetch can never exceed what an ordinary download would allow. */
-const MEDIA_CACHE_MAX_BYTES = 24 * 1024 * 1024;
+const MEDIA_CACHE_MAX_BYTES = SSH_MEDIA_CACHE_MAX_BYTES;
 
 /** Server path of the seekable media-stream endpoint (mirrors `server.mjs`). A
  * `<video>` points here with the session's `streamToken` so playback ranges are

@@ -68,3 +68,35 @@ describe("ALLOW_INDEXING", () => {
     expect((await loadConfig()).ALLOW_INDEXING).toBe(true);
   });
 });
+
+describe("SSH_MEDIA_CACHE_MAX_BYTES", () => {
+  it("defaults to 24 MB", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SSH_MEDIA_CACHE_MAX_MB", "");
+    expect((await loadConfig()).SSH_MEDIA_CACHE_MAX_BYTES).toBe(
+      24 * 1024 * 1024,
+    );
+  });
+
+  it("converts a configurable decimal MB threshold to bytes", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SSH_MEDIA_CACHE_MAX_MB", "8.5");
+    expect((await loadConfig()).SSH_MEDIA_CACHE_MAX_BYTES).toBe(
+      8.5 * 1024 * 1024,
+    );
+  });
+
+  it("allows zero to disable whole-file media caching", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SSH_MEDIA_CACHE_MAX_MB", "0");
+    expect((await loadConfig()).SSH_MEDIA_CACHE_MAX_BYTES).toBe(0);
+  });
+
+  it("falls back to 24 MB for invalid or negative values", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SSH_MEDIA_CACHE_MAX_MB", "invalid");
+    expect((await loadConfig()).SSH_MEDIA_CACHE_MAX_BYTES).toBe(
+      24 * 1024 * 1024,
+    );
+    vi.stubEnv("NEXT_PUBLIC_SSH_MEDIA_CACHE_MAX_MB", "-1");
+    expect((await loadConfig()).SSH_MEDIA_CACHE_MAX_BYTES).toBe(
+      24 * 1024 * 1024,
+    );
+  });
+});
