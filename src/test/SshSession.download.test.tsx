@@ -57,7 +57,9 @@ vi.mock("@/components/ssh/FilePreview", () => ({
         data-testid="preview"
         data-path={String(props.path)}
         data-kind={String(props.kind)}
+        data-src={String(props.src)}
         data-loading={String(props.loading)}
+        data-loadingoriginal={String(props.loadingOriginal)}
         data-truncated={String(props.truncated)}
         data-optimized={String(props.optimized)}
         data-subtitle={String(!!props.subtitleSrc)}
@@ -92,8 +94,9 @@ import { SshSession } from "@/components/ssh/SshSession";
 const drive = (msg: ServerMessage) => act(() => holder.onMessage!(msg));
 
 /** Render, connect, reach "connected", and switch to the files tab so the
- * FileBrowser stub's callbacks are captured. */
-function connectToFiles() {
+ * FileBrowser stub's callbacks are captured. Pass a `streamToken` to exercise
+ * the seekable media-stream path (video/audio play over /api/preview). */
+function connectToFiles(caps: { streamToken?: string } = {}) {
   render(<SshSession active onMeta={vi.fn()} />);
   fireEvent.change(screen.getByLabelText("Host"), {
     target: { value: "example.com" },
@@ -108,7 +111,12 @@ function connectToFiles() {
   fireEvent.click(screen.getByRole("button", { name: "Connect →" }));
 
   drive({ t: "status", state: "connected" });
-  drive({ t: "caps", sudo: false, maxDownloadBytes: 0 });
+  drive({
+    t: "caps",
+    sudo: false,
+    maxDownloadBytes: 0,
+    streamToken: caps.streamToken,
+  });
   drive({
     t: "sftp-list",
     path: "/home/me",
@@ -509,5 +517,173 @@ describe("SshSession search-result reconciliation", () => {
       loading: true,
       results: [],
     });
+  });
+});
+
+describe("SshSession preview entry points", () => {
+  const streamText = (path: string, name: string, text: string) => {
+    drive({
+      t: "sftp-download-begin",
+      path,
+      name,
+      size: text.length,
+      preview: true,
+    });
+    drive({
+      t: "sftp-download-chunk",
+      path,
+      dataB64: bytesToBase64(new TextEncoder().encode(text)),
+      preview: true,
+    });
+    drive({ t: "sftp-download-end", path, preview: true });
+  };
+
+  it("plays a large video over the seekable /api/preview stream", () => {
+    connectToFiles({ streamToken: "tok" });
+    // Larger than the whole-cache budget, so it streams instead of caching.
+    drive({
+      t: "sftp-list",
+      path: "/home/me",
+      entries: [
+        {
+          name: "clip.mp4",
+          type: "file",
+          size: 30 * 1024 * 1024,
+          mtime: 1,
+          mode: 0o644,
+        },
+      ],
+    });
+    act(() => holder.fbProps!.onPreview("/home/me/clip.mp4", "clip.mp4"));
+
+    const modal = screen.getByTestId("preview");
+    expect(modal).toHaveAttribute("data-kind", "video");
+    expect(modal).toHaveAttribute("data-loading", "false");
+    // Points at the HTTP range endpoint with the session's stream token — no
+    // whole-file blob transfer.
+    expect(modal.getAttribute("data-src")).toContain("/api/preview");
+    expect(modal.getAttribute("data-src")).toContain("token=tok");
+  });
+
+  it("re-opens a cached file instantly without re-streaming", () => {
+    connectToFiles();
+    act(() => holder.fbProps!.onPreview("/home/me/a.txt", "a.txt"));
+    streamText("/home/me/a.txt", "a.txt", "hello");
+    // Close the modal, then re-open the same file.
+    act(() => (holder.previewProps!.onClose as () => void)());
+    act(() => holder.fbProps!.onPreview("/home/me/a.txt", "a.txt"));
+
+    const modal = screen.getByTestId("preview");
+    // Painted straight from the byte cache: not loading, text already present,
+    // without any new download frames being driven.
+    expect(modal).toHaveAttribute("data-loading", "false");
+    expect(modal).toHaveTextContent("hello");
+  });
+
+  it("steps the gallery to the next sibling", () => {
+    connectToFiles();
+    drive({
+      t: "sftp-list",
+      path: "/home/me",
+      entries: [
+        { name: "1.txt", type: "file", size: 3, mtime: 0, mode: 0o644 },
+        { name: "2.txt", type: "file", size: 3, mtime: 0, mode: 0o644 },
+      ],
+    });
+    const siblings = [
+      { path: "/home/me/1.txt", name: "1.txt" },
+      { path: "/home/me/2.txt", name: "2.txt" },
+    ];
+    act(() => holder.fbProps!.onPreview("/home/me/1.txt", "1.txt", siblings));
+    streamText("/home/me/1.txt", "1.txt", "one");
+
+    act(() => (holder.previewProps!.onNext as () => void)());
+    expect(screen.getByTestId("preview")).toHaveAttribute(
+      "data-path",
+      "/home/me/2.txt",
+    );
+  });
+
+  it("loads the full original over an optimized image preview", () => {
+    connectToFiles();
+    drive({
+      t: "sftp-list",
+      path: "/home/me",
+      entries: [
+        { name: "photo.jpg", type: "file", size: 50, mtime: 0, mode: 0o644 },
+      ],
+    });
+    act(() => holder.fbProps!.onPreview("/home/me/photo.jpg", "photo.jpg"));
+    // Optimized WebP preview arrives first.
+    drive({
+      t: "sftp-download-begin",
+      path: "/home/me/photo.jpg",
+      name: "photo.jpg",
+      size: 4,
+      preview: true,
+      mime: "image/webp",
+    });
+    drive({
+      t: "sftp-download-chunk",
+      path: "/home/me/photo.jpg",
+      dataB64: bytesToBase64(new Uint8Array([255, 216, 255, 224])),
+      preview: true,
+    });
+    drive({
+      t: "sftp-download-end",
+      path: "/home/me/photo.jpg",
+      preview: true,
+    });
+    expect(screen.getByTestId("preview")).toHaveAttribute(
+      "data-optimized",
+      "true",
+    );
+
+    // Zoom / "Original" fetches the full-resolution original.
+    act(() => (holder.previewProps!.onLoadOriginal as () => void)());
+    expect(screen.getByTestId("preview")).toHaveAttribute(
+      "data-loadingoriginal",
+      "true",
+    );
+
+    // The original (no server mime) streams in and replaces the WebP.
+    drive({
+      t: "sftp-download-begin",
+      path: "/home/me/photo.jpg",
+      name: "photo.jpg",
+      size: 4,
+      preview: true,
+    });
+    drive({
+      t: "sftp-download-chunk",
+      path: "/home/me/photo.jpg",
+      dataB64: bytesToBase64(new Uint8Array([255, 216, 255, 224])),
+      preview: true,
+    });
+    drive({
+      t: "sftp-download-end",
+      path: "/home/me/photo.jpg",
+      preview: true,
+    });
+
+    const modal = screen.getByTestId("preview");
+    expect(modal).toHaveAttribute("data-optimized", "false");
+    expect(modal).toHaveAttribute("data-loadingoriginal", "false");
+  });
+
+  it("degrades a failed preview read to the download-only card", () => {
+    connectToFiles();
+    act(() => holder.fbProps!.onPreview("/home/me/a.txt", "a.txt"));
+    expect(screen.getByTestId("preview")).toHaveAttribute(
+      "data-loading",
+      "true",
+    );
+
+    // The bridge reports the read failed (e.g. over the download cap).
+    drive({ t: "error", scope: "sftp", message: "too big" });
+
+    const modal = screen.getByTestId("preview");
+    expect(modal).toHaveAttribute("data-kind", "unsupported");
+    expect(modal).toHaveAttribute("data-loading", "false");
   });
 });
