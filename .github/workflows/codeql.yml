@@ -76,7 +76,10 @@ jobs:
           # Prefix the list here with "+" to use these queries and those in the config file.
 
           # For more details on CodeQL's query packs, refer to: https://docs.github.com/en/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-code-scanning#using-queries-in-ql-packs
-          # queries: security-extended,security-and-quality
+          # Include the broader security suite in addition to CodeQL's default
+          # high-confidence queries. This is especially useful for the custom
+          # WebSocket/SSH bridge, which handles untrusted network input.
+          queries: security-extended
 
       # If the analyze step fails for one of the languages you are analyzing with
       # "We were unable to automatically build your code", modify the matrix above
