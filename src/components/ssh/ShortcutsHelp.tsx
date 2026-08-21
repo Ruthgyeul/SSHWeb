@@ -56,6 +56,8 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
         desc: "Video volume up / down (M mute, F fullscreen)",
       },
       { keys: ["Ctrl/⌘", "F"], desc: "Find in a text preview" },
+      { keys: ["F2"], desc: "Move / rename the current file" },
+      { keys: ["Del"], desc: "Delete the current file (asks to confirm)" },
       { keys: ["Esc"], desc: "Close the find bar / the preview" },
     ],
   },
@@ -75,6 +77,8 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
         desc: "Sticky one-shot modifier for the next key",
       },
       { keys: ["Fn"], desc: "Toggle the F1–F12 row" },
+      { keys: ["Swipe ←/→"], desc: "Previous / next file in the preview" },
+      { keys: ["Swipe ↓"], desc: "Close the preview" },
     ],
   },
 ];

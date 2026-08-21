@@ -46,6 +46,7 @@ src/
 │   ├── knownHosts.ts    # TOFU known-hosts parse/compare (localStorage)
 │   ├── markdown.ts      # Markdown → sanitized HTML (preview)
 │   ├── subtitles.ts     # sidecar subtitle discovery + SRT→VTT
+│   ├── swipeGesture.ts  # pure touch-swipe direction classifier (preview gestures)
 │   ├── syntaxHighlight.ts # lightweight syntax highlighting
 │   ├── terminalTheme.ts # terminal color-theme presets
 │   └── utils.ts         # cn() classname helper + toJsonLd

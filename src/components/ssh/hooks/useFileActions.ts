@@ -159,6 +159,60 @@ export function useFileActions({
       if (to !== fromPath) send({ t: "sftp-rename", from: fromPath, to });
     };
 
+    // Path-based delete for the preview modal, which knows an absolute path (and
+    // may be viewing a search hit outside `cwd`) rather than a `cwd`-relative
+    // `FileEntry`. `onConfirmed` runs when the user accepts the dialog so the
+    // caller can record the pending mutation and reconcile it on the `sftp-ok`.
+    const onDeletePath = (
+      path: string,
+      isDir: boolean,
+      name: string,
+      onConfirmed?: () => void,
+    ) => {
+      setDialog({
+        title: `Delete “${name}”?`,
+        message: isDir
+          ? "The directory must be empty. This cannot be undone."
+          : "This cannot be undone.",
+        confirmLabel: "Delete",
+        danger: true,
+        onConfirm: () => {
+          send({ t: "sftp-rm", path, dir: isDir });
+          onConfirmed?.();
+        },
+      });
+    };
+
+    // Path-based move/rename for the preview modal: one absolute-path input, so
+    // editing just the final segment renames in place while changing the
+    // directory moves the file — the shell `mv src dest` semantics. `onConfirmed`
+    // receives the destination path for `sftp-ok` reconciliation.
+    const onMovePath = (
+      fromPath: string,
+      name: string,
+      onConfirmed?: (toPath: string) => void,
+    ) => {
+      setDialog({
+        title: `Move / rename “${name}”`,
+        message: "Edit the name to rename, or the folder to move it.",
+        input: { label: "Destination path", initialValue: fromPath },
+        confirmLabel: "Move",
+        validate: (v) => {
+          const next = v.trim();
+          if (!next) return "Please enter a destination path.";
+          if (next === fromPath) return "Enter a different name or folder.";
+          return null;
+        },
+        onConfirm: (v) => {
+          const to = v.trim();
+          if (to && to !== fromPath) {
+            send({ t: "sftp-rename", from: fromPath, to });
+            onConfirmed?.(to);
+          }
+        },
+      });
+    };
+
     const onChmod = (entry: FileEntry) => {
       setDialog({
         title: `Permissions for “${entry.name}”`,
@@ -186,6 +240,8 @@ export function useFileActions({
       onRename,
       onCopy,
       onMove,
+      onDeletePath,
+      onMovePath,
       onChmod,
     };
   }, [cwd, entries, send, setDialog]);

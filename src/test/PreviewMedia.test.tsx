@@ -37,6 +37,8 @@ function renderMedia(over: Partial<Parameters<typeof PreviewMedia>[0]> = {}) {
     onDownload: vi.fn(),
     videoRef: createRef(),
     video: { src: "", rate: 1, onError: vi.fn() },
+    hasGallery: false,
+    onClose: vi.fn(),
     ...over,
   };
   return render(<PreviewMedia {...props} />);
@@ -81,6 +83,8 @@ describe("PreviewMedia", () => {
         onDownload={vi.fn()}
         videoRef={createRef()}
         video={{ src: "blob:clip", rate: 1.5, onError: vi.fn() }}
+        hasGallery={false}
+        onClose={vi.fn()}
       />,
     );
     expect(container.textContent).toContain("1.5×");

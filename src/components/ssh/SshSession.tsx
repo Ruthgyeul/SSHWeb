@@ -197,6 +197,16 @@ export function SshSession({
   // Mirrors the full open-preview state so `stepPreview` (gallery ←/→) can read
   // the latest siblings/loading without being torn down and rebuilt each render.
   const previewRef = useRef<PreviewState | null>(null);
+  // A delete/move issued from inside the preview modal, awaiting its `sftp-ok`.
+  // Only once the bridge acks do we prune the file from the open gallery (step
+  // to a neighbor / close) — so a failed op (permissions, etc.) never skips a
+  // file. `ackPath` matches the op's ack (`sftp-rm` acks the removed path,
+  // `sftp-rename` acks the destination); `prunePath` is what leaves the view.
+  const pendingPreviewMutationRef = useRef<{
+    op: "rm" | "rename";
+    ackPath: string;
+    prunePath: string;
+  } | null>(null);
   // Paths currently being *prefetched* into the preview cache (adjacent gallery
   // images streamed ahead of a ←/→ step). Lets the download handlers buffer
   // their bytes without painting the modal; cleared as each stream ends.
@@ -386,6 +396,8 @@ export function SshSession({
     onRename,
     onCopy,
     onMove,
+    onDeletePath,
+    onMovePath,
     onChmod,
   } = useFileActions({ cwd, entries, send, setDialog });
 
@@ -451,6 +463,7 @@ export function SshSession({
     openPreviewFile,
     loadPreviewOriginal,
     stepPreview,
+    pruneAndStep,
     closeSubtitleTrack,
   } = usePreviewGallery({
     send,
@@ -698,11 +711,29 @@ export function SshSession({
               delete editorSaveTextRef.current[msg.path];
             }
           }
+          // A delete/move started from the preview modal is confirmed: now (and
+          // only now) prune the file from the open gallery, stepping to the next
+          // sibling or closing the modal. Matched on op + the acked path.
+          {
+            const pending = pendingPreviewMutationRef.current;
+            if (
+              pending &&
+              pending.op === msg.op &&
+              pending.ackPath === msg.path
+            ) {
+              pendingPreviewMutationRef.current = null;
+              pruneAndStep(pending.prunePath);
+            }
+          }
           listDir(cwdRef.current);
           break;
 
         case "error":
           if (msg.scope === "sftp") {
+            // A preview-initiated delete/move that failed: drop the pending
+            // mutation so a later unrelated ack can't prune the wrong file. The
+            // modal stays on the file (a toast surfaces the error below).
+            pendingPreviewMutationRef.current = null;
             // SFTP errors only happen while connected, where the overlay's
             // status text is hidden — a toast is the only visible channel.
             // Clear any in-flight spinners so a failed list/save doesn't hang.
@@ -751,6 +782,7 @@ export function SshSession({
       clearPreviewCache,
       handleTransferMessage,
       handleSearchResult,
+      pruneAndStep,
       reconnect,
     ],
   );
@@ -1642,6 +1674,38 @@ export function SshSession({
                       }
                     : undefined
                 }
+                onDelete={() =>
+                  onDeletePath(preview.path, false, preview.name, () => {
+                    pendingPreviewMutationRef.current = {
+                      op: "rm",
+                      ackPath: preview.path,
+                      prunePath: preview.path,
+                    };
+                  })
+                }
+                onMove={() =>
+                  onMovePath(preview.path, preview.name, (toPath) => {
+                    pendingPreviewMutationRef.current = {
+                      op: "rename",
+                      ackPath: toPath,
+                      prunePath: preview.path,
+                    };
+                  })
+                }
+                info={(() => {
+                  // Metadata for the info panel, from the current listing entry
+                  // (absent for a search hit outside `cwd`, which is fine).
+                  const entry = entries.find(
+                    (e) => joinPath(cwd, e.name) === preview.path,
+                  );
+                  return entry
+                    ? {
+                        size: entry.size,
+                        mtime: entry.mtime,
+                        mode: entry.mode,
+                      }
+                    : undefined;
+                })()}
                 onDownload={() =>
                   // Reuse the held bytes only when they're the *original*; an
                   // optimized (downscaled WebP) preview — or a stream-only

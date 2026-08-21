@@ -113,6 +113,46 @@ describe("useFileActions", () => {
     });
   });
 
+  it("deletes an absolute path (preview modal) and fires onConfirmed", () => {
+    const { actions, send, lastDialog } = setup();
+    const onConfirmed = vi.fn();
+    // A search hit outside cwd — the path is used verbatim, not re-joined.
+    actions.onDeletePath("/var/log/syslog", false, "syslog", onConfirmed);
+    const d = lastDialog();
+    expect(d.danger).toBe(true);
+    d.onConfirm("");
+    expect(send).toHaveBeenCalledWith({
+      t: "sftp-rm",
+      path: "/var/log/syslog",
+      dir: false,
+    });
+    expect(onConfirmed).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves/renames an absolute path via one destination input", () => {
+    const { actions, send, lastDialog } = setup();
+    const onConfirmed = vi.fn();
+    actions.onMovePath("/home/me/a.txt", "a.txt", onConfirmed);
+    const d = lastDialog();
+    expect(d.input?.initialValue).toBe("/home/me/a.txt");
+    // Empty and unchanged destinations are rejected.
+    expect(d.validate?.("  ")).toBeTruthy();
+    expect(d.validate?.("/home/me/a.txt")).toBeTruthy();
+    expect(d.validate?.("/home/me/b.txt")).toBeNull();
+    // Same path is a no-op (no send, no callback).
+    d.onConfirm("/home/me/a.txt");
+    expect(send).not.toHaveBeenCalled();
+    expect(onConfirmed).not.toHaveBeenCalled();
+    // A real move to another folder.
+    d.onConfirm("/home/me/logs/a.txt");
+    expect(send).toHaveBeenCalledWith({
+      t: "sftp-rename",
+      from: "/home/me/a.txt",
+      to: "/home/me/logs/a.txt",
+    });
+    expect(onConfirmed).toHaveBeenCalledWith("/home/me/logs/a.txt");
+  });
+
   it("moves an entry into a folder, guarding no-ops and self-moves", () => {
     const { actions, send } = setup();
     // No-op: already in the target directory.

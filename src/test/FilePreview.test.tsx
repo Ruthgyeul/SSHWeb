@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import { FilePreview, type PreviewMode } from "@/components/ssh/FilePreview";
 
@@ -19,6 +19,9 @@ function renderPreview(overrides: {
   loading?: boolean;
   index?: number;
   count?: number;
+  onDelete?: () => void;
+  onMove?: () => void;
+  info?: { size?: number; mtime?: number; mode?: number };
 }) {
   const props = {
     name: "file.txt",
@@ -106,5 +109,54 @@ describe("FilePreview rendering by kind", () => {
   it("always offers a Close control", () => {
     renderPreview({ kind: "text", text: "hi" });
     expect(screen.getByRole("button", { name: /close/i })).toBeInTheDocument();
+  });
+});
+
+describe("FilePreview file actions", () => {
+  it("fires the mv and delete callbacks from the inline toolbar", () => {
+    const onMove = vi.fn();
+    const onDelete = vi.fn();
+    renderPreview({
+      kind: "image",
+      name: "photo.jpg",
+      src: "blob:x",
+      onMove,
+      onDelete,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "mv" }));
+    expect(onMove).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggles a file-info panel with the metadata", () => {
+    renderPreview({
+      kind: "image",
+      name: "photo.jpg",
+      path: "/home/user/photo.jpg",
+      src: "blob:x",
+      info: { size: 2048, mtime: 0, mode: 0o644 },
+    });
+    // Hidden until toggled on.
+    expect(screen.queryByText("Perms")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Info" }));
+    expect(screen.getByText("Path")).toBeInTheDocument();
+    expect(screen.getByText("2 KB")).toBeInTheDocument();
+    expect(screen.getByText("644")).toBeInTheDocument();
+  });
+
+  it("also exposes the actions through the overflow menu", () => {
+    const onDelete = vi.fn();
+    renderPreview({
+      kind: "image",
+      name: "photo.jpg",
+      src: "blob:x",
+      onDelete,
+    });
+    // The menu items only exist once the ⋯ button is pressed.
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /more actions/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    expect(onDelete).toHaveBeenCalledTimes(1);
   });
 });
