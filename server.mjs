@@ -24,6 +24,7 @@ import { parse } from "node:url";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { spawn } from "node:child_process";
 import { writeFile, unlink } from "node:fs/promises";
+import { lookup } from "node:dns/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import next from "next";
@@ -1670,6 +1671,7 @@ wss.on("connection", (ws, req) => {
   let streamToken = null; // capability token for /api/preview (this session)
   let sessionScope = ""; // `user@host` — the thumbnail-cache identity for this login
   let counted = false; // whether this connection is included in activeSessions
+  let connecting = false; // a connect is being set up (guards the async SSRF DNS check)
   let closed = false;
   // Pending handshake callbacks that wait on a round-trip to the browser.
   let pendingHostVerify = null; // (accept: boolean) => void
@@ -2256,7 +2258,7 @@ wss.on("connection", (ws, req) => {
   }
 
   function handleConnect(msg) {
-    if (ssh) return; // already connecting/connected — ignore duplicates
+    if (ssh || connecting) return; // already connecting/connected — ignore duplicates
     const host = String(msg.host || "").trim();
     const targetPort = Number(msg.port) || 22;
     const username = String(msg.username || "").trim();
@@ -2270,6 +2272,7 @@ wss.on("connection", (ws, req) => {
       sendError(`Host not allowed by this server: ${host}`, "auth");
       return ws.close();
     }
+    // Literal-IP / `localhost` SSRF guard: a fast, synchronous first pass.
     if (BLOCK_PRIVATE_HOSTS && isBlockedPrivateHost(host)) {
       logEvent("reject", { ip: clientIp, host, reason: "host-private" });
       sendError("Connections to private/internal hosts are blocked.", "auth");
@@ -2286,6 +2289,52 @@ wss.on("connection", (ws, req) => {
       return ws.close();
     }
 
+    connecting = true;
+    // When the SSRF guard is on, the literal check above only catches IP
+    // literals and `localhost` — a *hostname* that resolves to a private/internal
+    // address (e.g. an attacker's DNS record pointing at 169.254.169.254 or an
+    // intranet box) would otherwise slip through and turn the relay into a
+    // metadata/intranet probe. Resolve the name and reject if *any* resolved
+    // address is private before we dial. `lookup({ all: true })` returns every
+    // A/AAAA record (and echoes an IP literal without network I/O).
+    if (BLOCK_PRIVATE_HOSTS && !isBlockedPrivateHost(host)) {
+      lookup(host, { all: true }).then(
+        (addrs) => {
+          if (closed) return;
+          const blocked = addrs.find((a) => isBlockedPrivateHost(a.address));
+          if (blocked) {
+            connecting = false;
+            logEvent("reject", {
+              ip: clientIp,
+              host,
+              reason: "host-private-resolved",
+            });
+            sendError(
+              "Connections to private/internal hosts are blocked.",
+              "auth",
+            );
+            return ws.close();
+          }
+          startConnection(msg, host, targetPort, username);
+        },
+        () => {
+          if (closed) return;
+          // Resolution failed — refuse rather than hand an unresolved name to
+          // ssh2 (whose own resolver would then bypass this guard entirely).
+          connecting = false;
+          logEvent("reject", { ip: clientIp, host, reason: "dns-failed" });
+          sendError(`Could not resolve host: ${host}`, "auth");
+          return ws.close();
+        },
+      );
+      return;
+    }
+    startConnection(msg, host, targetPort, username);
+  }
+
+  function startConnection(msg, host, targetPort, username) {
+    if (ssh || closed) return;
+    connecting = false;
     activeSessions += 1;
     counted = true;
     // The thumbnail-cache identity for this login (see the server-side cache).

@@ -29,9 +29,14 @@ function esc(s: string): string {
  * Return a safe `href` for a link target, or `null` to render it as plain text.
  * Allows http(s)/mailto and relative/anchor links; rejects any other scheme
  * (notably `javascript:` and `data:`). Input is already HTML-escaped.
+ *
+ * ASCII control characters (incl. NUL/TAB/newline) are stripped first: browsers
+ * ignore them when parsing a URL's scheme, so `java\x00script:` would run as
+ * `javascript:` — stripping them means our scheme check sees the same string the
+ * browser will, closing that bypass.
  */
 function safeUrl(url: string): string | null {
-  const u = url.trim();
+  const u = url.replace(/[\x00-\x1f\x7f]/g, "").trim();
   if (/^(https?:|mailto:)/i.test(u)) return u;
   if (/^(#|\/|\.\/|\.\.\/)/.test(u)) return u; // anchor / relative
   if (/^[a-z][a-z0-9+.-]*:/i.test(u)) return null; // some other scheme → drop

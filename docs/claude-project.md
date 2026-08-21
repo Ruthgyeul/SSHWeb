@@ -149,9 +149,13 @@ WebSocket to a real `ssh2` connection. Key facts an agent must know:
   WebSocket hijacking. An opt-in SSRF guard (`SSH_BLOCK_PRIVATE_HOSTS`) refuses to
   dial private/internal targets — loopback, RFC1918 ranges, link-local (incl. the
   `169.254.169.254` cloud-metadata endpoint), IPv6 ULA/link-local, and
-  `localhost` — so the relay can't be turned into a metadata/intranet probe (IP
-  literals + `localhost` only; a hostname that resolves to a private IP isn't
-  caught). The security-critical pure logic (origin check, rate
+  `localhost` — so the relay can't be turned into a metadata/intranet probe. A
+  fast synchronous first pass classifies IP literals + `localhost`, and because a
+  *hostname* could still resolve to a private address, the bridge also resolves
+  the name at dial time (`dns.lookup`, all records) and refuses the connection if
+  **any** resolved address is private (an unresolvable name is refused too, so it
+  can't fall through to ssh2's own resolver and bypass the guard). The
+  security-critical pure logic (origin check, rate
   limiter, IP resolution, upload accounting + chunk-order check, idle expiry,
   access-token match, cookie parsing, private-host SSRF classification,
   WebSocket frame-size
