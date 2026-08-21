@@ -42,6 +42,10 @@ describe("renderMarkdown", () => {
     expect(renderMarkdown("[x](javascript:alert)")).toBe("<p>x</p>");
     // data: URLs are likewise refused.
     expect(renderMarkdown("[y](data:text/html,hi)")).toBe("<p>y</p>");
+    // Control characters embedded in the scheme (which browsers ignore when
+    // parsing the URL) can't smuggle a `javascript:` href past the check.
+    expect(renderMarkdown("[z](java\x00script:alert)")).toBe("<p>z</p>");
+    expect(renderMarkdown("[z](\x01javascript:alert)")).toBe("<p>z</p>");
   });
 
   it("shows image alt text (remote bytes can't be loaded)", () => {
