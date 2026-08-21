@@ -98,7 +98,7 @@ export function FileEntryActions({
         type="button"
         onClick={() => onRename(entry)}
         className={cn(actionBtn, "hover:text-term-text")}
-        title="Rename"
+        title="Move / rename"
       >
         mv
       </button>

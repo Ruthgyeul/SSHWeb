@@ -92,6 +92,22 @@ describe("useFileActions", () => {
     });
   });
 
+  it("row mv is unified with the preview: a full path input that also moves", () => {
+    const { actions, send, lastDialog } = setup();
+    actions.onRename(file);
+    const d = lastDialog();
+    // The dialog now pre-fills the absolute path (rename + move in one input),
+    // matching the preview modal's mv.
+    expect(d.input?.initialValue).toBe("/home/me/a.txt");
+    // Editing the folder moves the file out of cwd.
+    d.onConfirm("/home/me/archive/a.txt");
+    expect(send).toHaveBeenCalledWith({
+      t: "sftp-rename",
+      from: "/home/me/a.txt",
+      to: "/home/me/archive/a.txt",
+    });
+  });
+
   it("suggests a non-colliding duplicate name", () => {
     const { actions, lastDialog } = setup([file]);
     actions.onCopy(file);

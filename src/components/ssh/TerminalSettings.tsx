@@ -130,7 +130,7 @@ export function TerminalSettings({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1.5 w-64 rounded-lg border border-term-border bg-term-panel p-3 shadow-xl">
+        <div className="absolute right-0 top-full z-50 mt-1.5 w-64 rounded-lg border border-term-border bg-term-panel p-3 shadow-xl">
           {/* Theme */}
           <div>
             <span className="mb-1.5 block text-xs font-medium text-term-muted">

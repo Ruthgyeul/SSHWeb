@@ -103,24 +103,12 @@ export function useFileActions({
       });
     };
 
-    const onRename = (entry: FileEntry) => {
-      setDialog({
-        title: `Rename “${entry.name}”`,
-        input: { label: "New name", initialValue: entry.name },
-        confirmLabel: "Rename",
-        validate: (v) => (v.trim() ? null : "Please enter a name."),
-        onConfirm: (v) => {
-          const next = v.trim();
-          if (next && next !== entry.name) {
-            send({
-              t: "sftp-rename",
-              from: joinPath(cwd, entry.name),
-              to: joinPath(cwd, next),
-            });
-          }
-        },
-      });
-    };
+    // The file-browser row "mv" action: the same single destination-path dialog
+    // as the preview modal, so renaming (edit the final segment) and moving (edit
+    // the folder) are one unified action in both places. Delegates to
+    // `onMovePath` with the entry's absolute path.
+    const onRename = (entry: FileEntry) =>
+      onMovePath(joinPath(cwd, entry.name), entry.name);
 
     // Duplicate a file/directory in place: pre-fill a non-colliding "… copy"
     // name and copy on confirm. The server streams the copy (original only read).
