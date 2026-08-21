@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   formatSize,
   modeToOctal,
@@ -23,10 +30,15 @@ import { PreviewFilmstrip } from "./preview/PreviewFilmstrip";
 import { FileIcon, type FileIconKind } from "./FileIcon";
 import {
   DownloadIcon,
+  InfoIcon,
+  MoveIcon,
   PencilIcon,
+  RefreshIcon,
   RotateIcon,
   SearchIcon,
+  TrashIcon,
   WarningIcon,
+  XMarkIcon,
 } from "./icons";
 
 /** What the preview modal can show: a content kind, a read-only `text` view
@@ -406,15 +418,20 @@ export function FilePreview({
 
   const toolBtn =
     "rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text disabled:opacity-40";
+  // Icon-only header button (aria-label / title carry the meaning) so the
+  // toolbar stays compact; `gap-1` still lets the overflow-menu variant pair the
+  // icon with a text label.
   const headerBtn =
-    "flex items-center gap-1 rounded border border-term-border px-3 py-1 text-xs text-term-muted hover:text-term-text";
+    "flex items-center gap-1 rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text";
 
-  // The mv / delete / info actions, rendered inline on wide screens and folded
-  // into the ⋯ overflow menu on narrow ones (both from this single list, so the
-  // two never drift). `info` is always present; mv/delete only when wired.
+  // The mv / delete / info actions, rendered inline (icon-only) on wide screens
+  // and folded into the ⋯ overflow menu (icon + label) on narrow ones — both
+  // from this single list, so the two never drift. `info` is always present;
+  // mv/delete only when wired.
   const actions: {
     key: string;
     label: string;
+    icon: ReactNode;
     title: string;
     onClick: () => void;
     danger?: boolean;
@@ -424,7 +441,8 @@ export function FilePreview({
       ? [
           {
             key: "move",
-            label: "mv",
+            label: "Move / rename",
+            icon: <MoveIcon className="h-3.5 w-3.5" />,
             title: "Move / rename (F2)",
             onClick: onMove,
           },
@@ -435,6 +453,7 @@ export function FilePreview({
           {
             key: "delete",
             label: "Delete",
+            icon: <TrashIcon className="h-3.5 w-3.5" />,
             title: "Delete (Del)",
             onClick: onDelete,
             danger: true,
@@ -443,7 +462,8 @@ export function FilePreview({
       : []),
     {
       key: "info",
-      label: "Info",
+      label: "File info",
+      icon: <InfoIcon className="h-3.5 w-3.5" />,
       title: "File info",
       onClick: () => setShowInfo((v) => !v),
       active: showInfo,
@@ -643,13 +663,14 @@ export function FilePreview({
             <button
               type="button"
               onClick={resetView}
-              className={toolBtn}
+              className={cn(toolBtn, "inline-flex items-center")}
               aria-label="Reset view"
+              title="Reset view"
               disabled={
                 zoom === 1 && rotation === 0 && offset.x === 0 && offset.y === 0
               }
             >
-              Reset
+              <RefreshIcon className="h-3.5 w-3.5" />
             </button>
           </div>
         )}
@@ -678,7 +699,7 @@ export function FilePreview({
             </button>
           </div>
         )}
-        {/* mv / delete / info: inline on ≥sm, overflow ⋯ menu below sm. */}
+        {/* mv / delete / info: icon-only inline on ≥sm, overflow ⋯ menu below sm. */}
         <div className="hidden items-center gap-1 sm:flex">
           {actions.map((a) => (
             <button
@@ -691,9 +712,10 @@ export function FilePreview({
                 a.active && "text-term-accent",
               )}
               title={a.title}
+              aria-label={a.title}
               aria-pressed={a.active}
             >
-              {a.label}
+              {a.icon}
             </button>
           ))}
         </div>
@@ -723,12 +745,12 @@ export function FilePreview({
                     setMenuOpen(false);
                   }}
                   className={cn(
-                    "px-3 py-2 text-left text-xs text-term-muted hover:bg-term-card hover:text-term-text",
+                    "flex items-center gap-2 px-3 py-2 text-left text-xs text-term-muted hover:bg-term-card hover:text-term-text",
                     a.danger && "hover:text-term-red",
                     a.active && "text-term-accent",
                   )}
                 >
-                  {a.label}
+                  {a.icon} {a.label}
                 </button>
               ))}
             </div>
@@ -740,23 +762,28 @@ export function FilePreview({
             onClick={onEdit}
             className={headerBtn}
             title="Edit this file"
+            aria-label="Edit this file"
           >
-            <PencilIcon className="h-3.5 w-3.5" /> Edit
+            <PencilIcon className="h-3.5 w-3.5" />
           </button>
         )}
         <button
           type="button"
           onClick={onDownload}
-          className="flex items-center gap-1.5 rounded border border-term-border px-3 py-1 text-xs text-term-muted hover:text-term-text"
+          className={headerBtn}
+          title="Download"
+          aria-label="Download"
         >
-          <DownloadIcon className="h-3.5 w-3.5" /> Download
+          <DownloadIcon className="h-3.5 w-3.5" />
         </button>
         <button
           type="button"
           onClick={onClose}
-          className="rounded border border-term-border px-3 py-1 text-xs text-term-muted hover:text-term-text"
+          className={headerBtn}
+          title="Close"
+          aria-label="Close"
         >
-          Close
+          <XMarkIcon className="h-3.5 w-3.5" />
         </button>
       </div>
       {showInfo && (

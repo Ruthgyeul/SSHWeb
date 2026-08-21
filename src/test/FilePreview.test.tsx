@@ -123,9 +123,10 @@ describe("FilePreview file actions", () => {
       onMove,
       onDelete,
     });
-    fireEvent.click(screen.getByRole("button", { name: "mv" }));
+    // Toolbar buttons are icon-only; their accessible name is the aria-label.
+    fireEvent.click(screen.getByRole("button", { name: "Move / rename (F2)" }));
     expect(onMove).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete (Del)" }));
     expect(onDelete).toHaveBeenCalledTimes(1);
   });
 
@@ -139,7 +140,7 @@ describe("FilePreview file actions", () => {
     });
     // Hidden until toggled on.
     expect(screen.queryByText("Perms")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Info" }));
+    fireEvent.click(screen.getByRole("button", { name: "File info" }));
     expect(screen.getByText("Path")).toBeInTheDocument();
     expect(screen.getByText("2 KB")).toBeInTheDocument();
     expect(screen.getByText("644")).toBeInTheDocument();
