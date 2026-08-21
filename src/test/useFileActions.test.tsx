@@ -132,25 +132,31 @@ describe("useFileActions", () => {
   it("moves/renames an absolute path via one destination input", () => {
     const { actions, send, lastDialog } = setup();
     const onConfirmed = vi.fn();
-    actions.onMovePath("/home/me/a.txt", "a.txt", onConfirmed);
+    // A file nested below cwd, so a bare name must resolve against its parent.
+    actions.onMovePath("/home/me/photos/a.jpg", "a.jpg", onConfirmed);
     const d = lastDialog();
-    expect(d.input?.initialValue).toBe("/home/me/a.txt");
-    // Empty and unchanged destinations are rejected.
+    expect(d.input?.initialValue).toBe("/home/me/photos/a.jpg");
+    // Empty is rejected; a bare name equal to the current one resolves back to
+    // the same path and is rejected; a different bare name is allowed.
     expect(d.validate?.("  ")).toBeTruthy();
-    expect(d.validate?.("/home/me/a.txt")).toBeTruthy();
-    expect(d.validate?.("/home/me/b.txt")).toBeNull();
-    // Same path is a no-op (no send, no callback).
-    d.onConfirm("/home/me/a.txt");
-    expect(send).not.toHaveBeenCalled();
-    expect(onConfirmed).not.toHaveBeenCalled();
-    // A real move to another folder.
-    d.onConfirm("/home/me/logs/a.txt");
+    expect(d.validate?.("a.jpg")).toBeTruthy();
+    expect(d.validate?.("b.jpg")).toBeNull();
+    // A bare filename renames IN the source folder (not the SFTP home dir).
+    d.onConfirm("b.jpg");
     expect(send).toHaveBeenCalledWith({
       t: "sftp-rename",
-      from: "/home/me/a.txt",
-      to: "/home/me/logs/a.txt",
+      from: "/home/me/photos/a.jpg",
+      to: "/home/me/photos/b.jpg",
     });
-    expect(onConfirmed).toHaveBeenCalledWith("/home/me/logs/a.txt");
+    expect(onConfirmed).toHaveBeenLastCalledWith("/home/me/photos/b.jpg");
+    // An absolute destination moves to another folder verbatim.
+    d.onConfirm("/home/me/archive/a.jpg");
+    expect(send).toHaveBeenCalledWith({
+      t: "sftp-rename",
+      from: "/home/me/photos/a.jpg",
+      to: "/home/me/archive/a.jpg",
+    });
+    expect(onConfirmed).toHaveBeenLastCalledWith("/home/me/archive/a.jpg");
   });
 
   it("moves an entry into a folder, guarding no-ops and self-moves", () => {

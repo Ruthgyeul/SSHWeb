@@ -723,6 +723,20 @@ export function SshSession({
             ) {
               pendingPreviewMutationRef.current = null;
               pruneAndStep(pending.prunePath);
+              // If the preview was opened from a recursive-search listing, the
+              // browser keeps rendering `search.results` (not the cwd listing),
+              // so drop the removed source path there too — otherwise a deleted /
+              // moved hit stays visible and reopening it errors.
+              setSearch((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      results: prev.results.filter(
+                        (r) => r.path !== pending.prunePath,
+                      ),
+                    }
+                  : prev,
+              );
             }
           }
           listDir(cwdRef.current);
@@ -730,10 +744,14 @@ export function SshSession({
 
         case "error":
           if (msg.scope === "sftp") {
-            // A preview-initiated delete/move that failed: drop the pending
-            // mutation so a later unrelated ack can't prune the wrong file. The
-            // modal stays on the file (a toast surfaces the error below).
-            pendingPreviewMutationRef.current = null;
+            // NB: an sftp `error` frame carries no path/op, so we can't tell
+            // whether it belongs to a preview delete/move in flight. We
+            // deliberately do NOT clear `pendingPreviewMutationRef` here — an
+            // unrelated concurrent failure (a background upload/download) must
+            // not drop a still-valid pending mutation and make its later
+            // `sftp-ok` a no-op. The pending ref is matched on exact op + acked
+            // path (so a stale one can't prune the wrong file) and is cleared
+            // when the modal closes (see the FilePreview onClose/onCancel).
             // SFTP errors only happen while connected, where the overlay's
             // status text is hidden — a toast is the only visible channel.
             // Clear any in-flight spinners so a failed list/save doesn't hang.
@@ -1719,6 +1737,7 @@ export function SshSession({
                   // Abort the in-flight preview stream and close the modal.
                   send({ t: "sftp-download-cancel", path: preview.path });
                   delete previewBuffersRef.current[preview.path];
+                  pendingPreviewMutationRef.current = null;
                   closeSubtitleTrack();
                   setPreview(null);
                 }}
@@ -1729,6 +1748,10 @@ export function SshSession({
                     send({ t: "sftp-download-cancel", path: preview.path });
                     delete previewBuffersRef.current[preview.path];
                   }
+                  // Bound the pending-mutation lifetime: a delete/move whose ack
+                  // never arrived (it failed) must not linger and prune a later
+                  // gallery.
+                  pendingPreviewMutationRef.current = null;
                   closeSubtitleTrack();
                   setPreview(null);
                 }}

@@ -77,8 +77,11 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
         desc: "Sticky one-shot modifier for the next key",
       },
       { keys: ["Fn"], desc: "Toggle the F1–F12 row" },
-      { keys: ["Swipe ←/→"], desc: "Previous / next file in the preview" },
-      { keys: ["Swipe ↓"], desc: "Close the preview" },
+      {
+        keys: ["Swipe ←/→"],
+        desc: "Previous / next in an image/video/audio preview",
+      },
+      { keys: ["Swipe ↓"], desc: "Close an image/video/audio preview" },
     ],
   },
 ];

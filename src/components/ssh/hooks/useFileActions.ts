@@ -192,6 +192,12 @@ export function useFileActions({
       name: string,
       onConfirmed?: (toPath: string) => void,
     ) => {
+      // Resolve the entered destination: an absolute path is used as-is, a bare
+      // value (e.g. just a new filename) is resolved against the source's parent
+      // — so typing "b.jpg" renames in place instead of moving the file to the
+      // SFTP session's default directory.
+      const resolve = (raw: string) =>
+        raw.startsWith("/") ? raw : joinPath(parentPath(fromPath), raw);
       setDialog({
         title: `Move / rename “${name}”`,
         message: "Edit the name to rename, or the folder to move it.",
@@ -200,11 +206,13 @@ export function useFileActions({
         validate: (v) => {
           const next = v.trim();
           if (!next) return "Please enter a destination path.";
-          if (next === fromPath) return "Enter a different name or folder.";
+          if (resolve(next) === fromPath)
+            return "Enter a different name or folder.";
           return null;
         },
         onConfirm: (v) => {
-          const to = v.trim();
+          const raw = v.trim();
+          const to = resolve(raw);
           if (to && to !== fromPath) {
             send({ t: "sftp-rename", from: fromPath, to });
             onConfirmed?.(to);
