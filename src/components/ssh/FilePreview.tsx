@@ -275,21 +275,8 @@ export function FilePreview({
   }, [path]);
 
   // File-info panel toggle (path/size/modified/perms/dimensions) and the
-  // narrow-screen overflow menu that holds the mv/delete/info actions.
+  // File-info panel toggle (path/size/modified/perms/dimensions).
   const [showInfo, setShowInfo] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  // Close the overflow menu on any outside pointer press.
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onDown = (e: PointerEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", onDown);
-    return () => window.removeEventListener("pointerdown", onDown);
-  }, [menuOpen]);
 
   const isText = kind === "text";
   // Text-preview view options: soft-wrap long lines, and an in-modal find bar
@@ -418,19 +405,15 @@ export function FilePreview({
 
   const toolBtn =
     "rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text disabled:opacity-40";
-  // Icon-only header button (aria-label / title carry the meaning) so the
-  // toolbar stays compact; `gap-1` still lets the overflow-menu variant pair the
-  // icon with a text label.
+  // Icon-only header button — the aria-label / title carry the meaning so the
+  // toolbar stays compact.
   const headerBtn =
     "flex items-center gap-1 rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text";
 
-  // The mv / delete / info actions, rendered inline (icon-only) on wide screens
-  // and folded into the ⋯ overflow menu (icon + label) on narrow ones — both
-  // from this single list, so the two never drift. `info` is always present;
-  // mv/delete only when wired.
+  // The mv / delete / info actions, rendered as compact inline icon buttons.
+  // `info` is always present; mv/delete only when wired.
   const actions: {
     key: string;
-    label: string;
     icon: ReactNode;
     title: string;
     onClick: () => void;
@@ -441,7 +424,6 @@ export function FilePreview({
       ? [
           {
             key: "move",
-            label: "Move / rename",
             icon: <MoveIcon className="h-3.5 w-3.5" />,
             title: "Move / rename (F2)",
             onClick: onMove,
@@ -452,7 +434,6 @@ export function FilePreview({
       ? [
           {
             key: "delete",
-            label: "Delete",
             icon: <TrashIcon className="h-3.5 w-3.5" />,
             title: "Delete (Del)",
             onClick: onDelete,
@@ -462,7 +443,6 @@ export function FilePreview({
       : []),
     {
       key: "info",
-      label: "File info",
       icon: <InfoIcon className="h-3.5 w-3.5" />,
       title: "File info",
       onClick: () => setShowInfo((v) => !v),
@@ -699,8 +679,10 @@ export function FilePreview({
             </button>
           </div>
         )}
-        {/* mv / delete / info: icon-only inline on ≥sm, overflow ⋯ menu below sm. */}
-        <div className="hidden items-center gap-1 sm:flex">
+        {/* mv / delete / info: compact icon buttons, always inline. The
+            toolbar is flex-wrap, so on a narrow screen these wrap to the next
+            row rather than needing an overflow menu (which clipped on mobile). */}
+        <div className="flex items-center gap-1">
           {actions.map((a) => (
             <button
               key={a.key}
@@ -718,43 +700,6 @@ export function FilePreview({
               {a.icon}
             </button>
           ))}
-        </div>
-        <div className="relative sm:hidden" ref={menuRef}>
-          <button
-            type="button"
-            onClick={() => setMenuOpen((o) => !o)}
-            className={headerBtn}
-            aria-label="More actions"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-          >
-            ⋯
-          </button>
-          {menuOpen && (
-            <div
-              role="menu"
-              className="absolute right-0 top-full z-40 mt-1 flex min-w-32 max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded border border-term-border bg-term-panel shadow-lg"
-            >
-              {actions.map((a) => (
-                <button
-                  key={a.key}
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    a.onClick();
-                    setMenuOpen(false);
-                  }}
-                  className={cn(
-                    "flex items-center gap-2 px-3 py-2 text-left text-xs text-term-muted hover:bg-term-card hover:text-term-text",
-                    a.danger && "hover:text-term-red",
-                    a.active && "text-term-accent",
-                  )}
-                >
-                  {a.icon} {a.label}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
         {onEdit && (
           <button

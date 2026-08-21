@@ -146,18 +146,25 @@ describe("FilePreview file actions", () => {
     expect(screen.getByText("644")).toBeInTheDocument();
   });
 
-  it("also exposes the actions through the overflow menu", () => {
-    const onDelete = vi.fn();
+  it("renders the actions inline (no overflow menu)", () => {
     renderPreview({
       kind: "image",
       name: "photo.jpg",
       src: "blob:x",
-      onDelete,
+      onMove: vi.fn(),
+      onDelete: vi.fn(),
     });
-    // The menu items only exist once the ⋯ button is pressed.
-    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /more actions/i }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
-    expect(onDelete).toHaveBeenCalledTimes(1);
+    // Compact icon buttons are always inline now — there is no ⋯ menu.
+    expect(screen.queryByRole("button", { name: /more actions/i })).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Move / rename (F2)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Delete (Del)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "File info" }),
+    ).toBeInTheDocument();
   });
 });
