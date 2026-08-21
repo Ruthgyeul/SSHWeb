@@ -183,3 +183,36 @@ export function DownloadIcon({ className }: { className?: string }) {
     </Svg>
   );
 }
+
+/** Trash can — delete. */
+export function TrashIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="M3 6h18" />
+      <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6M14 11v6" />
+    </Svg>
+  );
+}
+
+/** Circled "i" — info / details. */
+export function InfoIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5" />
+      <path d="M12 8h.01" />
+    </Svg>
+  );
+}
+
+/** Four-way arrows — move / rename (mv). */
+export function MoveIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="M12 3v18M3 12h18" />
+      <path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3" />
+    </Svg>
+  );
+}
