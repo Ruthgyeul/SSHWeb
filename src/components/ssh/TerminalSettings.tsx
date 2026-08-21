@@ -130,7 +130,20 @@ export function TerminalSettings({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-1.5 w-64 rounded-lg border border-term-border bg-term-panel p-3 shadow-xl">
+        <div
+          className={cn(
+            "z-50 rounded-lg border border-term-border bg-term-panel p-3 shadow-xl",
+            // Mobile: a viewport-anchored bottom sheet. The session container is
+            // `overflow-hidden` and the gear isn't at the far right once the
+            // header wraps, so an `absolute right-0 w-64` dropdown would spill
+            // off (and get clipped) on a narrow screen. `fixed` escapes the
+            // clipping container; centered + inset keeps it fully on-screen and
+            // it scrolls if the content is tall.
+            "fixed inset-x-3 bottom-3 mx-auto max-h-[70vh] w-auto max-w-sm overflow-y-auto",
+            // ≥sm: the original dropdown anchored under the gear button.
+            "sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:mx-0 sm:mt-1.5 sm:max-h-none sm:w-64 sm:max-w-none sm:overflow-visible",
+          )}
+        >
           {/* Theme */}
           <div>
             <span className="mb-1.5 block text-xs font-medium text-term-muted">
