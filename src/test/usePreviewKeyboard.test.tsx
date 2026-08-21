@@ -159,6 +159,38 @@ describe("usePreviewKeyboard", () => {
     expect(opts.setSpeed).toHaveBeenCalledWith(1.25);
   });
 
+  it("Delete triggers onDelete and F2 triggers onMove, on any kind", () => {
+    const onDelete = vi.fn();
+    const onMove = vi.fn();
+    const opts = baseOpts({
+      kind: "video",
+      isImage: false,
+      videoRef: { current: fakeVideo() as unknown as HTMLVideoElement },
+      onDelete,
+      onMove,
+    });
+    mount(opts);
+    const del = press("Delete");
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(del.defaultPrevented).toBe(true);
+    const f2 = press("F2");
+    expect(onMove).toHaveBeenCalledTimes(1);
+    expect(f2.defaultPrevented).toBe(true);
+  });
+
+  it("does not fire Delete/F2 while typing in an input", () => {
+    const onDelete = vi.fn();
+    const onMove = vi.fn();
+    mount(baseOpts({ onDelete, onMove }));
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    press("Delete", {}, input);
+    press("F2", {}, input);
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(onMove).not.toHaveBeenCalled();
+    input.remove();
+  });
+
   it("drives image transforms: zoom, reset, rotate", () => {
     const opts = baseOpts();
     mount(opts);

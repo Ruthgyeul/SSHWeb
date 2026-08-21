@@ -669,6 +669,37 @@ export function usePreviewGallery(deps: PreviewGalleryDeps) {
     [send, openPreviewFile, previewRef, previewBuffersRef],
   );
 
+  // Drop a file from the open gallery after it was deleted or moved away
+  // (called once the bridge acks the op, so a failed op never skips a file).
+  // If the removed file is the one on screen, advance to the next remaining
+  // sibling — or close the modal when it was the last one. Removing a
+  // background sibling just prunes the snapshot so the counter/filmstrip stay
+  // accurate.
+  const pruneAndStep = useCallback(
+    (path: string) => {
+      const cur = previewRef.current;
+      if (!cur) return;
+      const sibs = (cur.siblings ?? []).filter((s) => s.path !== path);
+      if (cur.path !== path) {
+        setPreview({ ...cur, siblings: sibs });
+        return;
+      }
+      // Stop an in-flight stream for the removed file before leaving it.
+      if (cur.loading) {
+        send({ t: "sftp-download-cancel", path: cur.path });
+        delete previewBuffersRef.current[cur.path];
+      }
+      if (sibs.length === 0) {
+        setPreview(null);
+        return;
+      }
+      const idx = (cur.siblings ?? []).findIndex((s) => s.path === path);
+      const target = sibs[Math.min(Math.max(idx, 0), sibs.length - 1)];
+      openPreviewFile(target.path, target.name, sibs);
+    },
+    [send, openPreviewFile, previewRef, previewBuffersRef, setPreview],
+  );
+
   return {
     prefetchNeighbors,
     handleTransferMessage,
@@ -677,5 +708,6 @@ export function usePreviewGallery(deps: PreviewGalleryDeps) {
     openPreviewFile,
     loadPreviewOriginal,
     stepPreview,
+    pruneAndStep,
   };
 }

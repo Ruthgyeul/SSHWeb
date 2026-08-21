@@ -113,6 +113,52 @@ describe("useFileActions", () => {
     });
   });
 
+  it("deletes an absolute path (preview modal) and fires onConfirmed", () => {
+    const { actions, send, lastDialog } = setup();
+    const onConfirmed = vi.fn();
+    // A search hit outside cwd — the path is used verbatim, not re-joined.
+    actions.onDeletePath("/var/log/syslog", false, "syslog", onConfirmed);
+    const d = lastDialog();
+    expect(d.danger).toBe(true);
+    d.onConfirm("");
+    expect(send).toHaveBeenCalledWith({
+      t: "sftp-rm",
+      path: "/var/log/syslog",
+      dir: false,
+    });
+    expect(onConfirmed).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves/renames an absolute path via one destination input", () => {
+    const { actions, send, lastDialog } = setup();
+    const onConfirmed = vi.fn();
+    // A file nested below cwd, so a bare name must resolve against its parent.
+    actions.onMovePath("/home/me/photos/a.jpg", "a.jpg", onConfirmed);
+    const d = lastDialog();
+    expect(d.input?.initialValue).toBe("/home/me/photos/a.jpg");
+    // Empty is rejected; a bare name equal to the current one resolves back to
+    // the same path and is rejected; a different bare name is allowed.
+    expect(d.validate?.("  ")).toBeTruthy();
+    expect(d.validate?.("a.jpg")).toBeTruthy();
+    expect(d.validate?.("b.jpg")).toBeNull();
+    // A bare filename renames IN the source folder (not the SFTP home dir).
+    d.onConfirm("b.jpg");
+    expect(send).toHaveBeenCalledWith({
+      t: "sftp-rename",
+      from: "/home/me/photos/a.jpg",
+      to: "/home/me/photos/b.jpg",
+    });
+    expect(onConfirmed).toHaveBeenLastCalledWith("/home/me/photos/b.jpg");
+    // An absolute destination moves to another folder verbatim.
+    d.onConfirm("/home/me/archive/a.jpg");
+    expect(send).toHaveBeenCalledWith({
+      t: "sftp-rename",
+      from: "/home/me/photos/a.jpg",
+      to: "/home/me/archive/a.jpg",
+    });
+    expect(onConfirmed).toHaveBeenLastCalledWith("/home/me/archive/a.jpg");
+  });
+
   it("moves an entry into a folder, guarding no-ops and self-moves", () => {
     const { actions, send } = setup();
     // No-op: already in the target directory.

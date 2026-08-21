@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PreviewContentKind } from "@/lib/sshProtocol";
+import {
+  formatSize,
+  modeToOctal,
+  type PreviewContentKind,
+} from "@/lib/sshProtocol";
 import { renderMarkdown } from "@/lib/markdown";
 import { highlightToHtml } from "@/lib/syntaxHighlight";
 import { cn } from "@/lib/utils";
@@ -44,6 +48,20 @@ const MODE_ICON_KIND: Record<PreviewMode, FileIconKind> = {
  * one this big can spike memory, so we surface a warning hint next to its dimensions
  * rather than silently risk a tab crash. 60 MP ≈ a 8000×7500 photo. */
 const LARGE_IMAGE_PIXELS = 60_000_000;
+
+/** Date + time for the info panel (locale-formatted), or `—` when unknown. */
+function formatMtimeFull(mtime?: number): string {
+  if (!mtime) return "—";
+  const d = new Date(mtime);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 /**
  * A read-only media preview modal for a remote file. The parent streams the file
@@ -93,6 +111,9 @@ export function FilePreview({
   onPrev,
   onNext,
   onEdit,
+  onDelete,
+  onMove,
+  info,
   onDownload,
   onCancel,
   onClose,
@@ -161,6 +182,13 @@ export function FilePreview({
   onDownload: () => void;
   /** Open this file in the editor (shown for editable text/markdown previews). */
   onEdit?: () => void;
+  /** Delete the current file (confirm dialog owned by the parent). */
+  onDelete?: () => void;
+  /** Move / rename the current file (path-input dialog owned by the parent). */
+  onMove?: () => void;
+  /** File metadata for the info panel; any field may be absent (e.g. a search
+   * hit whose entry isn't in the current listing). */
+  info?: { size?: number; mtime?: number; mode?: number };
   /** Abort the in-flight preview transfer (only shown while loading). */
   onCancel?: () => void;
   onClose: () => void;
@@ -234,6 +262,23 @@ export function FilePreview({
     });
   }, [path]);
 
+  // File-info panel toggle (path/size/modified/perms/dimensions) and the
+  // narrow-screen overflow menu that holds the mv/delete/info actions.
+  const [showInfo, setShowInfo] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  // Close the overflow menu on any outside pointer press.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onDown);
+    return () => window.removeEventListener("pointerdown", onDown);
+  }, [menuOpen]);
+
   const isText = kind === "text";
   // Text-preview view options: soft-wrap long lines, and an in-modal find bar
   // (open/query/case + derived matches state owned by `useTextFind`).
@@ -287,6 +332,8 @@ export function FilePreview({
     onClose,
     onPrev,
     onNext,
+    onDelete,
+    onMove,
     zoomBy,
     resetView,
     rotate,
@@ -359,6 +406,49 @@ export function FilePreview({
 
   const toolBtn =
     "rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text disabled:opacity-40";
+  const headerBtn =
+    "flex items-center gap-1 rounded border border-term-border px-3 py-1 text-xs text-term-muted hover:text-term-text";
+
+  // The mv / delete / info actions, rendered inline on wide screens and folded
+  // into the ⋯ overflow menu on narrow ones (both from this single list, so the
+  // two never drift). `info` is always present; mv/delete only when wired.
+  const actions: {
+    key: string;
+    label: string;
+    title: string;
+    onClick: () => void;
+    danger?: boolean;
+    active?: boolean;
+  }[] = [
+    ...(onMove
+      ? [
+          {
+            key: "move",
+            label: "mv",
+            title: "Move / rename (F2)",
+            onClick: onMove,
+          },
+        ]
+      : []),
+    ...(onDelete
+      ? [
+          {
+            key: "delete",
+            label: "Delete",
+            title: "Delete (Del)",
+            onClick: onDelete,
+            danger: true,
+          },
+        ]
+      : []),
+    {
+      key: "info",
+      label: "Info",
+      title: "File info",
+      onClick: () => setShowInfo((v) => !v),
+      active: showInfo,
+    },
+  ];
 
   // A slim progress strip pinned to the top of a text/markdown pane while its
   // content is still streaming in (the body already paints progressively).
@@ -588,11 +678,67 @@ export function FilePreview({
             </button>
           </div>
         )}
+        {/* mv / delete / info: inline on ≥sm, overflow ⋯ menu below sm. */}
+        <div className="hidden items-center gap-1 sm:flex">
+          {actions.map((a) => (
+            <button
+              key={a.key}
+              type="button"
+              onClick={a.onClick}
+              className={cn(
+                headerBtn,
+                a.danger && "hover:text-term-red",
+                a.active && "text-term-accent",
+              )}
+              title={a.title}
+              aria-pressed={a.active}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+        <div className="relative sm:hidden" ref={menuRef}>
+          <button
+            type="button"
+            onClick={() => setMenuOpen((o) => !o)}
+            className={headerBtn}
+            aria-label="More actions"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+          >
+            ⋯
+          </button>
+          {menuOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 top-full z-40 mt-1 flex min-w-32 flex-col overflow-hidden rounded border border-term-border bg-term-panel shadow-lg"
+            >
+              {actions.map((a) => (
+                <button
+                  key={a.key}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    a.onClick();
+                    setMenuOpen(false);
+                  }}
+                  className={cn(
+                    "px-3 py-2 text-left text-xs text-term-muted hover:bg-term-card hover:text-term-text",
+                    a.danger && "hover:text-term-red",
+                    a.active && "text-term-accent",
+                  )}
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         {onEdit && (
           <button
             type="button"
             onClick={onEdit}
-            className="flex items-center gap-1 rounded border border-term-border px-3 py-1 text-xs text-term-muted hover:text-term-text"
+            className={headerBtn}
             title="Edit this file"
           >
             <PencilIcon className="h-3.5 w-3.5" /> Edit
@@ -613,6 +759,42 @@ export function FilePreview({
           Close
         </button>
       </div>
+      {showInfo && (
+        <dl className="flex flex-wrap gap-x-6 gap-y-1 border-b border-term-border bg-term-panel/60 px-4 py-2 text-[11px] text-term-muted">
+          <div className="min-w-0 basis-full sm:basis-auto">
+            <dt className="inline text-term-faint">Path </dt>
+            <dd className="inline break-all">{path}</dd>
+          </div>
+          {info?.size !== undefined && (
+            <div>
+              <dt className="inline text-term-faint">Size </dt>
+              <dd className="inline tabular-nums">
+                {formatSize(info.size, "file")}
+              </dd>
+            </div>
+          )}
+          {info?.mtime !== undefined && (
+            <div>
+              <dt className="inline text-term-faint">Modified </dt>
+              <dd className="inline">{formatMtimeFull(info.mtime)}</dd>
+            </div>
+          )}
+          {info?.mode !== undefined && (
+            <div>
+              <dt className="inline text-term-faint">Perms </dt>
+              <dd className="inline tabular-nums">{modeToOctal(info.mode)}</dd>
+            </div>
+          )}
+          {(originalDims ?? dims) && (
+            <div>
+              <dt className="inline text-term-faint">Dimensions </dt>
+              <dd className="inline tabular-nums">
+                {(originalDims ?? dims)!.w}×{(originalDims ?? dims)!.h}
+              </dd>
+            </div>
+          )}
+        </dl>
+      )}
       {kind === "pdf" ? (
         <div className="relative min-h-0 flex-1 bg-term-bg">
           {loading && spinner}
@@ -701,6 +883,10 @@ export function FilePreview({
           transform={transform}
           onImageLoad={setDims}
           onDownload={onDownload}
+          hasGallery={hasGallery}
+          onPrev={onPrev}
+          onNext={onNext}
+          onClose={onClose}
           videoRef={videoRef}
           video={{
             src: videoSrc,

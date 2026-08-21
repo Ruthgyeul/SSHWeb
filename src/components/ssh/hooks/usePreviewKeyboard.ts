@@ -32,6 +32,10 @@ export interface PreviewKeyboardOptions {
   onClose: () => void;
   onPrev?: () => void;
   onNext?: () => void;
+  /** Delete the current file (Delete key) — opens a confirm dialog. */
+  onDelete?: () => void;
+  /** Move / rename the current file (F2) — opens a path-input dialog. */
+  onMove?: () => void;
   zoomBy: (factor: number) => void;
   resetView: () => void;
   rotate: () => void;
@@ -61,6 +65,8 @@ export function usePreviewKeyboard(options: PreviewKeyboardOptions): void {
         onClose,
         onPrev,
         onNext,
+        onDelete,
+        onMove,
         zoomBy,
         resetView,
         rotate,
@@ -93,6 +99,20 @@ export function usePreviewKeyboard(options: PreviewKeyboardOptions): void {
       }
       // While typing in the find input, leave the rest of the keys to it.
       if (typing) return;
+      // File actions work on every kind (image/video/audio). Delete opens a
+      // confirm dialog and F2 opens the move/rename dialog, so neither is
+      // destructive on a stray keypress; placed before the video/image handlers
+      // so they aren't shadowed (Delete/F2 aren't used by video transport).
+      if (onDelete && (e.key === "Delete" || e.key === "Del")) {
+        e.preventDefault();
+        onDelete();
+        return;
+      }
+      if (onMove && e.key === "F2") {
+        e.preventDefault();
+        onMove();
+        return;
+      }
       // Shift+←/→ always steps the gallery, on every kind — including video/audio,
       // where the plain arrows are reserved for seeking. Lets the keyboard step
       // through a folder of clips without reaching for the on-screen ‹ › buttons.

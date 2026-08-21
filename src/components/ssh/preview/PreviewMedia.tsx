@@ -1,6 +1,7 @@
-import type { ReactNode, RefObject } from "react";
+import { useRef, type ReactNode, type RefObject } from "react";
 
 import { cn } from "@/lib/utils";
+import { classifySwipe } from "@/lib/swipeGesture";
 import { FileIcon } from "../FileIcon";
 import { DownloadIcon } from "../icons";
 import { type ImageTransform, ZOOM_STEP } from "../hooks/useImageTransform";
@@ -45,6 +46,10 @@ export function PreviewMedia({
   onDownload,
   videoRef,
   video,
+  hasGallery,
+  onPrev,
+  onNext,
+  onClose,
 }: {
   kind: "image" | "video" | "audio" | "unsupported";
   name: string;
@@ -59,12 +64,55 @@ export function PreviewMedia({
   onDownload: () => void;
   videoRef: RefObject<HTMLVideoElement | null>;
   video: PreviewVideoProps;
+  /** Whether there is more than one sibling to swipe between. */
+  hasGallery: boolean;
+  onPrev?: () => void;
+  onNext?: () => void;
+  onClose: () => void;
 }) {
   const { zoom, rotation, offset, dragging, zoomBy, resetView } = transform;
+
+  // Mobile swipe: left/right steps the gallery, down closes. Tracked on the
+  // container so a swipe in the surrounding margin works too. Disabled while an
+  // image is zoomed in (drag-to-pan owns the gesture then), and ignored when the
+  // touch starts on the native <video>/<audio> controls so scrubbing still works.
+  const swipeStart = useRef<{ x: number; y: number; ignore: boolean } | null>(
+    null,
+  );
+  const onTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length !== 1) {
+      swipeStart.current = null;
+      return;
+    }
+    const onMedia =
+      (kind === "video" || kind === "audio") &&
+      e.target instanceof Element &&
+      (e.target.tagName === "VIDEO" || e.target.tagName === "AUDIO");
+    const t = e.touches[0];
+    swipeStart.current = {
+      x: t.clientX,
+      y: t.clientY,
+      ignore: (kind === "image" && zoom > 1) || onMedia,
+    };
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    if (!start || start.ignore) return;
+    const t = e.changedTouches[0];
+    if (!t) return;
+    const dir = classifySwipe(start, { x: t.clientX, y: t.clientY });
+    if (dir === "down") onClose();
+    else if (hasGallery && dir === "left") onNext?.();
+    else if (hasGallery && dir === "right") onPrev?.();
+  };
+
   return (
     <div
       className="relative min-h-0 flex-1 overflow-hidden bg-term-bg"
       onWheel={transform.onWheel}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
     >
       <div className="absolute inset-0 flex items-center justify-center p-4">
         {loading && spinner}
