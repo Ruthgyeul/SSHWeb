@@ -733,7 +733,7 @@ export function FilePreview({
           {menuOpen && (
             <div
               role="menu"
-              className="absolute right-0 top-full z-40 mt-1 flex min-w-32 flex-col overflow-hidden rounded border border-term-border bg-term-panel shadow-lg"
+              className="absolute right-0 top-full z-40 mt-1 flex min-w-32 max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded border border-term-border bg-term-panel shadow-lg"
             >
               {actions.map((a) => (
                 <button
