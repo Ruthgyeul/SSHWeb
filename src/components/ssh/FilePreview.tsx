@@ -552,22 +552,30 @@ export function FilePreview({
       aria-label={`Preview: ${name}`}
       className="absolute inset-0 z-30 flex flex-col bg-term-card"
     >
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
-        <FileIcon kind={MODE_ICON_KIND[kind]} className="text-term-muted" />
-
-        <span
-          className="min-w-0 flex-1 truncate text-xs text-term-dim"
-          title={path}
-        >
-          {name}
-        </span>
-        {count !== undefined && count > 1 && (
-          <span className="shrink-0 text-[11px] tabular-nums text-term-faint">
-            {(index ?? 0) + 1} / {count}
+      {/* On mobile the toolbar stacks: row 1 = file name + position (never
+          truncated), row 2 = image zoom controls, row 3 = the action buttons
+          (right-aligned). On ≥sm it collapses back to a single wrapping row with
+          the name taking the remaining width. */}
+      <div className="flex flex-col gap-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-2">
+        <div className="flex min-w-0 items-center gap-2 sm:flex-1">
+          <FileIcon
+            kind={MODE_ICON_KIND[kind]}
+            className="shrink-0 text-term-muted"
+          />
+          <span
+            className="min-w-0 flex-1 break-all text-xs text-term-dim sm:truncate"
+            title={path}
+          >
+            {name}
           </span>
-        )}
+          {count !== undefined && count > 1 && (
+            <span className="shrink-0 text-[11px] tabular-nums text-term-faint">
+              {(index ?? 0) + 1} / {count}
+            </span>
+          )}
+        </div>
         {isImage && !loading && src && (
-          <div className="flex flex-wrap items-center gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-1">
             {(() => {
               // Prefer the ORIGINAL's true dimensions (from the bridge) over the
               // downscaled preview's own dimensions, so the read-out reflects the
@@ -655,7 +663,7 @@ export function FilePreview({
           </div>
         )}
         {isText && !loading && (
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-1">
             <button
               type="button"
               onClick={() => setWrap((w) => !w)}
@@ -679,10 +687,10 @@ export function FilePreview({
             </button>
           </div>
         )}
-        {/* mv / delete / info: compact icon buttons, always inline. The
-            toolbar is flex-wrap, so on a narrow screen these wrap to the next
-            row rather than needing an overflow menu (which clipped on mobile). */}
-        <div className="flex items-center gap-1">
+        {/* Row 3 (mobile): every action button on one right-aligned row —
+            mv / delete / info, then edit / download / close (all icon-only). On
+            ≥sm this group sits at the right of the single toolbar row. */}
+        <div className="flex flex-wrap items-center justify-end gap-1">
           {actions.map((a) => (
             <button
               key={a.key}
@@ -700,36 +708,36 @@ export function FilePreview({
               {a.icon}
             </button>
           ))}
-        </div>
-        {onEdit && (
+          {onEdit && (
+            <button
+              type="button"
+              onClick={onEdit}
+              className={headerBtn}
+              title="Edit this file"
+              aria-label="Edit this file"
+            >
+              <PencilIcon className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button
             type="button"
-            onClick={onEdit}
+            onClick={onDownload}
             className={headerBtn}
-            title="Edit this file"
-            aria-label="Edit this file"
+            title="Download"
+            aria-label="Download"
           >
-            <PencilIcon className="h-3.5 w-3.5" />
+            <DownloadIcon className="h-3.5 w-3.5" />
           </button>
-        )}
-        <button
-          type="button"
-          onClick={onDownload}
-          className={headerBtn}
-          title="Download"
-          aria-label="Download"
-        >
-          <DownloadIcon className="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          className={headerBtn}
-          title="Close"
-          aria-label="Close"
-        >
-          <XMarkIcon className="h-3.5 w-3.5" />
-        </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className={headerBtn}
+            title="Close"
+            aria-label="Close"
+          >
+            <XMarkIcon className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
       {showInfo && (
         <dl className="flex flex-wrap gap-x-6 gap-y-1 border-b border-term-border bg-term-panel/60 px-4 py-2 text-[11px] text-term-muted">
