@@ -1069,8 +1069,19 @@ const server = createServer((req, res) => {
   // Lightweight JSON health probe, answered before Next so load balancers and
   // uptime checks get a stable, dependency-free 200. No credentials involved.
   if (req.method === "GET" && pathname === HEALTH_PATH) {
-    sendJson(res, shuttingDown ? 503 : 200, {
-      status: shuttingDown ? "shutting_down" : "ok",
+    const status = shuttingDown ? "shutting_down" : "ok";
+    const code = shuttingDown ? 503 : 200;
+    // When the relay is gated by an access token, the detailed operational
+    // metrics below (session counts, transfer volumes, per-reason rejection
+    // tallies) require authorization — otherwise a public relay would leak them
+    // to anyone. A minimal {status} stays unauthenticated so load balancers /
+    // uptime checks still get a stable readiness signal.
+    if (accessTokenRequired(ACCESS_TOKEN) && !requestIsAuthorized(req)) {
+      sendJson(res, code, { status });
+      return;
+    }
+    sendJson(res, code, {
+      status,
       activeSessions,
       maxSessions: MAX_SESSIONS,
       totalConnections,
