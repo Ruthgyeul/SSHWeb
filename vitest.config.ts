@@ -20,7 +20,9 @@ export default defineConfig({
     setupFiles: ["src/test/setup.dom.ts"],
     coverage: {
       provider: "v8",
-      reporter: ["text", "json-summary"],
+      // text for the CI log, json-summary for tooling, lcov for the uploaded
+      // artifact (viewable / ingestible by coverage services).
+      reporter: ["text", "json-summary", "lcov"],
       // Gate the pure, DOM-free logic in src/lib — the "two synchronized places"
       // source of truth that the bridge mirrors. The interactive UI layer is
       // exercised by component tests but not held to a line threshold here.

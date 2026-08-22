@@ -206,4 +206,4 @@ same guidance by [`AGENTS.md`](AGENTS.md).
 
 ## License
 
-No license file is included — add one that fits your project before publishing.
+Released under the [MIT License](LICENSE).

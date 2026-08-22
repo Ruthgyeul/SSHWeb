@@ -41,6 +41,15 @@ jobs:
       - run: npm run typecheck
       # Unit tests with the src/lib coverage threshold gate.
       - run: npm run test:coverage
+      # Publish the coverage report as a build artifact (one leg only — the
+      # matrix runs identical suites, so uploading both just duplicates it).
+      - name: Upload coverage report
+        if: ${{ matrix.node == 24 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: warn
       - run: npm run build
       # End-to-end smoke test of the WS↔SSH bridge. Runs after the build so it
       # exercises the production server against an in-memory ssh2 target.

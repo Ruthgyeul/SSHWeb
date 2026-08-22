@@ -2,6 +2,7 @@
   "name": "sshweb",
   "version": "2.0.0",
   "private": true,
+  "license": "MIT",
   "description": "Browser-based SSH client — an interactive web terminal and SFTP file access, over a WebSocket ↔ SSH bridge.",
   "//engines": "Minimum runtime we support, NOT a pin. `.nvmrc` (24) is the recommended dev/CI version; the app runs on Node 22+ (Next 16's floor), so keep this at the true minimum to avoid EBADENGINE warnings on 22.x deployments.",
   "engines": {
@@ -19,7 +20,17 @@
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "prepare": "husky || true"
+  },
+  "lint-staged": {
+    "*.{js,mjs,ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,css,md,yml,yaml}": [
+      "prettier --write"
+    ]
   },
   "dependencies": {
     "@next/env": "^16.3.1",
@@ -45,7 +56,9 @@
     "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^9.18.0",
     "eslint-config-next": "^16.3.1",
+    "husky": "^9.1.7",
     "jsdom": "^30.0.1",
+    "lint-staged": "^17.3.0",
     "postcss": "^8.5.26",
     "prettier": "^3.9.6",
     "tailwindcss": "^4.3.3",
