@@ -451,6 +451,10 @@ async function encodePreviewImage(buffer) {
 // only, never file contents).
 const MAX_FIND_RESULTS = 500;
 const MAX_FIND_NODES = 20000;
+// Upper bound on files enumerated for a single "download as zip" (#6). Caps the
+// in-memory names+sizes list built before streaming so a directory with a
+// pathological number of entries can't OOM the shared process.
+const MAX_ZIP_ENTRIES = 100000;
 // Content-search (grep) limits. GREP_MAX_FILE_BYTES mirrors src/lib/sshProtocol.ts
 // (the largest file grep will open and scan — bigger files are skipped); the
 // total-bytes budget bounds how much a single search may read so grepping a huge
@@ -557,6 +561,14 @@ function isValidClientMessage(msg) {
 // disables the limit.
 const MAX_UPLOAD_MB = parseInt(process.env.SSH_MAX_UPLOAD_MB || "25", 10);
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB > 0 ? MAX_UPLOAD_MB * 1024 * 1024 : 0;
+// Max concurrent in-flight transfers (uploads OR downloads) a single session may
+// hold open (#7). The uploads/downloads maps are otherwise unbounded, so one
+// session could open thousands of simultaneous SFTP streams and exhaust memory.
+// Applied to each map independently. 0 disables the cap.
+const MAX_TRANSFERS_PER_SESSION = (() => {
+  const n = parseInt(process.env.SSH_MAX_TRANSFERS_PER_SESSION || "20", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 20;
+})();
 // Per-IP throttle on SSH connection *attempts* (anti-brute-force relay).
 const RATE_MAX = parseInt(process.env.SSH_RATE_LIMIT_MAX || "10", 10);
 const RATE_WINDOW_MS = parseInt(
@@ -567,11 +579,27 @@ const RATE_WINDOW_MS = parseInt(
 // proxy on loopback). Set false when the server is directly exposed.
 const TRUST_PROXY =
   (process.env.SSH_TRUST_PROXY || "true").toLowerCase() !== "false";
+// How many chained trusted proxies sit in front of the bridge. The client IP is
+// read as this many hops in from the RIGHT of X-Forwarded-For (the right-most
+// hop is the one our own proxy appended and cannot be spoofed by the client;
+// the left-most is attacker-controlled). Default 1 (a single reverse proxy).
+const TRUSTED_PROXY_HOPS = (() => {
+  const n = parseInt(process.env.SSH_TRUSTED_PROXY_HOPS || "1", 10);
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+})();
 // Optional explicit WebSocket origin allowlist. Empty = require same-origin.
 const ALLOWED_ORIGINS = (process.env.SSH_ALLOWED_ORIGINS || "")
   .split(/[\s,]+/)
   .map((s) => s.trim())
   .filter(Boolean);
+// Max concurrent upgraded-but-unconnected WebSockets from a single IP (#1). A
+// client can otherwise open unlimited upgrades and never send `connect`, each
+// holding a socket + grace timer without counting against MAX_SESSIONS. 0
+// disables the per-IP cap.
+const MAX_PENDING_UPGRADES_PER_IP = (() => {
+  const n = parseInt(process.env.SSH_MAX_PENDING_UPGRADES_PER_IP || "10", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 10;
+})();
 // Drop a socket that connects but never sends a `connect` message (ms).
 const CONNECT_GRACE_MS = (() => {
   const n = parseInt(process.env.SSH_CONNECT_GRACE_MS || "30000", 10);
@@ -627,7 +655,41 @@ const MAX_TRANSCODES = (() => {
   const n = parseInt(process.env.SSH_MAX_TRANSCODES || "3", 10);
   return Number.isFinite(n) && n >= 0 ? n : 3;
 })();
+// Cap the total bytes a single live transcode may stream (#8). The Range and
+// whole-file paths are already bounded per response by STREAM_MAX_CHUNK_BYTES,
+// but the transcode path pipes ffmpeg straight to the response with no ceiling
+// (only CPU-capped and killed on disconnect). Bounds one request's bandwidth /
+// duration. Configured in whole megabytes; 0 (or less) disables the cap.
+const TRANSCODE_MAX_OUTPUT_MB = (() => {
+  const n = parseInt(process.env.SSH_MAX_TRANSCODE_OUTPUT_MB || "4096", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 4096;
+})();
+const TRANSCODE_MAX_OUTPUT_BYTES =
+  TRANSCODE_MAX_OUTPUT_MB > 0 ? TRANSCODE_MAX_OUTPUT_MB * 1024 * 1024 : 0;
 let activeTranscodes = 0;
+
+// Optional operator-configured SSH algorithm allowlist (#53). Each category, when
+// set (comma/space separated), replaces ssh2's default list for that category so
+// a hardened deployment can refuse weak kex/cipher/MAC/host-key algorithms.
+// Unset categories keep ssh2's secure defaults. Passed as `algorithms` to
+// `.connect()`; `undefined` when nothing is configured.
+const SSH_ALGORITHMS = (() => {
+  const parse = (v) =>
+    (v || "")
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  const kex = parse(process.env.SSH_KEX_ALGORITHMS);
+  const cipher = parse(process.env.SSH_CIPHER_ALGORITHMS);
+  const hmac = parse(process.env.SSH_MAC_ALGORITHMS);
+  const serverHostKey = parse(process.env.SSH_HOSTKEY_ALGORITHMS);
+  const algs = {};
+  if (kex.length) algs.kex = kex;
+  if (cipher.length) algs.cipher = cipher;
+  if (hmac.length) algs.hmac = hmac;
+  if (serverHostKey.length) algs.serverHostKey = serverHostKey;
+  return Object.keys(algs).length > 0 ? algs : undefined;
+})();
 
 // --- Concurrency caps for expensive, client-triggered work ------------------
 //
@@ -644,10 +706,16 @@ const posInt = (envVar, dflt) => {
 };
 const MAX_THUMBNAIL_JOBS = posInt("SSH_MAX_THUMBNAIL_JOBS", 4);
 const MAX_SEARCH_JOBS = posInt("SSH_MAX_SEARCH_JOBS", 4);
+// Image-preview transcodes (sharp resize/encode — WebP/AVIF, AVIF being the
+// slowest) are otherwise uncapped, so a client firing many large-image previews
+// could pin every CPU. Route them through their own limiter too (#5).
+const MAX_PREVIEW_JOBS = posInt("SSH_MAX_PREVIEW_JOBS", 4);
 // Bound the wait queues so a flood can't grow them without limit; past this we
-// shed the request (a skipped thumbnail keeps its icon; a search replies empty).
+// shed the request (a skipped thumbnail keeps its icon; a search replies empty;
+// a shed preview falls back to streaming the original image).
 const THUMBNAIL_QUEUE_MAX = posInt("SSH_MAX_THUMBNAIL_QUEUE", 500);
 const SEARCH_QUEUE_MAX = posInt("SSH_MAX_SEARCH_QUEUE", 100);
+const PREVIEW_QUEUE_MAX = posInt("SSH_MAX_PREVIEW_QUEUE", 100);
 
 class QueueFullError extends Error {
   constructor() {
@@ -694,6 +762,7 @@ function createLimiter(maxConcurrent, maxQueue = Infinity) {
 }
 const thumbnailLimiter = createLimiter(MAX_THUMBNAIL_JOBS, THUMBNAIL_QUEUE_MAX);
 const searchLimiter = createLimiter(MAX_SEARCH_JOBS, SEARCH_QUEUE_MAX);
+const previewLimiter = createLimiter(MAX_PREVIEW_JOBS, PREVIEW_QUEUE_MAX);
 // Content types for the streaming endpoint, by lower-case extension. Mirrors the
 // media MIME maps in `src/lib/sshProtocol.ts` (the "two synchronized places"
 // discipline) for the formats a browser can play inline.
@@ -737,6 +806,19 @@ const SFTP_SERVER_PATHS = (process.env.SSH_SFTP_SERVER_PATHS || "")
   .filter(Boolean);
 
 let activeSessions = 0;
+// Concurrent upgraded-but-not-yet-connected WebSockets per client IP (#1). A
+// socket counts as "pending" from the moment its upgrade is accepted until it
+// either starts a real SSH session (reserved in activeSessions, itself capped)
+// or closes. This bounds a flood of upgrades that never send `connect` — which
+// MAX_SESSIONS alone doesn't catch, since that's only enforced at connect time.
+const pendingUpgrades = new Map();
+const incPending = (ip) =>
+  pendingUpgrades.set(ip, (pendingUpgrades.get(ip) || 0) + 1);
+const decPending = (ip) => {
+  const n = (pendingUpgrades.get(ip) || 0) - 1;
+  if (n > 0) pendingUpgrades.set(ip, n);
+  else pendingUpgrades.delete(ip);
+};
 // Cumulative operational counters surfaced by the health probe (process-wide).
 let totalConnections = 0; // SSH sessions that reached "ready"
 let rejectedConnections = 0; // connection attempts refused (any reason)
@@ -881,13 +963,23 @@ function isWebSocketOriginAllowed(origin, host) {
   return hostPort === String(host).trim().toLowerCase();
 }
 
-/** Resolve the client IP for rate-limiting (honors X-Forwarded-For if trusted). */
+/**
+ * Resolve the client IP for rate-limiting (mirrors clientIpFromHeaders in
+ * serverSecurity.ts). Counts TRUSTED_PROXY_HOPS in from the RIGHT of
+ * X-Forwarded-For so a client can't forge a fresh IP per request (the left-most
+ * hop is attacker-controlled; the right-most is the one our proxy appended).
+ */
 function clientIpFromReq(req) {
   const xff = req.headers["x-forwarded-for"];
   if (TRUST_PROXY && xff) {
-    const raw = Array.isArray(xff) ? xff[0] : xff;
-    const first = raw?.split(",")[0]?.trim();
-    if (first) return first;
+    const raw = Array.isArray(xff) ? xff.join(",") : xff;
+    const hops = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (hops.length > 0) {
+      return hops[Math.max(0, hops.length - TRUSTED_PROXY_HOPS)];
+    }
   }
   return req.socket?.remoteAddress || "unknown";
 }
@@ -1051,8 +1143,19 @@ const server = createServer((req, res) => {
   // Lightweight JSON health probe, answered before Next so load balancers and
   // uptime checks get a stable, dependency-free 200. No credentials involved.
   if (req.method === "GET" && pathname === HEALTH_PATH) {
-    sendJson(res, shuttingDown ? 503 : 200, {
-      status: shuttingDown ? "shutting_down" : "ok",
+    const status = shuttingDown ? "shutting_down" : "ok";
+    const code = shuttingDown ? 503 : 200;
+    // When the relay is gated by an access token, the detailed operational
+    // metrics below (session counts, transfer volumes, per-reason rejection
+    // tallies) require authorization — otherwise a public relay would leak them
+    // to anyone. A minimal {status} stays unauthenticated so load balancers /
+    // uptime checks still get a stable readiness signal.
+    if (accessTokenRequired(ACCESS_TOKEN) && !requestIsAuthorized(req)) {
+      sendJson(res, code, { status });
+      return;
+    }
+    sendJson(res, code, {
+      status,
       activeSessions,
       maxSessions: MAX_SESSIONS,
       totalConnections,
@@ -1098,7 +1201,15 @@ const server = createServer((req, res) => {
           queued: searchLimiter.queued,
           max: MAX_SEARCH_JOBS,
         },
+        preview: {
+          active: previewLimiter.active,
+          queued: previewLimiter.queued,
+          max: MAX_PREVIEW_JOBS,
+        },
       },
+      // Upgraded-but-unconnected sockets awaiting a `connect` (distinct client
+      // IPs currently holding one or more), bounding an upgrade flood (#1).
+      pendingUpgradeIps: pendingUpgrades.size,
       uptime: Math.floor(process.uptime()),
     });
     return;
@@ -1289,7 +1400,32 @@ const server = createServer((req, res) => {
           proc.stderr?.on("data", () => {}); // drain, don't buffer
           src.on("error", () => cleanup());
           src.pipe(proc.stdin);
-          proc.stdout.pipe(res);
+          // Manually pump stdout→res (instead of .pipe) so we can enforce the
+          // output-byte cap (#8) and honor response backpressure.
+          let outBytes = 0;
+          proc.stdout.on("data", (chunk) => {
+            outBytes += chunk.length;
+            if (
+              TRANSCODE_MAX_OUTPUT_BYTES > 0 &&
+              outBytes > TRANSCODE_MAX_OUTPUT_BYTES
+            ) {
+              logEvent("transcode-cap", {
+                ip: clientIpFromReq(req),
+                bytes: outBytes,
+              });
+              cleanup();
+              try {
+                res.end();
+              } catch {
+                /* already ended */
+              }
+              return;
+            }
+            if (!res.write(chunk)) {
+              proc.stdout.pause();
+              res.once("drain", () => proc.stdout.resume());
+            }
+          });
           return;
         }
         const type = streamContentType(filePath);
@@ -1404,7 +1540,45 @@ server.on("upgrade", (req, socket, head) => {
       socket.destroy();
       return;
     }
+    const upgradeIp = clientIpFromReq(req);
+    // Rate-limit the upgrade itself, in a dedicated bucket so it doesn't consume
+    // the SSH connect-attempt budget (#1). Stops an upgrade flood that never
+    // reaches handleConnect (where connect-time limiting lives).
+    if (!rateLimitAllow(`upgrade:${upgradeIp}`, Date.now())) {
+      logEvent("reject", { ip: upgradeIp, reason: "upgrade-rate-limit" });
+      socket.write(
+        "HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n",
+      );
+      socket.destroy();
+      return;
+    }
+    // Cap concurrent upgraded-but-unconnected sockets per IP (#1).
+    if (
+      MAX_PENDING_UPGRADES_PER_IP > 0 &&
+      (pendingUpgrades.get(upgradeIp) || 0) >= MAX_PENDING_UPGRADES_PER_IP
+    ) {
+      logEvent("reject", { ip: upgradeIp, reason: "too-many-pending" });
+      socket.write(
+        "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n",
+      );
+      socket.destroy();
+      return;
+    }
+    incPending(upgradeIp);
+    let pendingCleared = false;
+    const clearPending = () => {
+      if (pendingCleared) return;
+      pendingCleared = true;
+      decPending(upgradeIp);
+    };
+    // Release the pending slot if the socket dies before/around the upgrade.
+    socket.on("close", clearPending);
     wss.handleUpgrade(req, socket, head, (ws) => {
+      // The session clears this once it reserves a real activeSessions slot (see
+      // startConnection); until then the socket counts as pending. Closing also
+      // clears it (idempotent), covering sockets that never connect.
+      ws.clearPendingUpgrade = clearPending;
+      ws.once("close", clearPending);
       wss.emit("connection", ws, req);
     });
   } else if (upgradeHandler) {
@@ -1609,11 +1783,28 @@ function mkdirp(sftp, dir, done) {
  */
 function enumerateZipEntries(sftp, roots, done) {
   const entries = [];
+  // Bound the entry array so a "download as zip" of a directory with an enormous
+  // number of files can't build an unbounded names+sizes list in the shared
+  // process memory before streaming even begins (#6). Symmetric with the
+  // MAX_FIND_NODES cap on recursive search.
+  let finished = false;
+  const finish = (err, result) => {
+    if (finished) return;
+    finished = true;
+    done(err, result);
+  };
+  const overBudget = () => entries.length >= MAX_ZIP_ENTRIES;
   const walkDir = (dir, rel, cb) => {
     sftp.readdir(dir, (err, list) => {
       if (err) return cb(err);
       let i = 0;
       const nextEntry = () => {
+        if (overBudget())
+          return cb(
+            new Error(
+              `Too many files to zip (over ${MAX_ZIP_ENTRIES}). Download a smaller selection.`,
+            ),
+          );
         if (i >= list.length) return cb(null);
         const item = list[i++];
         const childPath = `${dir}/${item.filename}`;
@@ -1636,13 +1827,19 @@ function enumerateZipEntries(sftp, roots, done) {
   };
   let r = 0;
   const nextRoot = () => {
-    if (r >= roots.length) return done(null, entries);
+    if (overBudget())
+      return finish(
+        new Error(
+          `Too many files to zip (over ${MAX_ZIP_ENTRIES}). Download a smaller selection.`,
+        ),
+      );
+    if (r >= roots.length) return finish(null, entries);
     const { path, prefix } = roots[r++];
     sftp.stat(path, (err, stats) => {
-      if (err) return done(err);
+      if (err) return finish(err);
       if (stats.isDirectory?.()) {
         const base = path.replace(/\/+$/, "");
-        walkDir(base, prefix, (e) => (e ? done(e) : nextRoot()));
+        walkDir(base, prefix, (e) => (e ? finish(e) : nextRoot()));
       } else if (stats.isFile?.()) {
         entries.push({
           readPath: path,
@@ -2289,6 +2486,13 @@ wss.on("connection", (ws, req) => {
       return ws.close();
     }
 
+    // Reserve the session slot up front (#13). The capacity check above races
+    // the awaited DNS lookup below: without reserving now, N concurrent connects
+    // could all pass the check while their lookups are in flight and then all
+    // increment, briefly exceeding MAX_SESSIONS. Any reject/failure path from
+    // here closes the ws, whose cleanup() releases the slot.
+    activeSessions += 1;
+    counted = true;
     connecting = true;
     // When the SSRF guard is on, the literal check above only catches IP
     // literals and `localhost` — a *hostname* that resolves to a private/internal
@@ -2315,7 +2519,13 @@ wss.on("connection", (ws, req) => {
             );
             return ws.close();
           }
-          startConnection(msg, host, targetPort, username);
+          // Pin the dial to a vetted resolved IP so ssh2 doesn't independently
+          // re-resolve the hostname (#2). A short-TTL DNS-rebinding record could
+          // otherwise return a public IP to our guard's lookup above and a
+          // private/metadata IP to ssh2's own resolver at connect time. We
+          // still pass the original hostname for logging and the TOFU host-key
+          // prompt; only the transport target is the checked address.
+          startConnection(msg, host, targetPort, username, addrs[0].address);
         },
         () => {
           if (closed) return;
@@ -2329,14 +2539,19 @@ wss.on("connection", (ws, req) => {
       );
       return;
     }
-    startConnection(msg, host, targetPort, username);
+    startConnection(msg, host, targetPort, username, host);
   }
 
-  function startConnection(msg, host, targetPort, username) {
+  function startConnection(msg, host, targetPort, username, dialHost = host) {
     if (ssh || closed) return;
     connecting = false;
-    activeSessions += 1;
-    counted = true;
+    // This socket now holds a real (capped) session slot, so it no longer counts
+    // as a pending upgrade (#1).
+    try {
+      ws.clearPendingUpgrade?.();
+    } catch {
+      /* already cleared */
+    }
     // The thumbnail-cache identity for this login (see the server-side cache).
     sessionScope = `${username}@${host}`;
     send({ t: "status", state: "connecting" });
@@ -2427,12 +2642,17 @@ wss.on("connection", (ws, req) => {
         cleanup();
       })
       .connect({
-        host,
+        // dialHost is the SSRF-vetted resolved IP when the guard is on, else the
+        // original host; pinning it stops ssh2 from re-resolving the name (#2).
+        host: dialHost,
         port: targetPort,
         username,
         password: msg.password || undefined,
         privateKey: msg.privateKey || undefined,
         passphrase: msg.passphrase || undefined,
+        // Optional operator-configured algorithm allowlist (#53). Undefined when
+        // no SSH_*_ALGORITHMS are set, so ssh2 keeps its secure defaults.
+        algorithms: SSH_ALGORITHMS,
         readyTimeout: HANDSHAKE_TIMEOUT_MS,
         keepaliveInterval: 15_000,
         // Enable keyboard-interactive so servers that require an OTP / 2FA code
@@ -2556,6 +2776,19 @@ wss.on("connection", (ws, req) => {
     const existing = uploads.get(path);
     const opening = msg.offset === 0 || (msg.resume === true && !existing);
     if (opening) {
+      // Cap concurrent uploads per session (#7). A brand-new upload (no existing
+      // stream for this path) must fit under the limit; a resume/reopen of an
+      // existing path replaces its entry and doesn't grow the map.
+      if (
+        !existing &&
+        MAX_TRANSFERS_PER_SESSION > 0 &&
+        uploads.size >= MAX_TRANSFERS_PER_SESSION
+      ) {
+        return sendError(
+          "Too many concurrent uploads. Wait for some to finish.",
+          "sftp",
+        );
+      }
       if (existing) {
         try {
           existing.stream.destroy();
@@ -2720,6 +2953,17 @@ wss.on("connection", (ws, req) => {
         // so the client routes the bytes into the modal (as a blob/text)
         // instead of saving a file. Cancellable via the `downloads` map.
         const streamOriginal = (cap) => {
+          // Cap concurrent transfers per session (#7) for a new download path.
+          if (
+            !downloads.has(msg.path) &&
+            MAX_TRANSFERS_PER_SESSION > 0 &&
+            downloads.size >= MAX_TRANSFERS_PER_SESSION
+          ) {
+            return sendError(
+              "Too many concurrent transfers. Wait for some to finish.",
+              "sftp",
+            );
+          }
           // A capped read only pulls the file's head (`{ start, end }`), so a
           // huge log previews as text without transferring the whole thing.
           const truncated = cap > 0 && stats.size > cap;
@@ -2799,7 +3043,15 @@ wss.on("connection", (ws, req) => {
         ) {
           s.readFile(msg.path, async (err, buffer) => {
             if (err) return sendError(err.message, "sftp");
-            const encoded = await encodePreviewImage(buffer);
+            // Concurrency-cap the sharp resize/encode (#5). On load-shed
+            // (queue full) treat it as "no transcode" and fall back below to
+            // streaming the original (or the unsupported card for HEIC).
+            let encoded = null;
+            try {
+              encoded = await previewLimiter(() => encodePreviewImage(buffer));
+            } catch {
+              encoded = null;
+            }
             // Send the transcode when it saved bytes, or whenever the raw
             // bytes can't be rendered by the browser (HEIC/HEIF) — there the
             // transcode is the only viewable form, size regardless.
@@ -2978,6 +3230,17 @@ wss.on("connection", (ws, req) => {
   // cancel); `zipName` is the saved filename. `overLimit` builds the too-large
   // message for the byte cap.
   function streamZip(s, roots, downloadKey, zipName, overLimit) {
+    // Cap concurrent transfers per session (#7): a zip stream occupies a slot.
+    if (
+      !downloads.has(downloadKey) &&
+      MAX_TRANSFERS_PER_SESSION > 0 &&
+      downloads.size >= MAX_TRANSFERS_PER_SESSION
+    ) {
+      return sendError(
+        "Too many concurrent transfers. Wait for some to finish.",
+        "sftp",
+      );
+    }
     enumerateZipEntries(s, roots, (err, entries) => {
       if (err) return sendError(err.message, "sftp");
       const nameBufs = entries.map((e) => Buffer.from(e.name, "utf8"));
