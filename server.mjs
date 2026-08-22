@@ -637,6 +637,29 @@ const MAX_TRANSCODES = (() => {
 })();
 let activeTranscodes = 0;
 
+// Optional operator-configured SSH algorithm allowlist (#53). Each category, when
+// set (comma/space separated), replaces ssh2's default list for that category so
+// a hardened deployment can refuse weak kex/cipher/MAC/host-key algorithms.
+// Unset categories keep ssh2's secure defaults. Passed as `algorithms` to
+// `.connect()`; `undefined` when nothing is configured.
+const SSH_ALGORITHMS = (() => {
+  const parse = (v) =>
+    (v || "")
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  const kex = parse(process.env.SSH_KEX_ALGORITHMS);
+  const cipher = parse(process.env.SSH_CIPHER_ALGORITHMS);
+  const hmac = parse(process.env.SSH_MAC_ALGORITHMS);
+  const serverHostKey = parse(process.env.SSH_HOSTKEY_ALGORITHMS);
+  const algs = {};
+  if (kex.length) algs.kex = kex;
+  if (cipher.length) algs.cipher = cipher;
+  if (hmac.length) algs.hmac = hmac;
+  if (serverHostKey.length) algs.serverHostKey = serverHostKey;
+  return Object.keys(algs).length > 0 ? algs : undefined;
+})();
+
 // --- Concurrency caps for expensive, client-triggered work ------------------
 //
 // Grid thumbnails (each reads a whole file — up to THUMBNAIL_VIDEO_MAX_BYTES —
@@ -2318,6 +2341,13 @@ wss.on("connection", (ws, req) => {
       return ws.close();
     }
 
+    // Reserve the session slot up front (#13). The capacity check above races
+    // the awaited DNS lookup below: without reserving now, N concurrent connects
+    // could all pass the check while their lookups are in flight and then all
+    // increment, briefly exceeding MAX_SESSIONS. Any reject/failure path from
+    // here closes the ws, whose cleanup() releases the slot.
+    activeSessions += 1;
+    counted = true;
     connecting = true;
     // When the SSRF guard is on, the literal check above only catches IP
     // literals and `localhost` — a *hostname* that resolves to a private/internal
@@ -2344,7 +2374,13 @@ wss.on("connection", (ws, req) => {
             );
             return ws.close();
           }
-          startConnection(msg, host, targetPort, username);
+          // Pin the dial to a vetted resolved IP so ssh2 doesn't independently
+          // re-resolve the hostname (#2). A short-TTL DNS-rebinding record could
+          // otherwise return a public IP to our guard's lookup above and a
+          // private/metadata IP to ssh2's own resolver at connect time. We
+          // still pass the original hostname for logging and the TOFU host-key
+          // prompt; only the transport target is the checked address.
+          startConnection(msg, host, targetPort, username, addrs[0].address);
         },
         () => {
           if (closed) return;
@@ -2358,14 +2394,12 @@ wss.on("connection", (ws, req) => {
       );
       return;
     }
-    startConnection(msg, host, targetPort, username);
+    startConnection(msg, host, targetPort, username, host);
   }
 
-  function startConnection(msg, host, targetPort, username) {
+  function startConnection(msg, host, targetPort, username, dialHost = host) {
     if (ssh || closed) return;
     connecting = false;
-    activeSessions += 1;
-    counted = true;
     // The thumbnail-cache identity for this login (see the server-side cache).
     sessionScope = `${username}@${host}`;
     send({ t: "status", state: "connecting" });
@@ -2456,12 +2490,17 @@ wss.on("connection", (ws, req) => {
         cleanup();
       })
       .connect({
-        host,
+        // dialHost is the SSRF-vetted resolved IP when the guard is on, else the
+        // original host; pinning it stops ssh2 from re-resolving the name (#2).
+        host: dialHost,
         port: targetPort,
         username,
         password: msg.password || undefined,
         privateKey: msg.privateKey || undefined,
         passphrase: msg.passphrase || undefined,
+        // Optional operator-configured algorithm allowlist (#53). Undefined when
+        // no SSH_*_ALGORITHMS are set, so ssh2 keeps its secure defaults.
+        algorithms: SSH_ALGORITHMS,
         readyTimeout: HANDSHAKE_TIMEOUT_MS,
         keepaliveInterval: 15_000,
         // Enable keyboard-interactive so servers that require an OTP / 2FA code
