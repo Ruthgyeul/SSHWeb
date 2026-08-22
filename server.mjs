@@ -451,6 +451,10 @@ async function encodePreviewImage(buffer) {
 // only, never file contents).
 const MAX_FIND_RESULTS = 500;
 const MAX_FIND_NODES = 20000;
+// Upper bound on files enumerated for a single "download as zip" (#6). Caps the
+// in-memory names+sizes list built before streaming so a directory with a
+// pathological number of entries can't OOM the shared process.
+const MAX_ZIP_ENTRIES = 100000;
 // Content-search (grep) limits. GREP_MAX_FILE_BYTES mirrors src/lib/sshProtocol.ts
 // (the largest file grep will open and scan — bigger files are skipped); the
 // total-bytes budget bounds how much a single search may read so grepping a huge
@@ -557,6 +561,14 @@ function isValidClientMessage(msg) {
 // disables the limit.
 const MAX_UPLOAD_MB = parseInt(process.env.SSH_MAX_UPLOAD_MB || "25", 10);
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB > 0 ? MAX_UPLOAD_MB * 1024 * 1024 : 0;
+// Max concurrent in-flight transfers (uploads OR downloads) a single session may
+// hold open (#7). The uploads/downloads maps are otherwise unbounded, so one
+// session could open thousands of simultaneous SFTP streams and exhaust memory.
+// Applied to each map independently. 0 disables the cap.
+const MAX_TRANSFERS_PER_SESSION = (() => {
+  const n = parseInt(process.env.SSH_MAX_TRANSFERS_PER_SESSION || "20", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 20;
+})();
 // Per-IP throttle on SSH connection *attempts* (anti-brute-force relay).
 const RATE_MAX = parseInt(process.env.SSH_RATE_LIMIT_MAX || "10", 10);
 const RATE_WINDOW_MS = parseInt(
@@ -643,6 +655,17 @@ const MAX_TRANSCODES = (() => {
   const n = parseInt(process.env.SSH_MAX_TRANSCODES || "3", 10);
   return Number.isFinite(n) && n >= 0 ? n : 3;
 })();
+// Cap the total bytes a single live transcode may stream (#8). The Range and
+// whole-file paths are already bounded per response by STREAM_MAX_CHUNK_BYTES,
+// but the transcode path pipes ffmpeg straight to the response with no ceiling
+// (only CPU-capped and killed on disconnect). Bounds one request's bandwidth /
+// duration. Configured in whole megabytes; 0 (or less) disables the cap.
+const TRANSCODE_MAX_OUTPUT_MB = (() => {
+  const n = parseInt(process.env.SSH_MAX_TRANSCODE_OUTPUT_MB || "4096", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 4096;
+})();
+const TRANSCODE_MAX_OUTPUT_BYTES =
+  TRANSCODE_MAX_OUTPUT_MB > 0 ? TRANSCODE_MAX_OUTPUT_MB * 1024 * 1024 : 0;
 let activeTranscodes = 0;
 
 // Optional operator-configured SSH algorithm allowlist (#53). Each category, when
@@ -683,10 +706,16 @@ const posInt = (envVar, dflt) => {
 };
 const MAX_THUMBNAIL_JOBS = posInt("SSH_MAX_THUMBNAIL_JOBS", 4);
 const MAX_SEARCH_JOBS = posInt("SSH_MAX_SEARCH_JOBS", 4);
+// Image-preview transcodes (sharp resize/encode — WebP/AVIF, AVIF being the
+// slowest) are otherwise uncapped, so a client firing many large-image previews
+// could pin every CPU. Route them through their own limiter too (#5).
+const MAX_PREVIEW_JOBS = posInt("SSH_MAX_PREVIEW_JOBS", 4);
 // Bound the wait queues so a flood can't grow them without limit; past this we
-// shed the request (a skipped thumbnail keeps its icon; a search replies empty).
+// shed the request (a skipped thumbnail keeps its icon; a search replies empty;
+// a shed preview falls back to streaming the original image).
 const THUMBNAIL_QUEUE_MAX = posInt("SSH_MAX_THUMBNAIL_QUEUE", 500);
 const SEARCH_QUEUE_MAX = posInt("SSH_MAX_SEARCH_QUEUE", 100);
+const PREVIEW_QUEUE_MAX = posInt("SSH_MAX_PREVIEW_QUEUE", 100);
 
 class QueueFullError extends Error {
   constructor() {
@@ -733,6 +762,7 @@ function createLimiter(maxConcurrent, maxQueue = Infinity) {
 }
 const thumbnailLimiter = createLimiter(MAX_THUMBNAIL_JOBS, THUMBNAIL_QUEUE_MAX);
 const searchLimiter = createLimiter(MAX_SEARCH_JOBS, SEARCH_QUEUE_MAX);
+const previewLimiter = createLimiter(MAX_PREVIEW_JOBS, PREVIEW_QUEUE_MAX);
 // Content types for the streaming endpoint, by lower-case extension. Mirrors the
 // media MIME maps in `src/lib/sshProtocol.ts` (the "two synchronized places"
 // discipline) for the formats a browser can play inline.
@@ -1171,7 +1201,15 @@ const server = createServer((req, res) => {
           queued: searchLimiter.queued,
           max: MAX_SEARCH_JOBS,
         },
+        preview: {
+          active: previewLimiter.active,
+          queued: previewLimiter.queued,
+          max: MAX_PREVIEW_JOBS,
+        },
       },
+      // Upgraded-but-unconnected sockets awaiting a `connect` (distinct client
+      // IPs currently holding one or more), bounding an upgrade flood (#1).
+      pendingUpgradeIps: pendingUpgrades.size,
       uptime: Math.floor(process.uptime()),
     });
     return;
@@ -1362,7 +1400,32 @@ const server = createServer((req, res) => {
           proc.stderr?.on("data", () => {}); // drain, don't buffer
           src.on("error", () => cleanup());
           src.pipe(proc.stdin);
-          proc.stdout.pipe(res);
+          // Manually pump stdout→res (instead of .pipe) so we can enforce the
+          // output-byte cap (#8) and honor response backpressure.
+          let outBytes = 0;
+          proc.stdout.on("data", (chunk) => {
+            outBytes += chunk.length;
+            if (
+              TRANSCODE_MAX_OUTPUT_BYTES > 0 &&
+              outBytes > TRANSCODE_MAX_OUTPUT_BYTES
+            ) {
+              logEvent("transcode-cap", {
+                ip: clientIpFromReq(req),
+                bytes: outBytes,
+              });
+              cleanup();
+              try {
+                res.end();
+              } catch {
+                /* already ended */
+              }
+              return;
+            }
+            if (!res.write(chunk)) {
+              proc.stdout.pause();
+              res.once("drain", () => proc.stdout.resume());
+            }
+          });
           return;
         }
         const type = streamContentType(filePath);
@@ -1720,11 +1783,28 @@ function mkdirp(sftp, dir, done) {
  */
 function enumerateZipEntries(sftp, roots, done) {
   const entries = [];
+  // Bound the entry array so a "download as zip" of a directory with an enormous
+  // number of files can't build an unbounded names+sizes list in the shared
+  // process memory before streaming even begins (#6). Symmetric with the
+  // MAX_FIND_NODES cap on recursive search.
+  let finished = false;
+  const finish = (err, result) => {
+    if (finished) return;
+    finished = true;
+    done(err, result);
+  };
+  const overBudget = () => entries.length >= MAX_ZIP_ENTRIES;
   const walkDir = (dir, rel, cb) => {
     sftp.readdir(dir, (err, list) => {
       if (err) return cb(err);
       let i = 0;
       const nextEntry = () => {
+        if (overBudget())
+          return cb(
+            new Error(
+              `Too many files to zip (over ${MAX_ZIP_ENTRIES}). Download a smaller selection.`,
+            ),
+          );
         if (i >= list.length) return cb(null);
         const item = list[i++];
         const childPath = `${dir}/${item.filename}`;
@@ -1747,13 +1827,19 @@ function enumerateZipEntries(sftp, roots, done) {
   };
   let r = 0;
   const nextRoot = () => {
-    if (r >= roots.length) return done(null, entries);
+    if (overBudget())
+      return finish(
+        new Error(
+          `Too many files to zip (over ${MAX_ZIP_ENTRIES}). Download a smaller selection.`,
+        ),
+      );
+    if (r >= roots.length) return finish(null, entries);
     const { path, prefix } = roots[r++];
     sftp.stat(path, (err, stats) => {
-      if (err) return done(err);
+      if (err) return finish(err);
       if (stats.isDirectory?.()) {
         const base = path.replace(/\/+$/, "");
-        walkDir(base, prefix, (e) => (e ? done(e) : nextRoot()));
+        walkDir(base, prefix, (e) => (e ? finish(e) : nextRoot()));
       } else if (stats.isFile?.()) {
         entries.push({
           readPath: path,
@@ -2690,6 +2776,19 @@ wss.on("connection", (ws, req) => {
     const existing = uploads.get(path);
     const opening = msg.offset === 0 || (msg.resume === true && !existing);
     if (opening) {
+      // Cap concurrent uploads per session (#7). A brand-new upload (no existing
+      // stream for this path) must fit under the limit; a resume/reopen of an
+      // existing path replaces its entry and doesn't grow the map.
+      if (
+        !existing &&
+        MAX_TRANSFERS_PER_SESSION > 0 &&
+        uploads.size >= MAX_TRANSFERS_PER_SESSION
+      ) {
+        return sendError(
+          "Too many concurrent uploads. Wait for some to finish.",
+          "sftp",
+        );
+      }
       if (existing) {
         try {
           existing.stream.destroy();
@@ -2854,6 +2953,17 @@ wss.on("connection", (ws, req) => {
         // so the client routes the bytes into the modal (as a blob/text)
         // instead of saving a file. Cancellable via the `downloads` map.
         const streamOriginal = (cap) => {
+          // Cap concurrent transfers per session (#7) for a new download path.
+          if (
+            !downloads.has(msg.path) &&
+            MAX_TRANSFERS_PER_SESSION > 0 &&
+            downloads.size >= MAX_TRANSFERS_PER_SESSION
+          ) {
+            return sendError(
+              "Too many concurrent transfers. Wait for some to finish.",
+              "sftp",
+            );
+          }
           // A capped read only pulls the file's head (`{ start, end }`), so a
           // huge log previews as text without transferring the whole thing.
           const truncated = cap > 0 && stats.size > cap;
@@ -2933,7 +3043,15 @@ wss.on("connection", (ws, req) => {
         ) {
           s.readFile(msg.path, async (err, buffer) => {
             if (err) return sendError(err.message, "sftp");
-            const encoded = await encodePreviewImage(buffer);
+            // Concurrency-cap the sharp resize/encode (#5). On load-shed
+            // (queue full) treat it as "no transcode" and fall back below to
+            // streaming the original (or the unsupported card for HEIC).
+            let encoded = null;
+            try {
+              encoded = await previewLimiter(() => encodePreviewImage(buffer));
+            } catch {
+              encoded = null;
+            }
             // Send the transcode when it saved bytes, or whenever the raw
             // bytes can't be rendered by the browser (HEIC/HEIF) — there the
             // transcode is the only viewable form, size regardless.
@@ -3112,6 +3230,17 @@ wss.on("connection", (ws, req) => {
   // cancel); `zipName` is the saved filename. `overLimit` builds the too-large
   // message for the byte cap.
   function streamZip(s, roots, downloadKey, zipName, overLimit) {
+    // Cap concurrent transfers per session (#7): a zip stream occupies a slot.
+    if (
+      !downloads.has(downloadKey) &&
+      MAX_TRANSFERS_PER_SESSION > 0 &&
+      downloads.size >= MAX_TRANSFERS_PER_SESSION
+    ) {
+      return sendError(
+        "Too many concurrent transfers. Wait for some to finish.",
+        "sftp",
+      );
+    }
     enumerateZipEntries(s, roots, (err, entries) => {
       if (err) return sendError(err.message, "sftp");
       const nameBufs = entries.map((e) => Buffer.from(e.name, "utf8"));
