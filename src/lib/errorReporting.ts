@@ -31,25 +31,36 @@ type ErrorSink = (report: ErrorReport) => void;
  * be unit-tested without a DOM. The stack is capped so a pathological error
  * can't produce an unbounded payload.
  */
+const MAX_MESSAGE_CHARS = 1000;
+const MAX_STACK_CHARS = 4000;
+
 export function buildErrorReport(
   error: unknown,
   context?: string,
 ): ErrorReport {
   if (error instanceof Error) {
     const digest = (error as Error & { digest?: string }).digest;
+    // Bound BOTH the message and the (first stack line normally repeats the
+    // message) serialized stack so a huge error message can't produce a
+    // multi-megabyte report despite the line cap.
+    const stack = error.stack
+      ? error.stack
+          .split("\n")
+          .slice(0, 20)
+          .join("\n")
+          .slice(0, MAX_STACK_CHARS)
+      : undefined;
     return {
       name: error.name || "Error",
-      message: error.message || "",
-      stack: error.stack
-        ? error.stack.split("\n").slice(0, 20).join("\n")
-        : undefined,
+      message: (error.message || "").slice(0, MAX_MESSAGE_CHARS),
+      stack,
       digest,
       context,
     };
   }
   return {
     name: typeof error,
-    message: String(error).slice(0, 1000),
+    message: String(error).slice(0, MAX_MESSAGE_CHARS),
     context,
   };
 }

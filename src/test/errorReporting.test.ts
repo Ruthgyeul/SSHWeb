@@ -31,4 +31,12 @@ describe("buildErrorReport", () => {
     const report = buildErrorReport("z".repeat(5000));
     expect(report.message.length).toBeLessThanOrEqual(1000);
   });
+
+  it("bounds an oversized Error message and stack", () => {
+    const err = new Error("m".repeat(5000));
+    err.stack = "s".repeat(20000);
+    const report = buildErrorReport(err);
+    expect(report.message.length).toBeLessThanOrEqual(1000);
+    expect((report.stack ?? "").length).toBeLessThanOrEqual(4000);
+  });
 });

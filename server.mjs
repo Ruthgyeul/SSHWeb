@@ -2175,37 +2175,41 @@ wss.on("connection", (ws, req) => {
   // Idle-session reaper: close a connection with no shell/SFTP traffic for
   // IDLE_TIMEOUT_MS. Disabled when the timeout is 0. The check runs at most
   // every 30s so a long timeout doesn't hold a tight interval.
+  //
+  // Clamp the warning window to strictly less than the timeout (half it) so a
+  // short timeout (e.g. 30s with the default 60s warning) still warns before it
+  // fires, instead of the first tick landing on expiry and skipping the warning.
+  const idleWarnMs =
+    IDLE_WARNING_MS > 0
+      ? Math.min(IDLE_WARNING_MS, Math.floor(IDLE_TIMEOUT_MS / 2))
+      : 0;
   const idleTimer =
     IDLE_TIMEOUT_MS > 0
       ? setInterval(
           () => {
             const now = Date.now();
+            // Warn (once) before the timeout so the UI can prompt to stay
+            // connected (#51); checked before expiry so a coarse tick can't skip
+            // straight to disconnect.
+            const remaining = IDLE_TIMEOUT_MS - (now - lastActivity);
+            if (idleWarnMs > 0 && !idleWarned && remaining <= idleWarnMs) {
+              idleWarned = true;
+              send({ t: "idle-warning", remainingMs: Math.max(0, remaining) });
+            }
             if (isIdleExpired(lastActivity, now, IDLE_TIMEOUT_MS)) {
               logEvent("idle-timeout", { id: connId, ip: clientIp });
               sendError("Session closed after inactivity.", "shell");
               cleanup();
               ws.close();
-              return;
-            }
-            // Warn the client once when the timeout is imminent so its UI can
-            // show a countdown / let the user keep the session alive (#51).
-            const remaining = IDLE_TIMEOUT_MS - (now - lastActivity);
-            if (
-              IDLE_WARNING_MS > 0 &&
-              !idleWarned &&
-              remaining <= IDLE_WARNING_MS
-            ) {
-              idleWarned = true;
-              send({ t: "idle-warning", remainingMs: Math.max(0, remaining) });
             }
           },
-          // Tighten the tick to at most the warning granularity so the warning
-          // isn't delivered too coarsely before the timeout fires.
+          // Tick at most every warning-window (or 30s), so the warning isn't
+          // delivered too coarsely before the timeout fires.
           Math.max(
             1000,
             Math.min(
               IDLE_TIMEOUT_MS,
-              IDLE_WARNING_MS > 0 ? IDLE_WARNING_MS : 30_000,
+              idleWarnMs > 0 ? idleWarnMs : 30_000,
               30_000,
             ),
           ),
@@ -3313,7 +3317,10 @@ wss.on("connection", (ws, req) => {
                 id: connId,
                 ip: clientIp,
                 op: "download",
-                path: msg.path,
+                // The remote path is potentially sensitive; only include it when
+                // the opt-in audit log is enabled, so ordinary ops logs don't
+                // leak users' filenames on a shared deploy.
+                path: AUDIT_LOG ? msg.path : undefined,
                 bytes: truncated ? cap : stats.size,
                 ms: elapsed,
               });
@@ -3739,6 +3746,9 @@ wss.on("connection", (ws, req) => {
         elevated,
         op: msg.t,
         path: msg.path,
+        // Bulk ops (e.g. sftp-download-many) carry their selection in `paths`;
+        // record a bounded copy so the trail names what was accessed.
+        paths: Array.isArray(msg.paths) ? msg.paths.slice(0, 100) : undefined,
         from: msg.from,
         to: msg.to,
       });
@@ -4030,10 +4040,16 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 // carry them; still, we cap the stack so a pathological error can't flood logs.
 function describeError(err) {
   if (err instanceof Error) {
+    // Bound both fields: the first stack line normally repeats the message, so a
+    // huge message would otherwise flood stdout despite the 8-line cap.
     return {
       name: err.name,
-      message: err.message,
-      stack: (err.stack || "").split("\n").slice(0, 8).join("\n"),
+      message: (err.message || "").slice(0, 500),
+      stack: (err.stack || "")
+        .split("\n")
+        .slice(0, 8)
+        .join("\n")
+        .slice(0, 2000),
     };
   }
   return { name: typeof err, message: String(err).slice(0, 500) };

@@ -69,8 +69,17 @@ export const THEME_COLOR = "#0a0d13";
  * Optional error-reporting DSN (e.g. Sentry). Empty by default, so error
  * reporting is a no-op unless a deployment configures it. See
  * `src/lib/errorReporting.ts` for the (dependency-free) integration seam.
+ *
+ * NB: referenced as a STATIC `process.env.NEXT_PUBLIC_SENTRY_DSN` (not via the
+ * dynamic `env()` helper) because Next.js only inlines `NEXT_PUBLIC_*` into the
+ * client bundle for literal property accesses — this value is read in the
+ * browser (the error boundaries), so a dynamic lookup would always be empty.
  */
-export const ERROR_REPORTING_DSN = env("NEXT_PUBLIC_SENTRY_DSN", "");
+export const ERROR_REPORTING_DSN =
+  process.env.NEXT_PUBLIC_SENTRY_DSN &&
+  process.env.NEXT_PUBLIC_SENTRY_DSN.trim() !== ""
+    ? process.env.NEXT_PUBLIC_SENTRY_DSN
+    : "";
 
 /* --- Web SSH client -------------------------------------------------------
  * The path the browser opens its SSH WebSocket on. Must match the `WS_PATH`
