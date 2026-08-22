@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { reportError } from "@/lib/errorReporting";
 
 /**
  * Root error boundary. This catches errors thrown in the root layout itself —
@@ -18,7 +19,7 @@ export default function GlobalError({
   reset: () => void;
 }) {
   useEffect(() => {
-    console.error(error);
+    reportError(error, "global-error-boundary");
   }, [error]);
 
   return (

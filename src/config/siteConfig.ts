@@ -65,6 +65,13 @@ export const ALLOW_INDEXING =
 /** Brand colors surfaced to metadata (`themeColor`, manifest). */
 export const THEME_COLOR = "#0a0d13";
 
+/**
+ * Optional error-reporting DSN (e.g. Sentry). Empty by default, so error
+ * reporting is a no-op unless a deployment configures it. See
+ * `src/lib/errorReporting.ts` for the (dependency-free) integration seam.
+ */
+export const ERROR_REPORTING_DSN = env("NEXT_PUBLIC_SENTRY_DSN", "");
+
 /* --- Web SSH client -------------------------------------------------------
  * The path the browser opens its SSH WebSocket on. Must match the `WS_PATH`
  * read by `server.mjs` (they default to the same value). The actual SSH host

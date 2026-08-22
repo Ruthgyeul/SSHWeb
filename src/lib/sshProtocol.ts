@@ -441,6 +441,10 @@ export type ServerMessage =
   // A failure to gain elevation is reported separately as an `error` (scope
   // `sftp`) and leaves the session unelevated.
   | { t: "sftp-sudo"; enabled: boolean }
+  // Sent when an idle session is about to be reaped (SSH_IDLE_TIMEOUT_MS), so the
+  // UI can warn the user; `remainingMs` is the time left before disconnect. Any
+  // real shell/SFTP activity cancels the pending timeout on the server.
+  | { t: "idle-warning"; remainingMs: number }
   | { t: "error"; message: string; scope?: "sftp" | "shell" | "auth" };
 
 /* ------------------------------------------------------------------ */
