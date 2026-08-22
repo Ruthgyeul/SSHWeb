@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { ErrorScreen } from "@/components/ErrorScreen";
 import { RefreshIcon } from "@/components/ssh/icons";
+import { reportError } from "@/lib/errorReporting";
 
 /**
  * Route-level error boundary (500). Next.js renders this when a runtime error
@@ -19,8 +20,9 @@ export default function Error({
   reset: () => void;
 }) {
   useEffect(() => {
-    // Surface for debugging; wire real error reporting (Sentry, etc.) here.
-    console.error(error);
+    // Logs locally and, when NEXT_PUBLIC_SENTRY_DSN + a sink are configured,
+    // forwards a bounded report to the external reporter (see errorReporting.ts).
+    reportError(error, "route-error-boundary");
   }, [error]);
 
   return (

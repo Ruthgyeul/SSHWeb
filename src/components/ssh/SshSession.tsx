@@ -742,6 +742,17 @@ export function SshSession({
           listDir(cwdRef.current);
           break;
 
+        case "idle-warning": {
+          // The server is about to reap this idle session; warn the user so they
+          // can keep it alive. Any keypress/SFTP op resets the server timer.
+          const secs = Math.max(1, Math.round((msg.remainingMs || 0) / 1000));
+          notify(
+            "info",
+            `Inactive — disconnecting in ${secs}s. Press a key to stay connected.`,
+          );
+          break;
+        }
+
         case "error":
           if (msg.scope === "sftp") {
             // NB: an sftp `error` frame carries no path/op, so we can't tell
