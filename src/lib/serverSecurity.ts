@@ -73,19 +73,43 @@ export function isWebSocketOriginAllowed(opts: {
 
 /**
  * Resolve the client IP for rate-limiting. When `trustProxy` is set (the
- * default deployment sits behind a reverse proxy on loopback), the first hop in
- * `X-Forwarded-For` wins; otherwise the socket's `remoteAddress` is used. Falls
- * back to `"unknown"` so a missing address still yields a stable bucket key.
+ * default deployment sits behind a reverse proxy on loopback), the client IP is
+ * read from `X-Forwarded-For`; otherwise the socket's `remoteAddress` is used.
+ * Falls back to `"unknown"` so a missing address still yields a stable bucket
+ * key.
+ *
+ * **Which hop to trust matters for security.** A client can send its own
+ * `X-Forwarded-For`; a well-behaved proxy *appends* the real peer address to
+ * the right of whatever arrived, so the left-most hop is attacker-controlled and
+ * the right-most is the one our own proxy added. Taking the left-most hop (the
+ * previous behavior) let a client forge a fresh IP per request and evade the
+ * per-IP throttle. We instead count `trustedHops` in from the *right*: with the
+ * default single reverse proxy (`trustedHops = 1`) that's the address the proxy
+ * observed — unspoofable by the client. Deployments behind N chained trusted
+ * proxies set `trustedHops = N`. A single-proxy deploy (XFF has one hop) is
+ * unaffected, since left-most and right-most coincide.
  */
 export function clientIpFromHeaders(
   forwardedFor: string | string[] | undefined,
   remoteAddress: string | undefined,
   trustProxy: boolean,
+  trustedHops = 1,
 ): string {
   if (trustProxy && forwardedFor) {
-    const raw = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor;
-    const first = raw?.split(",")[0]?.trim();
-    if (first) return first;
+    const raw = Array.isArray(forwardedFor)
+      ? forwardedFor.join(",")
+      : forwardedFor;
+    const hops = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (hops.length > 0) {
+      const n =
+        Number.isFinite(trustedHops) && trustedHops >= 1
+          ? Math.floor(trustedHops)
+          : 1;
+      return hops[Math.max(0, hops.length - n)];
+    }
   }
   return remoteAddress || "unknown";
 }

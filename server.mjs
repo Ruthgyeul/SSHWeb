@@ -567,6 +567,14 @@ const RATE_WINDOW_MS = parseInt(
 // proxy on loopback). Set false when the server is directly exposed.
 const TRUST_PROXY =
   (process.env.SSH_TRUST_PROXY || "true").toLowerCase() !== "false";
+// How many chained trusted proxies sit in front of the bridge. The client IP is
+// read as this many hops in from the RIGHT of X-Forwarded-For (the right-most
+// hop is the one our own proxy appended and cannot be spoofed by the client;
+// the left-most is attacker-controlled). Default 1 (a single reverse proxy).
+const TRUSTED_PROXY_HOPS = (() => {
+  const n = parseInt(process.env.SSH_TRUSTED_PROXY_HOPS || "1", 10);
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+})();
 // Optional explicit WebSocket origin allowlist. Empty = require same-origin.
 const ALLOWED_ORIGINS = (process.env.SSH_ALLOWED_ORIGINS || "")
   .split(/[\s,]+/)
@@ -881,13 +889,23 @@ function isWebSocketOriginAllowed(origin, host) {
   return hostPort === String(host).trim().toLowerCase();
 }
 
-/** Resolve the client IP for rate-limiting (honors X-Forwarded-For if trusted). */
+/**
+ * Resolve the client IP for rate-limiting (mirrors clientIpFromHeaders in
+ * serverSecurity.ts). Counts TRUSTED_PROXY_HOPS in from the RIGHT of
+ * X-Forwarded-For so a client can't forge a fresh IP per request (the left-most
+ * hop is attacker-controlled; the right-most is the one our proxy appended).
+ */
 function clientIpFromReq(req) {
   const xff = req.headers["x-forwarded-for"];
   if (TRUST_PROXY && xff) {
-    const raw = Array.isArray(xff) ? xff[0] : xff;
-    const first = raw?.split(",")[0]?.trim();
-    if (first) return first;
+    const raw = Array.isArray(xff) ? xff.join(",") : xff;
+    const hops = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (hops.length > 0) {
+      return hops[Math.max(0, hops.length - TRUSTED_PROXY_HOPS)];
+    }
   }
   return req.socket?.remoteAddress || "unknown";
 }

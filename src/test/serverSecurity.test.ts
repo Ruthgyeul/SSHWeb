@@ -106,13 +106,36 @@ describe("isWebSocketOriginAllowed", () => {
 });
 
 describe("clientIpFromHeaders", () => {
-  it("uses the first X-Forwarded-For hop when trusting the proxy", () => {
+  it("takes the right-most (proxy-appended) X-Forwarded-For hop by default", () => {
+    // A client can forge the left-most hop; our own proxy appends the real peer
+    // to the right. With one trusted proxy that right-most hop is the client.
     expect(
       clientIpFromHeaders("203.0.113.7, 10.0.0.1", "127.0.0.1", true),
-    ).toBe("203.0.113.7");
+    ).toBe("10.0.0.1");
+    // A single-hop XFF is unchanged (left-most and right-most coincide).
     expect(clientIpFromHeaders(["198.51.100.2"], "127.0.0.1", true)).toBe(
       "198.51.100.2",
     );
+  });
+
+  it("counts trustedHops in from the right for chained proxies", () => {
+    // Two trusted proxies: the real client is the 2nd hop from the right.
+    expect(
+      clientIpFromHeaders(
+        "1.1.1.1, 203.0.113.7, 10.0.0.1",
+        "127.0.0.1",
+        true,
+        2,
+      ),
+    ).toBe("203.0.113.7");
+    // More trusted hops than present clamps to the left-most hop.
+    expect(
+      clientIpFromHeaders("203.0.113.7, 10.0.0.1", "127.0.0.1", true, 9),
+    ).toBe("203.0.113.7");
+    // A non-positive / non-finite hop count falls back to a single hop.
+    expect(
+      clientIpFromHeaders("203.0.113.7, 10.0.0.1", "127.0.0.1", true, 0),
+    ).toBe("10.0.0.1");
   });
 
   it("ignores X-Forwarded-For when not trusting the proxy", () => {
