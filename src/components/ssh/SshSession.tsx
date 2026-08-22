@@ -25,6 +25,7 @@ import {
 import { resumeUploadStart } from "@/lib/serverSecurity";
 import { SITE_NAME } from "@/config/siteConfig";
 import { base64ToBytes, bytesToBase64 } from "@/lib/bytes";
+import { bytesToBase64Async } from "@/lib/base64Codec";
 import { cn } from "@/lib/utils";
 import { triggerDownload } from "./dom/download";
 import {
@@ -241,6 +242,10 @@ export function SshSession({
   // (below) to bound memory. `requestedThumbsRef` dedupes in-flight requests so
   // a tile re-rendering never re-fetches.
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
+  // Dominant color per thumbnail (`#rrggbb`), painted behind a grid tile as a
+  // cheap placeholder while its (lazy-loaded) WebP decodes (#100). Cleared with
+  // the thumbnails below.
+  const [thumbBg, setThumbBg] = useState<Record<string, string>>({});
   // Mirror of `thumbnails` so callbacks can read the latest placeholder without
   // listing `thumbnails` as a dependency (it changes on every tile load).
   const thumbnailsRef = useRef<Record<string, string>>({});
@@ -416,6 +421,27 @@ export function SshSession({
     [send],
   );
 
+  // Debounced re-list of the current directory (#17). A batch of SFTP ops (e.g. a
+  // folder upload of N files) produces N `sftp-ok` acks; without coalescing that
+  // fires N full directory re-lists, each also re-deriving the FileBrowser's
+  // sort/filter. Collapse a burst into a single refresh.
+  const relistTimerRef = useRef<number | null>(null);
+  const scheduleRelist = useCallback(() => {
+    if (relistTimerRef.current !== null)
+      window.clearTimeout(relistTimerRef.current);
+    relistTimerRef.current = window.setTimeout(() => {
+      relistTimerRef.current = null;
+      listDir(cwdRef.current);
+    }, 120);
+  }, [listDir]);
+  useEffect(
+    () => () => {
+      if (relistTimerRef.current !== null)
+        window.clearTimeout(relistTimerRef.current);
+    },
+    [],
+  );
+
   // "Clear thumbnail cache" (settings): ask the bridge to evict this
   // connection's cached tiles (the cache lives server-side now), then drop the
   // in-memory copies and let the visible tiles re-request — a fresh generation
@@ -449,6 +475,7 @@ export function SshSession({
     send({ t: "thumb-purge" });
     resetThumbs();
     setThumbnails({});
+    setThumbBg({});
     // Also drop the recently-viewed preview bytes held in this browser, so
     // "clear" empties the whole in-memory media cache, not just grid tiles.
     clearPreviewCache();
@@ -601,6 +628,7 @@ export function SshSession({
           // The re-list below re-fetches thumbnails under the new identity.
           resetThumbs();
           setThumbnails({});
+          setThumbBg({});
           // Drop cached preview bytes too: content only root could read must not
           // linger after de-elevate (and a user-visible file shouldn't be assumed
           // still readable as root).
@@ -616,6 +644,7 @@ export function SshSession({
           if (msg.path !== cwdRef.current) {
             resetThumbs();
             setThumbnails({});
+            setThumbBg({});
           }
           cwdRef.current = msg.path;
           setCwd(msg.path);
@@ -654,6 +683,11 @@ export function SshSession({
               const mime = msg.mime ?? "image/webp";
               const dataUrl = `data:${mime};base64,${msg.dataB64}`;
               setThumbnails((prev) => ({ ...prev, [msg.path]: dataUrl }));
+              if (msg.bg)
+                setThumbBg((prev) => ({
+                  ...prev,
+                  [msg.path]: msg.bg as string,
+                }));
             }
           } else {
             // Plain one-shot read (zip of a folder / multi-select). Previews now
@@ -739,7 +773,7 @@ export function SshSession({
               );
             }
           }
-          listDir(cwdRef.current);
+          scheduleRelist();
           break;
 
         case "idle-warning": {
@@ -803,6 +837,7 @@ export function SshSession({
     },
     [
       listDir,
+      scheduleRelist,
       send,
       notify,
       onThumbReplied,
@@ -941,6 +976,7 @@ export function SshSession({
     // the server keeps its own cache for a future re-login. `setPreview(null)`
     // above already revokes any open preview blob.
     setThumbnails({});
+    setThumbBg({});
     resetThumbs();
     setHasLast(false);
     ctrlRef.current = false;
@@ -1415,10 +1451,12 @@ export function SshSession({
   const onSaveEdit = (path: string, text: string) => {
     editorSaveTextRef.current[path] = text;
     setSavingPath(path);
-    send({
-      t: "sftp-write",
-      path,
-      dataB64: bytesToBase64(new TextEncoder().encode(text)),
+    // Offload the base64 encode to a worker for large files so saving a big file
+    // doesn't jank the UI (#98); falls back to a synchronous encode when workers
+    // are unavailable, so the frame is always sent.
+    const bytes = new TextEncoder().encode(text);
+    void bytesToBase64Async(bytes).then((dataB64) => {
+      send({ t: "sftp-write", path, dataB64 });
     });
   };
   // Close one editor tab; if it was active, fall back to the last remaining file.
@@ -1611,6 +1649,7 @@ export function SshSession({
                 })
               }
               thumbnails={thumbnails}
+              thumbBg={thumbBg}
               onRequestThumbnail={requestThumbnail}
               onThumbnailVisibility={setThumbVisible}
               search={search}
