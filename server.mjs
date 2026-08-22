@@ -24,6 +24,7 @@ import { parse } from "node:url";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { spawn } from "node:child_process";
 import { writeFile, unlink } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { lookup } from "node:dns/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -124,7 +125,7 @@ function ffmpegPosterFrame(input, stdinBuffer) {
         /* already gone */
       }
       done(null);
-    }, 15000);
+    }, FFMPEG_TIMEOUT_MS);
     proc.stdout.on("data", (c) => chunks.push(c));
     proc.stdout.on("error", () => {});
     proc.on("error", () => done(null));
@@ -450,7 +451,11 @@ async function encodePreviewImage(buffer) {
 // deep/large tree can't tie up the session (the walk reads listings/metadata
 // only, never file contents).
 const MAX_FIND_RESULTS = 500;
-const MAX_FIND_NODES = 20000;
+// Cap on filesystem nodes visited per recursive search (#15, env-tunable).
+const MAX_FIND_NODES = (() => {
+  const n = parseInt(process.env.SSH_MAX_FIND_NODES || "20000", 10);
+  return Number.isFinite(n) && n >= 1 ? n : 20000;
+})();
 // Upper bound on files enumerated for a single "download as zip" (#6). Caps the
 // in-memory names+sizes list built before streaming so a directory with a
 // pathological number of entries can't OOM the shared process.
@@ -461,7 +466,11 @@ const MAX_ZIP_ENTRIES = 100000;
 // tree of text files can't tie up the session. Unlike name search, grep opens
 // file *contents* — the files are only read, never modified.
 const GREP_MAX_FILE_BYTES = 1024 * 1024;
-const GREP_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+// Total bytes a single content search may read (#15, env-tunable, in MB).
+const GREP_MAX_TOTAL_BYTES = (() => {
+  const mb = parseInt(process.env.SSH_GREP_MAX_TOTAL_MB || "64", 10);
+  return (Number.isFinite(mb) && mb >= 1 ? mb : 64) * 1024 * 1024;
+})();
 
 // Mirror of grepFirstMatch in src/lib/sshProtocol.ts — keep the two in sync.
 // Finds the first line containing `query` (case-insensitive), returning its
@@ -623,11 +632,63 @@ const HANDSHAKE_TIMEOUT_MS = (() => {
 // pings don't count as activity, so a truly idle terminal still times out.
 // 0 (the default) disables the idle timeout entirely.
 const IDLE_TIMEOUT_MS = parseInt(process.env.SSH_IDLE_TIMEOUT_MS || "0", 10);
+// How long before the idle timeout to warn the client so its UI can show a
+// countdown (#51). Only relevant when IDLE_TIMEOUT_MS > 0; clamped so it can't
+// exceed the timeout itself. 0 disables the warning.
+const IDLE_WARNING_MS = (() => {
+  const n = parseInt(process.env.SSH_IDLE_WARNING_MS || "60000", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 60000;
+})();
+// SSH keepalive probe interval (ms) passed to ssh2 (#51). Keeps NAT/firewall
+// mappings alive and detects a dead peer. 0 disables ssh2 keepalives.
+const KEEPALIVE_INTERVAL_MS = (() => {
+  const n = parseInt(process.env.SSH_KEEPALIVE_INTERVAL_MS || "15000", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 15000;
+})();
+// Timeout (ms) for a single ffmpeg poster-frame extraction (#15, env-tunable),
+// so a hung/slow decode can't hold a thumbnail concurrency slot.
+const FFMPEG_TIMEOUT_MS = (() => {
+  const n = parseInt(process.env.SSH_FFMPEG_TIMEOUT_MS || "15000", 10);
+  return Number.isFinite(n) && n >= 1 ? n : 15000;
+})();
+// Opt-in audit log of SFTP operations (#90): subject (user@host), op, and path,
+// never credentials or file contents. Emitted regardless of SSH_LOG_LEVEL when
+// on (but still silenced by SSH_LOG=off).
+const AUDIT_LOG =
+  (process.env.SSH_AUDIT_LOG || "false").toLowerCase() === "true";
+// Log a transfer whose wall-clock duration exceeds this many ms as a warn (#97),
+// so ops can spot pathologically slow reads/writes. 0 disables.
+const SLOW_TRANSFER_MS = (() => {
+  const n = parseInt(process.env.SSH_SLOW_TRANSFER_MS || "10000", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 10000;
+})();
 // Operational logging mode: "json" (structured one-line events, the default) or
 // "off". Credentials are never included in any log line.
 const LOG_MODE = (process.env.SSH_LOG || "json").toLowerCase();
+// Minimum severity to emit (#96): error < warn < info < debug. Events at a lower
+// severity than SSH_LOG_LEVEL are dropped. Default "info". `SSH_LOG=off` still
+// silences everything regardless of level.
+const LOG_LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
+const LOG_LEVEL =
+  LOG_LEVELS[(process.env.SSH_LOG_LEVEL || "info").toLowerCase()] ?? 2;
+// Default severity per event; a call may override via a `level` field. Anything
+// unlisted defaults to "info".
+const EVENT_SEVERITY = {
+  reject: "warn",
+  "transcode-cap": "warn",
+  "handshake-timeout": "warn",
+  "bad-message": "warn",
+  "handler-error": "warn",
+  "slow-transfer": "warn",
+  "uncaught-exception": "error",
+  "unhandled-rejection": "error",
+};
 // Fixed path for the JSON health probe (used by load balancers / uptime checks).
 const HEALTH_PATH = "/api/health";
+// Prometheus metrics endpoint (#54): the same operational counters as
+// /api/health but in Prometheus text exposition format, plus a handshake-latency
+// histogram. Gated exactly like the detailed health payload (see requestIsAuthorized).
+const METRICS_PATH = "/api/metrics";
 // Optional shared secret gating the whole relay. When set, the browser must
 // exchange it for an access cookie at POST /api/access before its WebSocket
 // upgrade is accepted. Empty (the default) leaves the relay open.
@@ -643,7 +704,21 @@ const ACCESS_COOKIE = "sshweb_access";
 const PREVIEW_STREAM_PATH = "/api/preview";
 // Cap a single Range response so one request can't be turned into an unbounded
 // pull; the browser just issues more ranges as playback advances.
-const STREAM_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
+const STREAM_MAX_CHUNK_BYTES = (() => {
+  const mb = parseInt(process.env.SSH_STREAM_MAX_CHUNK_MB || "16", 10);
+  return (Number.isFinite(mb) && mb >= 1 ? mb : 16) * 1024 * 1024;
+})();
+// WebSocket send-buffer watermarks for streamed reads (#15, env-tunable, in MB):
+// pause the source when buffered bytes exceed HIGH, resume once they fall below
+// LOW, so a big transfer never balloons the send buffer.
+const WS_BACKPRESSURE_HIGH_BYTES = (() => {
+  const mb = parseInt(process.env.SSH_WS_BACKPRESSURE_HIGH_MB || "8", 10);
+  return (Number.isFinite(mb) && mb >= 1 ? mb : 8) * 1024 * 1024;
+})();
+const WS_BACKPRESSURE_LOW_BYTES = (() => {
+  const mb = parseInt(process.env.SSH_WS_BACKPRESSURE_LOW_MB || "1", 10);
+  return (Number.isFinite(mb) && mb >= 1 ? mb : 1) * 1024 * 1024;
+})();
 // On-the-fly video transcode (for containers/codecs the browser can't play
 // natively — see `videoNeedsTranscode` in src/lib/sshProtocol.ts). A `<video>`
 // requests `/api/preview?...&transcode=1` and the bridge pipes the source
@@ -842,8 +917,44 @@ let thumbsServed = 0;
 let thumbsSkipped = 0;
 let thumbBytesOut = 0;
 let thumbCacheHits = 0; // tiles served straight from the in-memory cache
+// SSH handshake-latency histogram (connect → ready), for the Prometheus endpoint
+// (#54). Cumulative buckets in milliseconds (Prometheus "le" semantics).
+const HANDSHAKE_BUCKETS_MS = [100, 250, 500, 1000, 2500, 5000, 10000];
+const handshakeHist = {
+  buckets: new Array(HANDSHAKE_BUCKETS_MS.length).fill(0),
+  count: 0,
+  sumMs: 0,
+};
+function observeHandshake(ms) {
+  handshakeHist.count += 1;
+  handshakeHist.sumMs += ms;
+  for (let i = 0; i < HANDSHAKE_BUCKETS_MS.length; i++) {
+    if (ms <= HANDSHAKE_BUCKETS_MS[i]) handshakeHist.buckets[i] += 1;
+  }
+}
 // Set once a graceful shutdown starts, so new upgrades are refused.
 let shuttingDown = false;
+
+// Build/version metadata for the health probe (#12), so ops dashboards can tell
+// deploys apart and detect restarts. Version comes from package.json; the commit
+// is injected at deploy time via any of the common CI env vars (optional).
+const APP_VERSION = (() => {
+  try {
+    return (
+      JSON.parse(
+        readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+      ).version || "unknown"
+    );
+  } catch {
+    return "unknown";
+  }
+})();
+const APP_COMMIT =
+  process.env.SSH_BUILD_COMMIT ||
+  process.env.GIT_COMMIT ||
+  process.env.GITHUB_SHA ||
+  "";
+const STARTED_AT = new Date().toISOString();
 
 /**
  * The value stored in the access cookie: a SHA-256 hex digest of the configured
@@ -868,8 +979,14 @@ function logEvent(event, fields = {}) {
     rejectionsByReason[reason] = (rejectionsByReason[reason] || 0) + 1;
   }
   if (LOG_MODE === "off") return;
+  const { level: overrideLevel, ...rest } = fields;
+  const level = overrideLevel || EVENT_SEVERITY[event] || "info";
+  // Audit entries are opt-in and always emitted when enabled, independent of the
+  // severity threshold (#90); everything else honors SSH_LOG_LEVEL.
+  if (event !== "audit" && (LOG_LEVELS[level] ?? 2) > LOG_LEVEL) return;
   process.stdout.write(
-    JSON.stringify({ ts: new Date().toISOString(), event, ...fields }) + "\n",
+    JSON.stringify({ ts: new Date().toISOString(), level, event, ...rest }) +
+      "\n",
   );
 }
 
@@ -1137,6 +1254,101 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+// Render the operational counters in Prometheus text exposition format (#54).
+function renderPrometheus() {
+  const lines = [];
+  const metric = (name, type, help, value, labels) => {
+    lines.push(`# HELP ${name} ${help}`);
+    lines.push(`# TYPE ${name} ${type}`);
+    if (labels === undefined) {
+      lines.push(`${name} ${value}`);
+    }
+  };
+  metric(
+    "sshweb_active_sessions",
+    "gauge",
+    "Currently open SSH sessions.",
+    activeSessions,
+  );
+  metric(
+    "sshweb_max_sessions",
+    "gauge",
+    "Configured session ceiling.",
+    MAX_SESSIONS,
+  );
+  metric(
+    "sshweb_connections_total",
+    "counter",
+    "SSH sessions that reached ready.",
+    totalConnections,
+  );
+  metric(
+    "sshweb_rejections_total",
+    "counter",
+    "Refused connection attempts, by reason.",
+    null,
+    true,
+  );
+  for (const [reason, n] of Object.entries(rejectionsByReason)) {
+    lines.push(`sshweb_rejections_total{reason="${reason}"} ${n}`);
+  }
+  metric(
+    "sshweb_ssh_errors_total",
+    "counter",
+    "ssh2 connection/auth errors after upgrade.",
+    sshErrors,
+  );
+  metric(
+    "sshweb_bytes_up_total",
+    "counter",
+    "Bytes relayed browser to remote.",
+    bytesUp,
+  );
+  metric(
+    "sshweb_bytes_down_total",
+    "counter",
+    "Bytes relayed remote to browser.",
+    bytesDown,
+  );
+  metric(
+    "sshweb_active_transcodes",
+    "gauge",
+    "Live video transcodes running.",
+    activeTranscodes,
+  );
+  metric(
+    "sshweb_pending_upgrade_ips",
+    "gauge",
+    "Client IPs holding upgraded-but-unconnected sockets.",
+    pendingUpgrades.size,
+  );
+  // Handshake-latency histogram (connect → ready), in seconds.
+  lines.push(
+    "# HELP sshweb_handshake_seconds SSH handshake latency (connect to ready).",
+  );
+  lines.push("# TYPE sshweb_handshake_seconds histogram");
+  for (let i = 0; i < HANDSHAKE_BUCKETS_MS.length; i++) {
+    const le = (HANDSHAKE_BUCKETS_MS[i] / 1000).toFixed(3);
+    lines.push(
+      `sshweb_handshake_seconds_bucket{le="${le}"} ${handshakeHist.buckets[i]}`,
+    );
+  }
+  lines.push(
+    `sshweb_handshake_seconds_bucket{le="+Inf"} ${handshakeHist.count}`,
+  );
+  lines.push(
+    `sshweb_handshake_seconds_sum ${(handshakeHist.sumMs / 1000).toFixed(3)}`,
+  );
+  lines.push(`sshweb_handshake_seconds_count ${handshakeHist.count}`);
+  metric(
+    "sshweb_uptime_seconds",
+    "gauge",
+    "Process uptime.",
+    Math.floor(process.uptime()),
+  );
+  return lines.join("\n") + "\n";
+}
+
 const server = createServer((req, res) => {
   const pathname = parse(req.url).pathname;
 
@@ -1211,7 +1423,27 @@ const server = createServer((req, res) => {
       // IPs currently holding one or more), bounding an upgrade flood (#1).
       pendingUpgradeIps: pendingUpgrades.size,
       uptime: Math.floor(process.uptime()),
+      // Build/version metadata (#12): distinguish deploys, detect restarts.
+      version: APP_VERSION,
+      commit: APP_COMMIT || undefined,
+      startedAt: STARTED_AT,
     });
+    return;
+  }
+
+  // Prometheus metrics (#54), gated like the detailed health payload: when the
+  // relay is token-gated, scraping requires the access cookie (or a metrics
+  // token via the same cookie), so a public relay doesn't leak operational data.
+  if (req.method === "GET" && pathname === METRICS_PATH) {
+    if (accessTokenRequired(ACCESS_TOKEN) && !requestIsAuthorized(req)) {
+      res.writeHead(401, { "Cache-Control": "no-store" });
+      return res.end();
+    }
+    res.writeHead(200, {
+      "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    res.end(renderPrometheus());
     return;
   }
 
@@ -1857,7 +2089,11 @@ function enumerateZipEntries(sftp, roots, done) {
 
 wss.on("connection", (ws, req) => {
   const clientIp = clientIpFromReq(req);
-  logEvent("ws-open", { ip: clientIp });
+  // Short per-connection correlation id (#10) included in every log line for
+  // this session, so ws-open / connect / sudo / ws-close can be tied together
+  // even when many sessions share one IP behind a proxy.
+  const connId = randomBytes(4).toString("hex");
+  logEvent("ws-open", { id: connId, ip: clientIp });
   /** @type {import('ssh2').Client | null} */
   let ssh = null;
   let shell = null; // interactive PTY stream
@@ -1890,7 +2126,7 @@ wss.on("connection", (ws, req) => {
     if (HANDSHAKE_TIMEOUT_MS <= 0) return;
     promptTimer = setTimeout(() => {
       promptTimer = null;
-      logEvent("handshake-timeout", { ip: clientIp, kind });
+      logEvent("handshake-timeout", { id: connId, ip: clientIp, kind });
       // Reject a pending host-key verify so ssh2 aborts the handshake cleanly;
       // a pending kbd finish is just dropped (ssh2's own timeout closes it).
       if (pendingHostVerify) {
@@ -1917,8 +2153,10 @@ wss.on("connection", (ws, req) => {
   // Timestamp of the last genuine shell/SFTP activity (not latency pings), used
   // by the idle-timeout reaper below.
   let lastActivity = Date.now();
+  let idleWarned = false; // whether an idle-warning was already sent this idle span
   const touch = () => {
     lastActivity = Date.now();
+    idleWarned = false; // real activity resets the warning
   };
 
   const send = (obj) => {
@@ -1941,14 +2179,36 @@ wss.on("connection", (ws, req) => {
     IDLE_TIMEOUT_MS > 0
       ? setInterval(
           () => {
-            if (isIdleExpired(lastActivity, Date.now(), IDLE_TIMEOUT_MS)) {
-              logEvent("idle-timeout", { ip: clientIp });
+            const now = Date.now();
+            if (isIdleExpired(lastActivity, now, IDLE_TIMEOUT_MS)) {
+              logEvent("idle-timeout", { id: connId, ip: clientIp });
               sendError("Session closed after inactivity.", "shell");
               cleanup();
               ws.close();
+              return;
+            }
+            // Warn the client once when the timeout is imminent so its UI can
+            // show a countdown / let the user keep the session alive (#51).
+            const remaining = IDLE_TIMEOUT_MS - (now - lastActivity);
+            if (
+              IDLE_WARNING_MS > 0 &&
+              !idleWarned &&
+              remaining <= IDLE_WARNING_MS
+            ) {
+              idleWarned = true;
+              send({ t: "idle-warning", remainingMs: Math.max(0, remaining) });
             }
           },
-          Math.max(1000, Math.min(IDLE_TIMEOUT_MS, 30_000)),
+          // Tighten the tick to at most the warning granularity so the warning
+          // isn't delivered too coarsely before the timeout fires.
+          Math.max(
+            1000,
+            Math.min(
+              IDLE_TIMEOUT_MS,
+              IDLE_WARNING_MS > 0 ? IDLE_WARNING_MS : 30_000,
+              30_000,
+            ),
+          ),
         )
       : null;
   idleTimer?.unref?.();
@@ -1959,7 +2219,7 @@ wss.on("connection", (ws, req) => {
     clearTimeout(graceTimer);
     clearPromptTimeout();
     if (idleTimer) clearInterval(idleTimer);
-    logEvent("ws-close", { ip: clientIp });
+    logEvent("ws-close", { id: connId, ip: clientIp });
     if (counted) {
       activeSessions = Math.max(0, activeSessions - 1);
       counted = false;
@@ -2216,7 +2476,7 @@ wss.on("connection", (ws, req) => {
       } catch {
         /* channel already gone */
       }
-      logEvent("sudo", { ip: clientIp, enabled: false });
+      logEvent("sudo", { id: connId, ip: clientIp, enabled: false });
       return send({ t: "sftp-sudo", enabled: false });
     }
     if (!ALLOW_SUDO) {
@@ -2237,7 +2497,7 @@ wss.on("connection", (ws, req) => {
       }
       elevatedSftp = s;
       elevated = true;
-      logEvent("sudo", { ip: clientIp, enabled: true });
+      logEvent("sudo", { id: connId, ip: clientIp, enabled: true });
       send({ t: "sftp-sudo", enabled: true });
     });
   }
@@ -2465,23 +2725,43 @@ wss.on("connection", (ws, req) => {
       return ws.close();
     }
     if (!isHostAllowed(host)) {
-      logEvent("reject", { ip: clientIp, host, reason: "host-not-allowed" });
+      logEvent("reject", {
+        id: connId,
+        ip: clientIp,
+        host,
+        reason: "host-not-allowed",
+      });
       sendError(`Host not allowed by this server: ${host}`, "auth");
       return ws.close();
     }
     // Literal-IP / `localhost` SSRF guard: a fast, synchronous first pass.
     if (BLOCK_PRIVATE_HOSTS && isBlockedPrivateHost(host)) {
-      logEvent("reject", { ip: clientIp, host, reason: "host-private" });
+      logEvent("reject", {
+        id: connId,
+        ip: clientIp,
+        host,
+        reason: "host-private",
+      });
       sendError("Connections to private/internal hosts are blocked.", "auth");
       return ws.close();
     }
     if (!rateLimitAllow(clientIp, Date.now())) {
-      logEvent("reject", { ip: clientIp, host, reason: "rate-limit" });
+      logEvent("reject", {
+        id: connId,
+        ip: clientIp,
+        host,
+        reason: "rate-limit",
+      });
       sendError("Too many connection attempts. Please slow down.", "auth");
       return ws.close();
     }
     if (activeSessions >= MAX_SESSIONS) {
-      logEvent("reject", { ip: clientIp, host, reason: "at-capacity" });
+      logEvent("reject", {
+        id: connId,
+        ip: clientIp,
+        host,
+        reason: "at-capacity",
+      });
       sendError("Server is at capacity. Try again shortly.", "auth");
       return ws.close();
     }
@@ -2509,6 +2789,7 @@ wss.on("connection", (ws, req) => {
           if (blocked) {
             connecting = false;
             logEvent("reject", {
+              id: connId,
               ip: clientIp,
               host,
               reason: "host-private-resolved",
@@ -2532,7 +2813,12 @@ wss.on("connection", (ws, req) => {
           // Resolution failed — refuse rather than hand an unresolved name to
           // ssh2 (whose own resolver would then bypass this guard entirely).
           connecting = false;
-          logEvent("reject", { ip: clientIp, host, reason: "dns-failed" });
+          logEvent("reject", {
+            id: connId,
+            ip: clientIp,
+            host,
+            reason: "dns-failed",
+          });
           sendError(`Could not resolve host: ${host}`, "auth");
           return ws.close();
         },
@@ -2556,12 +2842,19 @@ wss.on("connection", (ws, req) => {
     sessionScope = `${username}@${host}`;
     send({ t: "status", state: "connecting" });
 
+    const connectStartedAt = Date.now();
     ssh = new SSHClient();
 
     ssh
       .on("ready", () => {
         totalConnections += 1;
-        logEvent("connect", { ip: clientIp, host, port: targetPort });
+        observeHandshake(Date.now() - connectStartedAt);
+        logEvent("connect", {
+          id: connId,
+          ip: clientIp,
+          host,
+          port: targetPort,
+        });
         send({ t: "status", state: "connected" });
         // Mint a per-session capability token for the seekable media-stream
         // endpoint and register this session's login-user SFTP accessor under
@@ -2654,7 +2947,7 @@ wss.on("connection", (ws, req) => {
         // no SSH_*_ALGORITHMS are set, so ssh2 keeps its secure defaults.
         algorithms: SSH_ALGORITHMS,
         readyTimeout: HANDSHAKE_TIMEOUT_MS,
-        keepaliveInterval: 15_000,
+        keepaliveInterval: KEEPALIVE_INTERVAL_MS,
         // Enable keyboard-interactive so servers that require an OTP / 2FA code
         // (or deliver the password prompt this way) can complete auth.
         tryKeyboard: true,
@@ -2967,6 +3260,7 @@ wss.on("connection", (ws, req) => {
           // A capped read only pulls the file's head (`{ start, end }`), so a
           // huge log previews as text without transferring the whole thing.
           const truncated = cap > 0 && stats.size > cap;
+          const transferStartedAt = Date.now();
           const stream = truncated
             ? s.createReadStream(msg.path, { start: 0, end: cap - 1 })
             : s.createReadStream(msg.path);
@@ -2987,13 +3281,13 @@ wss.on("connection", (ws, req) => {
               dataB64: chunk.toString("base64"),
               preview: isPreview,
             });
-            if (ws.bufferedAmount > 8 * 1024 * 1024) {
+            if (ws.bufferedAmount > WS_BACKPRESSURE_HIGH_BYTES) {
               stream.pause();
               const resume = setInterval(() => {
                 if (ws.readyState !== ws.OPEN) {
                   clearInterval(resume);
                   stream.destroy();
-                } else if (ws.bufferedAmount < 1 * 1024 * 1024) {
+                } else if (ws.bufferedAmount < WS_BACKPRESSURE_LOW_BYTES) {
                   clearInterval(resume);
                   stream.resume();
                 }
@@ -3013,6 +3307,17 @@ wss.on("connection", (ws, req) => {
           stream.on("end", () => {
             downloads.delete(msg.path);
             sftpFilesDown += 1;
+            const elapsed = Date.now() - transferStartedAt;
+            if (SLOW_TRANSFER_MS > 0 && elapsed > SLOW_TRANSFER_MS) {
+              logEvent("slow-transfer", {
+                id: connId,
+                ip: clientIp,
+                op: "download",
+                path: msg.path,
+                bytes: truncated ? cap : stats.size,
+                ms: elapsed,
+              });
+            }
             send({
               t: "sftp-download-end",
               path: msg.path,
@@ -3326,13 +3631,13 @@ wss.on("connection", (ws, req) => {
           crc = crc32Update(crc, chunk);
           written += chunk.length;
           emit(chunk);
-          if (ws.bufferedAmount > 8 * 1024 * 1024) {
+          if (ws.bufferedAmount > WS_BACKPRESSURE_HIGH_BYTES) {
             rs.pause();
             const resume = setInterval(() => {
               if (ws.readyState !== ws.OPEN) {
                 clearInterval(resume);
                 rs.destroy();
-              } else if (ws.bufferedAmount < 1 * 1024 * 1024) {
+              } else if (ws.bufferedAmount < WS_BACKPRESSURE_LOW_BYTES) {
                 clearInterval(resume);
                 rs.resume();
               }
@@ -3414,12 +3719,30 @@ wss.on("connection", (ws, req) => {
     // Reject a known message type with a missing/mistyped required field before
     // dispatch, so a malformed frame can't throw deep in an async handler.
     if (!isValidClientMessage(msg)) {
-      logEvent("bad-message", { ip: clientIp, kind: String(msg.t) });
+      logEvent("bad-message", {
+        id: connId,
+        ip: clientIp,
+        kind: String(msg.t),
+      });
       return;
     }
     // Any real shell/SFTP traffic counts as activity for the idle reaper;
     // latency pings deliberately don't, so an idle terminal still times out.
     if (msg.t !== "ping") touch();
+
+    // Opt-in SFTP audit trail (#90): record the op + path (never contents/creds).
+    if (AUDIT_LOG && msg.t.startsWith("sftp")) {
+      logEvent("audit", {
+        id: connId,
+        ip: clientIp,
+        user: sessionScope,
+        elevated,
+        op: msg.t,
+        path: msg.path,
+        from: msg.from,
+        to: msg.to,
+      });
+    }
 
     // Defense in depth: even with field validation, a handler can throw
     // asynchronously in ways a single frame check can't foresee. Guard the
@@ -3611,7 +3934,11 @@ wss.on("connection", (ws, req) => {
       }
     } catch {
       sshErrors += 1;
-      logEvent("handler-error", { ip: clientIp, kind: String(msg.t) });
+      logEvent("handler-error", {
+        id: connId,
+        ip: clientIp,
+        kind: String(msg.t),
+      });
       try {
         sendError("The server hit an error handling that request.", "sftp");
       } catch {
@@ -3698,9 +4025,24 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 // otherwise tear the whole server down and drop every concurrent connection.
 // Log it and keep serving — the per-session guards above already contain most
 // failures to the one session that caused them.
+// Describe a thrown value for the log without dumping unbounded output. SSH
+// credentials are relayed, never thrown, so an exception message/stack doesn't
+// carry them; still, we cap the stack so a pathological error can't flood logs.
+function describeError(err) {
+  if (err instanceof Error) {
+    return {
+      name: err.name,
+      message: err.message,
+      stack: (err.stack || "").split("\n").slice(0, 8).join("\n"),
+    };
+  }
+  return { name: typeof err, message: String(err).slice(0, 500) };
+}
 process.on("uncaughtException", (err) => {
-  logEvent("uncaught-exception", { message: err?.message ? "yes" : "no" });
+  // Log the error name + (capped) stack so the most severe failures are
+  // actually diagnosable in production, instead of a content-free "yes/no" (#11).
+  logEvent("uncaught-exception", { level: "error", ...describeError(err) });
 });
-process.on("unhandledRejection", () => {
-  logEvent("unhandled-rejection", {});
+process.on("unhandledRejection", (reason) => {
+  logEvent("unhandled-rejection", { level: "error", ...describeError(reason) });
 });
