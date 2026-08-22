@@ -420,6 +420,10 @@ export type ServerMessage =
        * A `thumb` reply with an empty `dataB64` means "no thumbnail" (skipped or
        * failed) so the client can keep the icon and advance its request queue. */
       mime?: string;
+      /** Dominant color (`#rrggbb`) of a `thumb` image, used as a cheap solid
+       * placeholder behind the grid tile while the WebP paints (#100). Optional;
+       * absent when unavailable, in which case the tile just uses its panel bg. */
+      bg?: string;
     }
   | { t: "sftp-ok"; op: string; path: string }
   // Optional per-session capability advertisement, sent once the session is
