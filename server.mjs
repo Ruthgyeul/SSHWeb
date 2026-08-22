@@ -580,6 +580,14 @@ const ALLOWED_ORIGINS = (process.env.SSH_ALLOWED_ORIGINS || "")
   .split(/[\s,]+/)
   .map((s) => s.trim())
   .filter(Boolean);
+// Max concurrent upgraded-but-unconnected WebSockets from a single IP (#1). A
+// client can otherwise open unlimited upgrades and never send `connect`, each
+// holding a socket + grace timer without counting against MAX_SESSIONS. 0
+// disables the per-IP cap.
+const MAX_PENDING_UPGRADES_PER_IP = (() => {
+  const n = parseInt(process.env.SSH_MAX_PENDING_UPGRADES_PER_IP || "10", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 10;
+})();
 // Drop a socket that connects but never sends a `connect` message (ms).
 const CONNECT_GRACE_MS = (() => {
   const n = parseInt(process.env.SSH_CONNECT_GRACE_MS || "30000", 10);
@@ -768,6 +776,19 @@ const SFTP_SERVER_PATHS = (process.env.SSH_SFTP_SERVER_PATHS || "")
   .filter(Boolean);
 
 let activeSessions = 0;
+// Concurrent upgraded-but-not-yet-connected WebSockets per client IP (#1). A
+// socket counts as "pending" from the moment its upgrade is accepted until it
+// either starts a real SSH session (reserved in activeSessions, itself capped)
+// or closes. This bounds a flood of upgrades that never send `connect` — which
+// MAX_SESSIONS alone doesn't catch, since that's only enforced at connect time.
+const pendingUpgrades = new Map();
+const incPending = (ip) =>
+  pendingUpgrades.set(ip, (pendingUpgrades.get(ip) || 0) + 1);
+const decPending = (ip) => {
+  const n = (pendingUpgrades.get(ip) || 0) - 1;
+  if (n > 0) pendingUpgrades.set(ip, n);
+  else pendingUpgrades.delete(ip);
+};
 // Cumulative operational counters surfaced by the health probe (process-wide).
 let totalConnections = 0; // SSH sessions that reached "ready"
 let rejectedConnections = 0; // connection attempts refused (any reason)
@@ -1456,7 +1477,45 @@ server.on("upgrade", (req, socket, head) => {
       socket.destroy();
       return;
     }
+    const upgradeIp = clientIpFromReq(req);
+    // Rate-limit the upgrade itself, in a dedicated bucket so it doesn't consume
+    // the SSH connect-attempt budget (#1). Stops an upgrade flood that never
+    // reaches handleConnect (where connect-time limiting lives).
+    if (!rateLimitAllow(`upgrade:${upgradeIp}`, Date.now())) {
+      logEvent("reject", { ip: upgradeIp, reason: "upgrade-rate-limit" });
+      socket.write(
+        "HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n",
+      );
+      socket.destroy();
+      return;
+    }
+    // Cap concurrent upgraded-but-unconnected sockets per IP (#1).
+    if (
+      MAX_PENDING_UPGRADES_PER_IP > 0 &&
+      (pendingUpgrades.get(upgradeIp) || 0) >= MAX_PENDING_UPGRADES_PER_IP
+    ) {
+      logEvent("reject", { ip: upgradeIp, reason: "too-many-pending" });
+      socket.write(
+        "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n",
+      );
+      socket.destroy();
+      return;
+    }
+    incPending(upgradeIp);
+    let pendingCleared = false;
+    const clearPending = () => {
+      if (pendingCleared) return;
+      pendingCleared = true;
+      decPending(upgradeIp);
+    };
+    // Release the pending slot if the socket dies before/around the upgrade.
+    socket.on("close", clearPending);
     wss.handleUpgrade(req, socket, head, (ws) => {
+      // The session clears this once it reserves a real activeSessions slot (see
+      // startConnection); until then the socket counts as pending. Closing also
+      // clears it (idempotent), covering sockets that never connect.
+      ws.clearPendingUpgrade = clearPending;
+      ws.once("close", clearPending);
       wss.emit("connection", ws, req);
     });
   } else if (upgradeHandler) {
@@ -2400,6 +2459,13 @@ wss.on("connection", (ws, req) => {
   function startConnection(msg, host, targetPort, username, dialHost = host) {
     if (ssh || closed) return;
     connecting = false;
+    // This socket now holds a real (capped) session slot, so it no longer counts
+    // as a pending upgrade (#1).
+    try {
+      ws.clearPendingUpgrade?.();
+    } catch {
+      /* already cleared */
+    }
     // The thumbnail-cache identity for this login (see the server-side cache).
     sessionScope = `${username}@${host}`;
     send({ t: "status", state: "connecting" });
