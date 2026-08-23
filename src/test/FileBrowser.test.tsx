@@ -48,6 +48,7 @@ function renderBrowser(
     onChmod: vi.fn(),
     onSymlink: vi.fn(),
     onChecksum: vi.fn(),
+    onDiff: vi.fn(),
     onEdit: vi.fn(),
     onPreview: vi.fn(),
     onOpenUnsupported: vi.fn(),

@@ -273,6 +273,7 @@ export function FileBrowser({
   onChmod,
   onSymlink,
   onChecksum,
+  onDiff,
   onEdit,
   onPreview,
   onOpenUnsupported,
@@ -328,6 +329,8 @@ export function FileBrowser({
   onSymlink: (entry: FileEntry) => void;
   /** Compute a checksum of a file, surfaced as a toast (#46). */
   onChecksum: (entry: FileEntry) => void;
+  /** Diff exactly two selected text files (#76). */
+  onDiff: (entries: FileEntry[]) => void;
   onEdit: (path: string, name: string, size: number) => void;
   /** Open the preview modal. `siblings` (in display order) is the set of other
    * previewable files in the same view, so the modal can step ←/→ through them
@@ -968,6 +971,19 @@ export function FileBrowser({
               >
                 ↓ Download zip
               </button>
+              {selectedCount === 2 &&
+                selectedEntries.every(
+                  (e) => e.type !== "dir" && isProbablyTextFile(e.name),
+                ) && (
+                  <button
+                    type="button"
+                    onClick={() => onDiff(selectedEntries)}
+                    className="rounded border border-term-border px-2 py-0.5 text-term-muted hover:text-term-text"
+                    title="Diff the two selected files"
+                  >
+                    ⇄ Diff
+                  </button>
+                )}
               <button
                 type="button"
                 onClick={() => onDeleteMany(selectedEntries)}

@@ -67,6 +67,7 @@ import { usePreviewCache } from "./hooks/usePreviewCache";
 import { usePreviewGallery } from "./hooks/usePreviewGallery";
 import { useEditors } from "./hooks/useEditors";
 import { useDesktopNotifications } from "./hooks/useDesktopNotifications";
+import { DiffView, type DiffSide } from "./DiffView";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -202,6 +203,14 @@ export function SshSession({
   // Opt-in desktop notifications (#52) — fires on an unexpected disconnect while
   // the tab is backgrounded.
   const desktopNotify = useDesktopNotifications();
+  // Two-file diff (#76): the open diff modal, plus a pending collector that
+  // gathers both files' contents (fetched via the editor read path) before
+  // opening it.
+  const [diff, setDiff] = useState<{ a: DiffSide; b: DiffSide } | null>(null);
+  const diffPendingRef = useRef<{
+    paths: [string, string];
+    got: Record<string, DiffSide>;
+  } | null>(null);
   // Kept current so the memoized message handler / cleanup callbacks can reach
   // the editor operations without listing the (per-render) api object as a dep —
   // the same ref pattern the rest of this component uses for stable callbacks.
@@ -703,6 +712,20 @@ export function SshSession({
         case "sftp-read":
           if (msg.edit) {
             const text = new TextDecoder().decode(base64ToBytes(msg.dataB64));
+            // #76: a read requested for a pending diff feeds the diff collector
+            // instead of opening the editor; once both sides arrive, show it.
+            const pend = diffPendingRef.current;
+            if (pend && pend.paths.includes(msg.path)) {
+              pend.got[msg.path] = { name: msg.name, content: text };
+              if (pend.paths.every((p) => pend.got[p])) {
+                setDiff({
+                  a: pend.got[pend.paths[0]],
+                  b: pend.got[pend.paths[1]],
+                });
+                diffPendingRef.current = null;
+              }
+              break;
+            }
             editorsApiRef.current.openForEdit(msg.path, msg.name, text);
           } else if (msg.thumb) {
             // Free the concurrency slot and let the next queued tile go, whether
@@ -1249,6 +1272,19 @@ export function SshSession({
     if (connected) send({ t: "sftp-df", path: cwd });
   };
 
+  // Diff two selected text files (#76): read both via the editor read path into
+  // the pending-diff collector, which opens the modal once both arrive.
+  const onDiff = (items: FileEntry[]) => {
+    if (!connected || items.length !== 2) return;
+    const base = cwd.replace(/\/$/, "");
+    const paths: [string, string] = [
+      `${base}/${items[0].name}`,
+      `${base}/${items[1].name}`,
+    ];
+    diffPendingRef.current = { paths, got: {} };
+    for (const p of paths) send({ t: "sftp-read", path: p, edit: true });
+  };
+
   // --- File browser actions (in-app dialogs, not window.prompt/confirm) ---
   const clearUploadRow = useCallback((path: string) => {
     setUploads((u) => {
@@ -1709,6 +1745,7 @@ export function SshSession({
               onChmod={onChmod}
               onSymlink={onSymlink}
               onChecksum={onChecksum}
+              onDiff={onDiff}
               onEdit={requestEdit}
               onPreview={openPreviewFile}
               onOpenUnsupported={(path, name) =>
@@ -1894,6 +1931,10 @@ export function SshSession({
             onCloseFile={editorsApi.close}
             onCloseAll={editorsApi.closeAll}
           />
+        )}
+
+        {diff && (
+          <DiffView a={diff.a} b={diff.b} onClose={() => setDiff(null)} />
         )}
 
         {showOverlay && (
