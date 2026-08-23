@@ -429,9 +429,14 @@ export function SshSession({
   const scheduleRelist = useCallback(() => {
     if (relistTimerRef.current !== null)
       window.clearTimeout(relistTimerRef.current);
+    // Capture the directory this refresh is for; if the user navigates away
+    // within the debounce window, skip it — otherwise a late re-list of the old
+    // directory could land after (and overwrite) the destination listing, since
+    // SFTP list responses aren't request-correlated.
+    const dir = cwdRef.current;
     relistTimerRef.current = window.setTimeout(() => {
       relistTimerRef.current = null;
-      listDir(cwdRef.current);
+      if (cwdRef.current === dir) listDir(dir);
     }, 120);
   }, [listDir]);
   useEffect(
@@ -1455,7 +1460,19 @@ export function SshSession({
     // doesn't jank the UI (#98); falls back to a synchronous encode when workers
     // are unavailable, so the frame is always sent.
     const bytes = new TextEncoder().encode(text);
+    // Bind the write to the socket that started it: if the connection drops or is
+    // replaced while the (async) encode runs, don't send a stale write to a new
+    // session — clear the saving state so the editor doesn't get stuck on
+    // "Saving…" (the user can retry once reconnected).
+    const originWs = wsRef.current;
     void bytesToBase64Async(bytes).then((dataB64) => {
+      if (
+        wsRef.current !== originWs ||
+        originWs?.readyState !== WebSocket.OPEN
+      ) {
+        setSavingPath((cur) => (cur === path ? null : cur));
+        return;
+      }
       send({ t: "sftp-write", path, dataB64 });
     });
   };
