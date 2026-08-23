@@ -65,6 +65,7 @@ import { useFileActions } from "./hooks/useFileActions";
 import { usePreviewCache } from "./hooks/usePreviewCache";
 import { usePreviewGallery } from "./hooks/usePreviewGallery";
 import { useEditors } from "./hooks/useEditors";
+import { useDesktopNotifications } from "./hooks/useDesktopNotifications";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -197,6 +198,9 @@ export function SshSession({
   // any) is being saved right now — all owned by the useEditors hook.
   const editorsApi = useEditors();
   const { editors, activeEditor, savingPath } = editorsApi;
+  // Opt-in desktop notifications (#52) — fires on an unexpected disconnect while
+  // the tab is backgrounded.
+  const desktopNotify = useDesktopNotifications();
   // Kept current so the memoized message handler / cleanup callbacks can reach
   // the editor operations without listing the (per-render) api object as a dep —
   // the same ref pattern the rest of this component uses for stable callbacks.
@@ -379,6 +383,27 @@ export function SshSession({
   // Reconnection bookkeeping (refs so the ws close handler sees fresh values).
   const lastDetailsRef = useRef<ConnectDetails | null>(null);
   const userClosedRef = useRef(false);
+
+  // Desktop-notify on an unexpected disconnect (#52): fire when the status
+  // leaves "connected" for a dropped/errored state that the user didn't cause.
+  // The hook's gate suppresses it unless the tab is backgrounded and the user
+  // opted in with permission granted.
+  const { notify: notifyDesktop } = desktopNotify;
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (
+      prev === "connected" &&
+      (status === "reconnecting" ||
+        status === "dropped" ||
+        status === "error") &&
+      !userClosedRef.current
+    ) {
+      const who = target ? `${target.user}@${target.host}` : "SSH session";
+      notifyDesktop("SSHWeb — disconnected", `${who} session dropped.`);
+    }
+  }, [status, target, notifyDesktop]);
   // The attempt counter, in-flight/was-connected flags, and backoff timer live
   // in useReconnect; this hook decides whether/when to retry a dropped socket.
   const reconnect = useReconnect({
@@ -1564,6 +1589,12 @@ export function SshSession({
               <TerminalSettings
                 onClearThumbnailCache={clearThumbnails}
                 getCacheBytes={clientCacheBytes}
+                notifications={{
+                  supported: desktopNotify.supported,
+                  enabled: desktopNotify.enabled,
+                  permission: desktopNotify.permission,
+                  onToggle: desktopNotify.setEnabled,
+                }}
               />
             </div>
 
