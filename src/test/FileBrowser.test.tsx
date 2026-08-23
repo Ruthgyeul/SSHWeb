@@ -31,6 +31,7 @@ function renderBrowser(
     elevated: false,
     elevatedPending: false,
     onToggleElevated: vi.fn(),
+    onOpenTerminalHere: vi.fn(),
     onNavigate: vi.fn(),
     onDownload: vi.fn(),
     onDownloadDir: vi.fn(),

@@ -14,6 +14,7 @@ import {
   type FileEntry,
   type ServerMessage,
 } from "@/lib/sshProtocol";
+import { cdCommand } from "@/lib/shellQuote";
 import { fileVersionTag } from "@/lib/thumbnailCache";
 import {
   KNOWN_HOSTS_KEY,
@@ -1190,6 +1191,18 @@ export function SshSession({
     xtermRef.current?.focus();
   };
 
+  // "Open terminal here" (#50): cd the shell to the file browser's current
+  // directory and switch to the terminal. Unlike a snippet, this runs the cd
+  // (trailing newline) since it's an explicit, safe navigation the user asked
+  // for; the path is single-quoted so metacharacters can't break out.
+  const openTerminalHere = () => {
+    if (!connected) return;
+    disarmMods();
+    send({ t: "data", data: cdCommand(cwd) });
+    setTab("terminal");
+    xtermRef.current?.focus();
+  };
+
   // --- File browser actions (in-app dialogs, not window.prompt/confirm) ---
   const clearUploadRow = useCallback((path: string) => {
     setUploads((u) => {
@@ -1624,6 +1637,7 @@ export function SshSession({
               elevated={elevated}
               elevatedPending={elevatedPending}
               onToggleElevated={toggleElevated}
+              onOpenTerminalHere={openTerminalHere}
               onNavigate={listDir}
               onRefresh={() => listDir(cwd)}
               onDownload={(path) => send({ t: "sftp-read", path })}
