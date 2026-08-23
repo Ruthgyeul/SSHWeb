@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import {
   parseOpenTabs,
@@ -19,31 +19,35 @@ import { PromptDialog, type DialogRequest } from "./PromptDialog";
 
 const OPEN_TABS_KEY = "sshweb.openTabs";
 
-/** Build the initial tab state from persisted tabs (#25). Falls back to a single
- * empty tab when nothing is stored or storage is unavailable. */
+/** Build tab state from persisted tabs (#25), or null when there's nothing to
+ * restore. Restoration runs in an effect (not during render) so the server and
+ * the client's first render agree — avoiding a hydration mismatch. */
 function restoreOpenTabs(): {
   ids: number[];
   names: Record<number, string>;
   pending: Record<number, ConnectFormInitial>;
   nextId: number;
-} {
-  const empty = { ids: [0], names: {}, pending: {}, nextId: 1 };
-  if (typeof window === "undefined") return empty;
+} | null {
+  if (typeof window === "undefined") return null;
   let tabs: PersistedTab[] = [];
   try {
     tabs = parseOpenTabs(localStorage.getItem(OPEN_TABS_KEY));
   } catch {
-    return empty;
+    return null;
   }
-  if (tabs.length === 0) return empty;
+  if (tabs.length === 0) return null;
+  // Allocate fresh ids starting at 1 so restored tabs never reuse the initial
+  // render's id 0 — every restored tab is then a fresh mount that receives its
+  // `initialConnect` prefill (a re-render of the pre-existing tab wouldn't).
   const ids: number[] = [];
   const names: Record<number, string> = {};
   const pending: Record<number, ConnectFormInitial> = {};
   tabs.forEach((tab, i) => {
-    ids.push(i);
-    if (tab.name) names[i] = tab.name;
+    const id = i + 1;
+    ids.push(id);
+    if (tab.name) names[id] = tab.name;
     if (tab.connect) {
-      pending[i] = {
+      pending[id] = {
         host: tab.connect.host,
         port: tab.connect.port,
         username: tab.connect.username,
@@ -51,7 +55,7 @@ function restoreOpenTabs(): {
       };
     }
   });
-  return { ids, names, pending, nextId: ids.length };
+  return { ids, names, pending, nextId: tabs.length + 1 };
 }
 
 /**
@@ -61,13 +65,12 @@ function restoreOpenTabs(): {
  * the background. Add tabs with "＋", close them with the ✕ on each tab.
  */
 export function SshClient() {
-  // Restore the tab strip from localStorage on first render (#25): each tab's
-  // name and connection identity (never a secret). Computed once.
-  const restored = useMemo(() => restoreOpenTabs(), []);
-
-  const nextIdRef = useRef(restored.nextId);
-  const [ids, setIds] = useState<number[]>(restored.ids);
-  const [activeId, setActiveId] = useState(restored.ids[0] ?? 0);
+  // Start from the same default state the server renders (one empty tab); the
+  // persisted tab strip is restored in an effect after hydration (#25) so SSR
+  // and the client's first render match.
+  const nextIdRef = useRef(1);
+  const [ids, setIds] = useState<number[]>([0]);
+  const [activeId, setActiveId] = useState(0);
   const [metas, setMetas] = useState<Record<number, SessionMeta>>({});
   // Live connections per tab (in-memory only), so a new tab can offer a
   // one-click "same server" login without re-entering — or re-typing — anything.
@@ -76,16 +79,38 @@ export function SshClient() {
   >({});
   // User-assigned tab names (override the auto `user@host` label). Editing state
   // holds the id being renamed and the in-progress draft.
-  const [names, setNames] = useState<Record<number, string>>(restored.names);
+  const [names, setNames] = useState<Record<number, string>>({});
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   // Connect-form prefill for a freshly-duplicated tab (#83) or a restored tab
   // (#25), consumed on mount by that tab's connect form.
   const [pendingInitial, setPendingInitial] = useState<
     Record<number, ConnectFormInitial>
-  >(restored.pending);
+  >({});
   // A pending confirm dialog (e.g. "close a busy tab?", #85); null when idle.
   const [dialog, setDialog] = useState<DialogRequest | null>(null);
+  // Gate persistence until after the post-hydration restore runs, so the first
+  // (default-state) render doesn't clobber saved tabs before they're loaded.
+  const [hydrated, setHydrated] = useState(false);
+
+  // Restore persisted tabs once, after hydration (#25). Reading localStorage and
+  // applying it here (rather than in a render-time initializer) is deliberate:
+  // it keeps the server and the client's first render identical, avoiding a
+  // hydration mismatch. The set-state-in-effect rule doesn't model this
+  // client-only-data-after-hydration pattern, so it's disabled for this effect.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const r = restoreOpenTabs();
+    if (r) {
+      nextIdRef.current = r.nextId;
+      setIds(r.ids);
+      setActiveId(r.ids[0] ?? 0);
+      setNames(r.names);
+      setPendingInitial(r.pending);
+    }
+    setHydrated(true);
+  }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const startRename = useCallback((id: number, current: string) => {
     setEditingId(id);
@@ -131,6 +156,21 @@ export function SshClient() {
         if (prev[id] === details) return prev;
         return { ...prev, [id]: details };
       });
+      // Keep the persisted seed in step with the latest real connection (#25):
+      // otherwise, after the user edits a restored/duplicated prefill and
+      // connects elsewhere, disconnecting would fall back to the stale original
+      // seed and a reload would restore the wrong host.
+      if (details) {
+        setPendingInitial((prev) => ({
+          ...prev,
+          [id]: {
+            host: details.host,
+            port: String(details.port),
+            username: details.username,
+            auth: details.privateKey ? "key" : "password",
+          },
+        }));
+      }
     },
     [],
   );
@@ -226,7 +266,10 @@ export function SshClient() {
   );
 
   // Persist the tab strip (identity only, no secrets) whenever it changes (#25).
+  // Skipped until the post-hydration restore has run (above), so it can't write
+  // the default state over saved tabs on first mount.
   useEffect(() => {
+    if (!hydrated) return;
     const tabs: PersistedTab[] = ids.map((id) => {
       const conn = connections[id];
       const seed = pendingInitial[id];
@@ -254,7 +297,7 @@ export function SshClient() {
     } catch {
       /* storage unavailable (private mode) — tabs just won't persist */
     }
-  }, [ids, names, connections, pendingInitial]);
+  }, [hydrated, ids, names, connections, pendingInitial]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
