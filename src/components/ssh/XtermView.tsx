@@ -11,7 +11,7 @@ import {
 import type { Terminal as XTerminal } from "@xterm/xterm";
 import type { FitAddon as XFitAddon } from "@xterm/addon-fit";
 import type { SearchAddon as XSearchAddon } from "@xterm/addon-search";
-import { getThemePreset, type TerminalTheme } from "@/lib/terminalTheme";
+import { TERMINAL_THEME, type TerminalTheme } from "@/lib/terminalTheme";
 
 /** Fixed terminal font size (px); intentionally not user-configurable. */
 const FONT_SIZE = 13;
@@ -82,10 +82,8 @@ export const XtermView = forwardRef<
   const onResizeRef = useRef(onResize);
   onDataRef.current = onData;
   onResizeRef.current = onResize;
-  const themeRef = useRef<TerminalTheme>(
-    theme ?? getThemePreset(undefined).theme,
-  );
-  themeRef.current = theme ?? getThemePreset(undefined).theme;
+  const themeRef = useRef<TerminalTheme>(theme ?? TERMINAL_THEME);
+  themeRef.current = theme ?? TERMINAL_THEME;
 
   const openSearch = () => {
     setSearchOpen(true);
@@ -143,6 +141,7 @@ export const XtermView = forwardRef<
       const { Terminal } = await import("@xterm/xterm");
       const { FitAddon } = await import("@xterm/addon-fit");
       const { SearchAddon } = await import("@xterm/addon-search");
+      const { WebLinksAddon } = await import("@xterm/addon-web-links");
       if (disposed || !containerRef.current) return;
 
       const term = new Terminal({
@@ -157,6 +156,14 @@ export const XtermView = forwardRef<
       const search = new SearchAddon();
       term.loadAddon(fit);
       term.loadAddon(search);
+      // Make URLs in terminal output clickable (#62). Open in a new tab with
+      // noopener/noreferrer so a linked page can't reach back into this one.
+      term.loadAddon(
+        new WebLinksAddon((event, uri) => {
+          if (event.button !== 0) return; // left-click only
+          window.open(uri, "_blank", "noopener,noreferrer");
+        }),
+      );
       term.open(containerRef.current);
       fit.fit();
 

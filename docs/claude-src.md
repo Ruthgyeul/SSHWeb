@@ -21,7 +21,7 @@ src/
 ├── components/          # reusable UI (see docs/claude-components.md)
 │   └── ssh/             # web SSH client UI (client components), plus:
 │       ├── hooks/       #   co-located hooks (useFileSort, useFileViewMode,
-│       │                #     useSnippets, useTerminalPrefs, useThumbnailQueue,
+│       │                #     useSnippets, useThumbnailQueue,
 │       │                #     useUploadQueue, useReconnect, useSshSocket,
 │       │                #     useConnectionProfiles, useModalA11y,
 │       │                #     useImageTransform, useTextFind, usePreviewKeyboard)
@@ -48,7 +48,7 @@ src/
 │   ├── subtitles.ts     # sidecar subtitle discovery + SRT→VTT
 │   ├── swipeGesture.ts  # pure touch-swipe direction classifier (preview gestures)
 │   ├── syntaxHighlight.ts # lightweight syntax highlighting
-│   ├── terminalTheme.ts # terminal color-theme presets
+│   ├── terminalTheme.ts # the single fixed terminal color theme (TERMINAL_THEME)
 │   └── utils.ts         # cn() classname helper + toJsonLd
 ├── styles/
 │   └── globals.css      # Tailwind import + @theme palette + terminal utilities

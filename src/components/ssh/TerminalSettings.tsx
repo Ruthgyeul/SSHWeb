@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { TERMINAL_THEMES } from "@/lib/terminalTheme";
 import {
   KNOWN_HOSTS_KEY,
   knownHostEntries,
@@ -11,36 +10,24 @@ import {
   type KnownHostMap,
 } from "@/lib/knownHosts";
 import { cn } from "@/lib/utils";
-import { CheckIcon, SettingsIcon } from "./icons";
-import type { TerminalPrefs } from "./hooks/useTerminalPrefs";
+import { formatSize } from "@/lib/sshProtocol";
+import { SettingsIcon } from "./icons";
 
 /**
- * Gear button + popover that picks the terminal's color theme. Fully
- * controlled: the current {@link TerminalPrefs} come in and every change is
- * delegated up via `onChange` (the parent persists them through
- * `useTerminalPrefs`, so the choice is shared across sessions and reloads).
+ * Gear button + popover with session settings: trusted host-key (TOFU)
+ * management and the in-browser media cache. SSHWeb uses a single fixed terminal
+ * theme, so there is no theme/appearance picker here.
  */
-/** Human-readable byte size (e.g. `12.3 MB`) for the cached-media read-out. */
+/** Format a byte count for the media-cache readout, reusing the file browser's
+ * shared size formatter (#28: drop the duplicate implementation). */
 function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  return `${v >= 10 || Number.isInteger(v) ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+  return formatSize(n, "file");
 }
 
 export function TerminalSettings({
-  prefs,
-  onChange,
   onClearThumbnailCache,
   getCacheBytes,
 }: {
-  prefs: TerminalPrefs;
-  onChange: (patch: Partial<TerminalPrefs>) => void;
   /** Evict this connection's cached grid thumbnails from the bridge, plus the
    * in-memory thumbnail + preview copies this browser is holding. */
   onClearThumbnailCache?: () => void | Promise<void>;
@@ -122,8 +109,8 @@ export function TerminalSettings({
             ? "bg-term-accent/15 text-term-accent"
             : "text-term-muted hover:text-term-text",
         )}
-        title="Terminal theme"
-        aria-label="Terminal theme"
+        title="Settings"
+        aria-label="Settings"
         aria-expanded={open}
       >
         <SettingsIcon className="h-4 w-4" />
@@ -144,46 +131,8 @@ export function TerminalSettings({
             "sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:mx-0 sm:mt-1.5 sm:max-h-none sm:w-64 sm:max-w-none sm:overflow-visible",
           )}
         >
-          {/* Theme */}
-          <div>
-            <span className="mb-1.5 block text-xs font-medium text-term-muted">
-              Color theme
-            </span>
-            <div className="flex flex-col gap-1">
-              {TERMINAL_THEMES.map((preset) => {
-                const selected = preset.id === prefs.themeId;
-                return (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    onClick={() => onChange({ themeId: preset.id })}
-                    className={cn(
-                      "flex items-center gap-2 rounded px-2 py-1 text-left text-xs transition-colors",
-                      selected
-                        ? "bg-term-accent/15 text-term-accent"
-                        : "text-term-dim hover:bg-term-card",
-                    )}
-                  >
-                    <span
-                      className="flex h-4 w-4 flex-none items-center justify-center rounded-sm border border-term-border"
-                      style={{ background: preset.theme.background }}
-                      aria-hidden
-                    >
-                      <span
-                        className="h-1.5 w-1.5 rounded-full"
-                        style={{ background: preset.theme.green }}
-                      />
-                    </span>
-                    <span className="flex-1 truncate">{preset.label}</span>
-                    {selected && <CheckIcon className="h-3.5 w-3.5" />}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
           {/* Known hosts (TOFU store) */}
-          <div className="mt-3 border-t border-term-border pt-3">
+          <div>
             <span className="mb-1.5 block text-xs font-medium text-term-muted">
               Trusted host keys
             </span>
