@@ -14,7 +14,6 @@ import {
   type FileEntry,
   type ServerMessage,
 } from "@/lib/sshProtocol";
-import { getThemePreset } from "@/lib/terminalTheme";
 import { fileVersionTag } from "@/lib/thumbnailCache";
 import {
   KNOWN_HOSTS_KEY,
@@ -57,7 +56,6 @@ import { SnippetsBar } from "./SnippetsBar";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TerminalSettings } from "./TerminalSettings";
 import { SearchIcon } from "./icons";
-import { useTerminalPrefs } from "./hooks/useTerminalPrefs";
 import { useThumbnailQueue } from "./hooks/useThumbnailQueue";
 import { useUploadQueue, type UploadJob } from "./hooks/useUploadQueue";
 import { useReconnect } from "./hooks/useReconnect";
@@ -352,9 +350,6 @@ export function SshSession({
   // Render-safe mirror of "am I connected?" for the ws message handler, whose
   // closure can't read the `connected` derived value directly.
   const connectedRef = useRef(false);
-
-  // Terminal appearance (font size + color theme), shared across all sessions.
-  const [termPrefs, updateTermPrefs] = useTerminalPrefs();
 
   // Sticky on-screen modifiers (mobile key bar). State drives the button
   // highlight; refs let the terminal's own input handler read them synchronously.
@@ -1573,8 +1568,6 @@ export function SshSession({
                 </button>
               )}
               <TerminalSettings
-                prefs={termPrefs}
-                onChange={updateTermPrefs}
                 onClearThumbnailCache={clearThumbnails}
                 getCacheBytes={clientCacheBytes}
               />
@@ -1626,7 +1619,6 @@ export function SshSession({
               onResize={(cols, rows) =>
                 connected && send({ t: "resize", cols, rows })
               }
-              theme={getThemePreset(termPrefs.themeId).theme}
             />
           </div>
           {connected && <SnippetsBar onRun={runSnippet} />}

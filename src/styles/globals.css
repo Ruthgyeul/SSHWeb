@@ -43,59 +43,6 @@
   --foreground: #e6e8ee;
 }
 
-/* Light app-chrome theme (#27). The dark palette above is the default; when the
-   user (or, resolved in JS, their OS) selects light, `data-theme="light"` on
-   <html> overrides the term-* tokens so every `bg-term-*`/`text-term-*` utility
-   follows. "system" is resolved to a concrete light/dark value in JS (see the
-   ThemeApplier + the no-FOUC script in layout.tsx), so only this one block is
-   needed here. The xterm terminal keeps its own theme (themeId) — only the
-   surrounding chrome switches. Accents are darkened for contrast on a light bg. */
-:root[data-theme="light"] {
-  --color-term-bg: #f6f7f9;
-  --color-term-panel: #ffffff;
-  --color-term-card: #ffffff;
-  --color-term-border: rgba(0, 0, 0, 0.12);
-  --color-term-text: #1a1d24;
-  --color-term-dim: #3a4152;
-  --color-term-muted: #5c6478;
-  --color-term-faint: #8b93a7;
-  --color-term-fainter: #c3c8d4;
-  --color-term-accent: #0284c7;
-  --color-term-accent-soft: #0369a1;
-  --color-term-green: #059669;
-  --color-term-yellow: #b45309;
-  --color-term-red: #dc2626;
-  --color-term-pink: #db2777;
-  --color-term-lime: #4d7c0f;
-  --background: #f6f7f9;
-  --foreground: #1a1d24;
-}
-
-/* Light-theme fixes for chrome that hardcodes white/dark alphas (invisible or
-   wrong when the background flips). Scoped to the light theme only. */
-:root[data-theme="light"] .terminal-bg {
-  background-image:
-    radial-gradient(
-      1200px 600px at 15% -10%,
-      rgba(2, 132, 199, 0.06),
-      transparent
-    ),
-    repeating-linear-gradient(
-      0deg,
-      rgba(0, 0, 0, 0.02) 0px,
-      rgba(0, 0, 0, 0.02) 1px,
-      transparent 1px,
-      transparent 24px
-    );
-}
-:root[data-theme="light"] ::-webkit-scrollbar-thumb {
-  background: #c3c8d4;
-  border: 2px solid var(--color-term-bg);
-}
-:root[data-theme="light"] * {
-  scrollbar-color: #c3c8d4 var(--color-term-bg);
-}
-
 * {
   box-sizing: border-box;
 }

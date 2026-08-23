@@ -123,21 +123,8 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html
-      lang={SITE_LANG}
-      className={geistMono.variable}
-      suppressHydrationWarning
-    >
+    <html lang={SITE_LANG} className={geistMono.variable}>
       <body className="min-h-screen bg-term-bg text-term-text antialiased">
-        {/* Set the app-chrome theme before first paint to avoid a flash (#27):
-            read the saved preference, resolve "system" against the OS, and stamp
-            data-theme on <html>. Kept in sync afterwards by the client. */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html:
-              "(function(){try{var r=localStorage.getItem('sshweb.terminalPrefs');var t='system';if(r){var p=JSON.parse(r);if(p&&(p.appTheme==='light'||p.appTheme==='dark'))t=p.appTheme;}var m=t==='system'?(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'):t;document.documentElement.dataset.theme=m;}catch(e){}})();",
-          }}
-        />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: toJsonLd(websiteJsonLd) }}

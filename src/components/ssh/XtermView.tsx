@@ -11,7 +11,7 @@ import {
 import type { Terminal as XTerminal } from "@xterm/xterm";
 import type { FitAddon as XFitAddon } from "@xterm/addon-fit";
 import type { SearchAddon as XSearchAddon } from "@xterm/addon-search";
-import { getThemePreset, type TerminalTheme } from "@/lib/terminalTheme";
+import { TERMINAL_THEME, type TerminalTheme } from "@/lib/terminalTheme";
 
 /** Fixed terminal font size (px); intentionally not user-configurable. */
 const FONT_SIZE = 13;
@@ -82,10 +82,8 @@ export const XtermView = forwardRef<
   const onResizeRef = useRef(onResize);
   onDataRef.current = onData;
   onResizeRef.current = onResize;
-  const themeRef = useRef<TerminalTheme>(
-    theme ?? getThemePreset(undefined).theme,
-  );
-  themeRef.current = theme ?? getThemePreset(undefined).theme;
+  const themeRef = useRef<TerminalTheme>(theme ?? TERMINAL_THEME);
+  themeRef.current = theme ?? TERMINAL_THEME;
 
   const openSearch = () => {
     setSearchOpen(true);
