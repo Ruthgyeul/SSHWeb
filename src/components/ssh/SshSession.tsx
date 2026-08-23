@@ -89,6 +89,9 @@ const MAX_INFLIGHT_THUMBS = 12;
 export interface SessionMeta {
   label: string;
   status: SessionStatus;
+  /** Whether the tab has work that closing would interrupt — open editor tabs or
+   * in-flight transfers — so the tab manager can confirm before closing (#85). */
+  busy: boolean;
 }
 
 // `SessionStatus` and the header status widgets (StatusDot/Uptime/LatencyChip)
@@ -145,6 +148,7 @@ export function SshSession({
   onMeta,
   reusableConnections,
   onConnectionChange,
+  initialConnect,
 }: {
   active: boolean;
   onMeta: (meta: SessionMeta) => void;
@@ -152,6 +156,9 @@ export function SshSession({
   reusableConnections?: ReusableConnection[];
   /** Report this tab's connected details (or null when not connected) upward. */
   onConnectionChange?: (details: ConnectDetails | null) => void;
+  /** Pre-fill the connect form on mount (never a password) — used by the tab
+   * manager's "Duplicate tab" so a new tab opens ready to reconnect (#83). */
+  initialConnect?: ConnectFormInitial;
 }) {
   const wsRef = useRef<WebSocket | null>(null);
   const xtermRef = useRef<XtermHandle>(null);
@@ -367,7 +374,7 @@ export function SshSession({
   // during render.
   const [formInitial, setFormInitial] = useState<
     ConnectFormInitial | undefined
-  >(undefined);
+  >(initialConnect);
 
   // Reconnection bookkeeping (refs so the ws close handler sees fresh values).
   const lastDetailsRef = useRef<ConnectDetails | null>(null);
@@ -498,6 +505,7 @@ export function SshSession({
     pruneAndStep,
     closeSubtitleTrack,
   } = usePreviewGallery({
+    onDownloaded: (name: string) => notify("success", `Downloaded ${name}`),
     send,
     setPreview,
     setDownloads,
@@ -748,6 +756,13 @@ export function SshSession({
                 ),
               );
               delete editorSaveTextRef.current[msg.path];
+              // #26: positive confirmation of a save (the ● dirty marker just
+              // clears otherwise). Uploads intentionally don't toast — a batch
+              // would spam; their progress row covers completion.
+              notify(
+                "success",
+                `Saved ${msg.path.split("/").pop() || msg.path}`,
+              );
             }
           }
           // A delete/move started from the preview modal is confirmed: now (and
@@ -1078,13 +1093,20 @@ export function SshSession({
     entryVersionRef.current = versions;
   }, [entries, cwd]);
 
-  // Report label + status to the tab manager whenever they change.
+  // Report label + status + busy to the tab manager whenever they change. "busy"
+  // means closing would interrupt something: an open editor (possible unsaved
+  // work) or an in-flight upload/download (#85).
+  const busy =
+    editors.length > 0 ||
+    Object.keys(uploads).length > 0 ||
+    Object.keys(downloads).length > 0;
   useEffect(() => {
     onMeta({
       label: target ? `${target.user}@${target.host}` : "New session",
       status,
+      busy,
     });
-  }, [target, status, onMeta]);
+  }, [target, status, busy, onMeta]);
 
   // Refit the terminal when this session becomes active or its tab shows it
   // (a hidden xterm measures 0, so it needs a refit + resize on reveal).

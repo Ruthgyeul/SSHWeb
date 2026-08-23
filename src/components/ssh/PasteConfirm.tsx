@@ -1,6 +1,7 @@
 "use client";
 
 import { useModalA11y } from "./hooks/useModalA11y";
+import { dangerousCommandMatches } from "@/lib/dangerousCommand";
 
 /**
  * Confirmation modal shown before a multi-line paste reaches the shell. Pasting
@@ -22,6 +23,9 @@ export function PasteConfirm({
   // the untouched original is what actually gets sent on confirm.
   const preview = text.replace(/\x1b\[20[01]~/g, "");
   const lineCount = preview.replace(/\n$/, "").split("\n").length;
+  // #64: extra heads-up when the paste contains an unmistakably destructive
+  // command (rm -rf, curl|sh, mkfs, …). Best-effort, not a security boundary.
+  const dangers = dangerousCommandMatches(preview);
   const dialogRef = useModalA11y<HTMLDivElement>({ onClose: onCancel });
 
   return (
@@ -45,6 +49,15 @@ export function PasteConfirm({
             command. Review it before sending.
           </p>
         </div>
+        {dangers.length > 0 && (
+          <div
+            role="alert"
+            className="border-b border-term-red/40 bg-term-red/10 px-5 py-2.5 text-xs text-term-red"
+          >
+            <span className="font-semibold">⚠ Dangerous command detected:</span>{" "}
+            {dangers.join(", ")}. Double-check before running.
+          </div>
+        )}
         <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-term-bg px-5 py-3 font-mono text-xs text-term-dim">
           {preview}
         </pre>

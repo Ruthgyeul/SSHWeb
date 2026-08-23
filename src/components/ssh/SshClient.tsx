@@ -8,8 +8,9 @@ import {
   type SessionMeta,
   type ReusableConnection,
 } from "./SshSession";
-import type { ConnectDetails } from "./ConnectForm";
+import type { ConnectDetails, ConnectFormInitial } from "./ConnectForm";
 import { reusableConnectionsExcluding } from "@/lib/connections";
+import { PromptDialog, type DialogRequest } from "./PromptDialog";
 
 /**
  * Multi-session shell around {@link SshSession}. Each tab is an independent SSH
@@ -32,6 +33,12 @@ export function SshClient() {
   const [names, setNames] = useState<Record<number, string>>({});
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
+  // Connect-form prefill for a freshly-duplicated tab (#83), consumed on mount.
+  const [pendingInitial, setPendingInitial] = useState<
+    Record<number, ConnectFormInitial>
+  >({});
+  // A pending confirm dialog (e.g. "close a busy tab?", #85); null when idle.
+  const [dialog, setDialog] = useState<DialogRequest | null>(null);
 
   const startRename = useCallback((id: number, current: string) => {
     setEditingId(id);
@@ -56,7 +63,9 @@ export function SshClient() {
   // child re-render doesn't cascade into a parent update loop.
   const updateMeta = useCallback((id: number, m: SessionMeta) => {
     setMetas((prev) =>
-      prev[id]?.label === m.label && prev[id]?.status === m.status
+      prev[id]?.label === m.label &&
+      prev[id]?.status === m.status &&
+      prev[id]?.busy === m.busy
         ? prev
         : { ...prev, [id]: m },
     );
@@ -93,7 +102,29 @@ export function SshClient() {
     setActiveId(id);
   }, []);
 
-  const closeSession = useCallback((id: number) => {
+  // #83: open a new tab pre-filled to reconnect to `id`'s server (no password),
+  // reusing the connect form's `initial` seed. Only offered for a connected tab.
+  const duplicateSession = useCallback(
+    (id: number) => {
+      const details = connections[id];
+      if (!details) return;
+      const seed: ConnectFormInitial = {
+        host: details.host,
+        port: String(details.port),
+        username: details.username,
+        auth: details.privateKey ? "key" : "password",
+        privateKey: details.privateKey,
+        passphrase: details.passphrase,
+      };
+      const newId = nextIdRef.current++;
+      setPendingInitial((prev) => ({ ...prev, [newId]: seed }));
+      setIds((prev) => [...prev, newId]);
+      setActiveId(newId);
+    },
+    [connections],
+  );
+
+  const doClose = useCallback((id: number) => {
     setIds((prev) => {
       if (prev.length <= 1) return prev; // keep at least one tab
       const idx = prev.indexOf(id);
@@ -119,7 +150,33 @@ export function SshClient() {
       delete rest[id];
       return rest;
     });
+    setPendingInitial((prev) => {
+      if (!(id in prev)) return prev;
+      const rest = { ...prev };
+      delete rest[id];
+      return rest;
+    });
   }, []);
+
+  // #85: closing a tab with an open editor or an in-flight transfer confirms
+  // first, so unsaved edits / interrupted transfers aren't lost silently.
+  const closeSession = useCallback(
+    (id: number) => {
+      if (metas[id]?.busy) {
+        const label = names[id] ?? metas[id]?.label ?? "this session";
+        setDialog({
+          title: "Close this session?",
+          message: `"${label}" has an open editor or a transfer in progress. Closing it will interrupt that work.`,
+          confirmLabel: "Close anyway",
+          danger: true,
+          onConfirm: () => doClose(id),
+        });
+        return;
+      }
+      doClose(id);
+    },
+    [metas, names, doClose],
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
@@ -169,6 +226,17 @@ export function SshClient() {
                   <span className="max-w-[12rem] truncate">{label}</span>
                 </button>
               )}
+              {connections[id] && (
+                <button
+                  type="button"
+                  onClick={() => duplicateSession(id)}
+                  className="text-term-faint hover:text-term-accent"
+                  title="Duplicate session (same server, new tab)"
+                  aria-label="Duplicate session"
+                >
+                  ⧉
+                </button>
+              )}
               {ids.length > 1 && (
                 <button
                   type="button"
@@ -209,10 +277,15 @@ export function SshClient() {
               onMeta={(m) => updateMeta(id, m)}
               reusableConnections={reusableFor(id)}
               onConnectionChange={(details) => reportConnection(id, details)}
+              initialConnect={pendingInitial[id]}
             />
           </div>
         ))}
       </div>
+
+      {dialog && (
+        <PromptDialog request={dialog} onClose={() => setDialog(null)} />
+      )}
     </div>
   );
 }

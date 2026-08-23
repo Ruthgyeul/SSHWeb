@@ -107,6 +107,9 @@ export interface PreviewGalleryDeps {
   streamTokenRef: RefObject<string | null>;
   downloadCapRef: RefObject<number>;
   entryVersionRef: RefObject<Map<string, string>>;
+  /** Optional: notified when a real (non-preview) download finishes, so the
+   * session can surface a success toast (#26). */
+  onDownloaded?: (name: string) => void;
 }
 
 /** The SshSession preview/gallery subsystem: opening a file into the modal,
@@ -141,6 +144,7 @@ export function usePreviewGallery(deps: PreviewGalleryDeps) {
     streamTokenRef,
     downloadCapRef,
     entryVersionRef,
+    onDownloaded,
   } = deps;
 
   // Stream the gallery neighbours of `path` (the previous & next previewable
@@ -422,7 +426,10 @@ export function usePreviewGallery(deps: PreviewGalleryDeps) {
             delete rest[msg.path];
             return rest;
           });
-          if (buf) triggerDownload(buf.name, concatBytes(buf.chunks));
+          if (buf) {
+            triggerDownload(buf.name, concatBytes(buf.chunks));
+            onDownloaded?.(buf.name);
+          }
           break;
         }
       }
@@ -442,6 +449,7 @@ export function usePreviewGallery(deps: PreviewGalleryDeps) {
       originalLoadPathsRef,
       subtitleReadsRef,
       subtitleUrlRef,
+      onDownloaded,
     ],
   );
 
