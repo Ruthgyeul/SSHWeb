@@ -6,9 +6,17 @@
 #
 # Setup:
 #   useradd --system --home /opt/sshweb --shell /usr/sbin/nologin sshweb
-#   # deploy the repo to /opt/sshweb, then as the sshweb user:
-#   #   npm ci && npm run build
-#   # put configuration (SSH_*, NEXT_PUBLIC_*) in /etc/sshweb.env (chmod 600)
+#   # deploy the repo to /opt/sshweb, then put configuration in
+#   # /etc/sshweb.env (chmod 600) — SSH_* server settings AND the public
+#   # NEXT_PUBLIC_* identity (NEXT_PUBLIC_SITE_URL, NEXT_PUBLIC_SITE_NAME, …).
+#   #
+#   # IMPORTANT: NEXT_PUBLIC_* values are inlined into the client bundle at
+#   # BUILD time, not read at runtime, so they must be present in the
+#   # environment when `npm run build` runs. Source the env file before building,
+#   # as the sshweb user:
+#   #   set -a && . /etc/sshweb.env && set +a && npm ci && npm run build
+#   # (EnvironmentFile below still loads /etc/sshweb.env at runtime for the
+#   #  server-only SSH_* settings; rebuild after changing any NEXT_PUBLIC_* value.)
 #   cp deploy/sshweb.service /etc/systemd/system/
 #   systemctl daemon-reload && systemctl enable --now sshweb
 #

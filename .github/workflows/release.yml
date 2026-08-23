@@ -29,12 +29,16 @@ jobs:
           node-version: 24
           cache: npm
 
+      # Run the SAME gate as ci.yml so a tag can never publish a build CI would
+      # have rejected (keep these in lockstep with .github/workflows/ci.yml).
       - run: npm ci
+      - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm run test
+      - run: npm run test:coverage
       - run: npm run build
       - run: npm run test:integration
+      - run: npm audit --audit-level=high
 
       - name: Create GitHub Release
         env:

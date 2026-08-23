@@ -209,14 +209,33 @@ Caddy preserves the client `Host` (same-origin WebSocket check), appends the
 real client IP to `X-Forwarded-For`, and sets `X-Forwarded-Proto` so the access
 cookie is flagged `Secure`.
 
+> **`NEXT_PUBLIC_*` are baked at build time, not runtime.** They are inlined
+> into the client bundle when `next build` runs, so the public identity
+> (`NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_SITE_NAME`, …) is passed to the image as
+> **build args** — the compose file forwards `NEXT_PUBLIC_SITE_URL` /
+> `NEXT_PUBLIC_AUTHOR_URL` via `build.args`, and the `Dockerfile` accepts the
+> full set (add more `--build-arg`s or `build.args` entries as needed). Changing
+> any of them requires a rebuild (`--build`); putting them only in the runtime
+> `environment:` has no effect on the already-built pages. Server-only `SSH_*`
+> settings, by contrast, are read at runtime and belong in `environment:`.
+
 ### Without Docker
 
-`npm ci && npm run build`, then run `server.mjs` under a process manager. A
-sample systemd unit is in [`deploy/sshweb.service`](deploy/sshweb.service)
-(drops privileges, hardens the sandbox, drains sessions on `SIGTERM`). Front it
-with a reverse proxy that forwards the WebSocket upgrade — an nginx example is
-in [`deploy/nginx.conf.example`](deploy/nginx.conf.example). The security
-headers and CSP in `next.config.ts` apply the same way.
+Because `NEXT_PUBLIC_*` values are inlined at build time, source your
+configuration **before** building:
+
+```bash
+set -a && . /etc/sshweb.env && set +a   # export NEXT_PUBLIC_* for the build
+npm ci && npm run build
+```
+
+Then run `server.mjs` under a process manager. A sample systemd unit is in
+[`deploy/sshweb.service`](deploy/sshweb.service) (drops privileges, hardens the
+sandbox, drains sessions on `SIGTERM`; it loads the same env file at runtime for
+the server-only `SSH_*` settings). Front it with a reverse proxy that forwards
+the WebSocket upgrade — an nginx example is in
+[`deploy/nginx.conf.example`](deploy/nginx.conf.example). The security headers
+and CSP in `next.config.ts` apply the same way.
 
 ## Contributing
 
