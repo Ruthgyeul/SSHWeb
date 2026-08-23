@@ -1,0 +1,57 @@
+# systemd unit for a non-Docker deployment of SSHWeb.
+#
+# SSHWeb needs its CUSTOM server (`node server.mjs`) — NOT `next start`, which
+# would serve the pages but omit the WebSocket↔SSH bridge, so the terminal and
+# SFTP would silently fail. This unit runs the production build's server.mjs.
+#
+# Setup:
+#   useradd --system --home /opt/sshweb --shell /usr/sbin/nologin sshweb
+#   # deploy the repo to /opt/sshweb, then put configuration in
+#   # /etc/sshweb.env (chmod 600) — SSH_* server settings AND the public
+#   # NEXT_PUBLIC_* identity (NEXT_PUBLIC_SITE_URL, NEXT_PUBLIC_SITE_NAME, …).
+#   #
+#   # IMPORTANT: NEXT_PUBLIC_* values are inlined into the client bundle at
+#   # BUILD time, not read at runtime, so they must be present in the
+#   # environment when `npm run build` runs. Source the env file before building,
+#   # as the sshweb user:
+#   #   set -a && . /etc/sshweb.env && set +a && npm ci && npm run build
+#   # (EnvironmentFile below still loads /etc/sshweb.env at runtime for the
+#   #  server-only SSH_* settings; rebuild after changing any NEXT_PUBLIC_* value.)
+#   cp deploy/sshweb.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now sshweb
+#
+# Front it with a TLS-terminating reverse proxy (see deploy/Caddyfile or the
+# nginx example) — do not expose the Node port directly.
+
+[Unit]
+Description=SSHWeb — browser SSH client + WebSocket↔SSH bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sshweb
+Group=sshweb
+WorkingDirectory=/opt/sshweb
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=127.0.0.1
+# Configuration (target host allowlist, access token, limits, …). Optional.
+EnvironmentFile=-/etc/sshweb.env
+ExecStart=/usr/bin/node server.mjs
+Restart=on-failure
+RestartSec=3
+# The bridge drains sessions on SIGTERM (graceful shutdown).
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# --- Hardening (loosen only if a feature needs it) ---------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# server.mjs writes nothing persistent; keep the FS read-only.
+ReadOnlyPaths=/opt/sshweb
+
+[Install]
+WantedBy=multi-user.target

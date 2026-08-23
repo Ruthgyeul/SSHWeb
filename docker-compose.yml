@@ -1,0 +1,52 @@
+# Reference deployment: SSHWeb behind a TLS-terminating Caddy reverse proxy.
+#
+#   docker compose up -d --build
+#
+# Caddy terminates HTTPS and forwards HTTP + WebSocket upgrades to the bridge on
+# the internal network; only Caddy is published. Set your domain and (optionally)
+# tuning/security env vars below. An nginx alternative is documented in README.md.
+
+services:
+  sshweb:
+    build:
+      context: .
+      # NEXT_PUBLIC_* values are inlined at `next build` (image build) time, NOT
+      # read from the runtime `environment:` below — so the public identity must
+      # be passed here as build args. Rebuild the image (`--build`) after
+      # changing any of these. Non-public SSH_* settings stay in `environment:`.
+      args:
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-https://ssh.example.com}
+        NEXT_PUBLIC_AUTHOR_URL: ${NEXT_PUBLIC_AUTHOR_URL:-https://ssh.example.com}
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      # Behind a reverse proxy: keep trust-proxy on (default) so the real client
+      # IP is read from X-Forwarded-For. One proxy hop (Caddy) → default 1.
+      SSH_TRUST_PROXY: "true"
+      SSH_TRUSTED_PROXY_HOPS: "1"
+      # --- Common hardening knobs (see .env.example for the full list) ---------
+      # SSH_ACCESS_TOKEN: "a-long-random-string"   # gate the whole relay
+      # SSH_ALLOWED_HOSTS: "example.com,*.internal" # restrict reachable hosts
+      # SSH_BLOCK_PRIVATE_HOSTS: "true"             # SSRF guard for a public relay
+      # SSH_MAX_SESSIONS: "25"
+    # The image's HEALTHCHECK already probes /api/health.
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - sshweb
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SSHWEB_DOMAIN: ${SSHWEB_DOMAIN:-ssh.example.com}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

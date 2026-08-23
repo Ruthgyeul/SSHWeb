@@ -1,0 +1,46 @@
+name: Release
+
+# Cut a GitHub Release when a semver tag is pushed. Re-runs the full gate first
+# so a tag can never publish a broken build, then creates the release with
+# auto-generated notes (from merged PRs / conventional commits since the last tag).
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # needed to create the release
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history so release notes can diff from the last tag
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # Run the SAME gate as ci.yml so a tag can never publish a build CI would
+      # have rejected (keep these in lockstep with .github/workflows/ci.yml).
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:coverage
+      - run: npm run build
+      - run: npm run test:integration
+      - run: npm audit --audit-level=high
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ github.ref_name }}" --generate-notes
