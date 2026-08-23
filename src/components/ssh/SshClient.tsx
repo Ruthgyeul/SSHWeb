@@ -16,6 +16,7 @@ import {
 import type { ConnectDetails, ConnectFormInitial } from "./ConnectForm";
 import { reusableConnectionsExcluding } from "@/lib/connections";
 import { PromptDialog, type DialogRequest } from "./PromptDialog";
+import { useTerminalPrefs } from "./hooks/useTerminalPrefs";
 
 const OPEN_TABS_KEY = "sshweb.openTabs";
 
@@ -86,6 +87,30 @@ export function SshClient() {
   >(restored.pending);
   // A pending confirm dialog (e.g. "close a busy tab?", #85); null when idle.
   const [dialog, setDialog] = useState<DialogRequest | null>(null);
+
+  // Apply the app-chrome theme (#27): resolve "system" against the OS setting and
+  // stamp data-theme on <html> so the light palette in globals.css takes effect.
+  // A no-FOUC inline script in layout.tsx sets this before first paint; this keeps
+  // it in sync with the user's choice and live OS changes while in "system".
+  const [appPrefs] = useTerminalPrefs();
+  useEffect(() => {
+    const root = document.documentElement;
+    const apply = () => {
+      const resolved =
+        appPrefs.appTheme === "system"
+          ? window.matchMedia?.("(prefers-color-scheme: light)").matches
+            ? "light"
+            : "dark"
+          : appPrefs.appTheme;
+      root.dataset.theme = resolved;
+    };
+    apply();
+    if (appPrefs.appTheme === "system" && window.matchMedia) {
+      const mq = window.matchMedia("(prefers-color-scheme: light)");
+      mq.addEventListener("change", apply);
+      return () => mq.removeEventListener("change", apply);
+    }
+  }, [appPrefs.appTheme]);
 
   const startRename = useCallback((id: number, current: string) => {
     setEditingId(id);

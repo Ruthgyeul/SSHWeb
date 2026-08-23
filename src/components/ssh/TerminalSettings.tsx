@@ -11,6 +11,7 @@ import {
   type KnownHostMap,
 } from "@/lib/knownHosts";
 import { cn } from "@/lib/utils";
+import { formatSize } from "@/lib/sshProtocol";
 import { CheckIcon, SettingsIcon } from "./icons";
 import type { TerminalPrefs } from "./hooks/useTerminalPrefs";
 
@@ -21,16 +22,10 @@ import type { TerminalPrefs } from "./hooks/useTerminalPrefs";
  * `useTerminalPrefs`, so the choice is shared across sessions and reloads).
  */
 /** Human-readable byte size (e.g. `12.3 MB`) for the cached-media read-out. */
+/** Format a byte count for the media-cache readout, reusing the file browser's
+ * shared size formatter (#28: drop the duplicate implementation). */
 function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  return `${v >= 10 || Number.isInteger(v) ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+  return formatSize(n, "file");
 }
 
 export function TerminalSettings({
@@ -176,6 +171,35 @@ export function TerminalSettings({
                     </span>
                     <span className="flex-1 truncate">{preset.label}</span>
                     {selected && <CheckIcon className="h-3.5 w-3.5" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* App theme (#27): light/dark/system for the chrome; the terminal
+              itself keeps its color theme above. */}
+          <div className="mt-3 border-t border-term-border pt-3">
+            <span className="mb-1.5 block text-xs font-medium text-term-muted">
+              Appearance
+            </span>
+            <div className="flex gap-1">
+              {(["system", "light", "dark"] as const).map((mode) => {
+                const selected = prefs.appTheme === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => onChange({ appTheme: mode })}
+                    aria-pressed={selected}
+                    className={cn(
+                      "flex-1 rounded px-2 py-1 text-xs capitalize transition-colors",
+                      selected
+                        ? "bg-term-accent/15 text-term-accent"
+                        : "text-term-dim hover:bg-term-card",
+                    )}
+                  >
+                    {mode}
                   </button>
                 );
               })}

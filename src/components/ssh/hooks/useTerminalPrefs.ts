@@ -3,9 +3,14 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { DEFAULT_THEME_ID, getThemePreset } from "@/lib/terminalTheme";
 
+/** Which app-chrome color scheme to use (the xterm terminal keeps its own theme
+ * via `themeId`). "system" follows the OS `prefers-color-scheme` (#27). */
+export type AppTheme = "system" | "light" | "dark";
+
 /** Persisted terminal appearance preferences. */
 export interface TerminalPrefs {
   themeId: string;
+  appTheme: AppTheme;
 }
 
 const STORAGE_KEY = "sshweb.terminalPrefs";
@@ -15,14 +20,22 @@ const SYNC_EVENT = "sshweb:terminalPrefs";
 
 const DEFAULT_PREFS: TerminalPrefs = {
   themeId: DEFAULT_THEME_ID,
+  appTheme: "system",
 };
+
+function normalizeAppTheme(value: unknown): AppTheme {
+  return value === "light" || value === "dark" ? value : "system";
+}
 
 /** Sanitize a raw localStorage string into valid prefs. */
 function parsePrefs(raw: string | null): TerminalPrefs {
   try {
     const parsed = raw ? JSON.parse(raw) : null;
     if (!parsed || typeof parsed !== "object") return DEFAULT_PREFS;
-    return { themeId: getThemePreset(parsed.themeId).id };
+    return {
+      themeId: getThemePreset(parsed.themeId).id,
+      appTheme: normalizeAppTheme(parsed.appTheme),
+    };
   } catch {
     return DEFAULT_PREFS;
   }
@@ -79,6 +92,10 @@ export function useTerminalPrefs(): [
         patch.themeId !== undefined
           ? getThemePreset(patch.themeId).id
           : prev.themeId,
+      appTheme:
+        patch.appTheme !== undefined
+          ? normalizeAppTheme(patch.appTheme)
+          : prev.appTheme,
     };
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
