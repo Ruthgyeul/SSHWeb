@@ -1,7 +1,12 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import {
+  parseOpenTabs,
+  serializeOpenTabs,
+  type PersistedTab,
+} from "@/lib/openTabs";
 import {
   SshSession,
   StatusDot,
@@ -12,6 +17,43 @@ import type { ConnectDetails, ConnectFormInitial } from "./ConnectForm";
 import { reusableConnectionsExcluding } from "@/lib/connections";
 import { PromptDialog, type DialogRequest } from "./PromptDialog";
 
+const OPEN_TABS_KEY = "sshweb.openTabs";
+
+/** Build the initial tab state from persisted tabs (#25). Falls back to a single
+ * empty tab when nothing is stored or storage is unavailable. */
+function restoreOpenTabs(): {
+  ids: number[];
+  names: Record<number, string>;
+  pending: Record<number, ConnectFormInitial>;
+  nextId: number;
+} {
+  const empty = { ids: [0], names: {}, pending: {}, nextId: 1 };
+  if (typeof window === "undefined") return empty;
+  let tabs: PersistedTab[] = [];
+  try {
+    tabs = parseOpenTabs(localStorage.getItem(OPEN_TABS_KEY));
+  } catch {
+    return empty;
+  }
+  if (tabs.length === 0) return empty;
+  const ids: number[] = [];
+  const names: Record<number, string> = {};
+  const pending: Record<number, ConnectFormInitial> = {};
+  tabs.forEach((tab, i) => {
+    ids.push(i);
+    if (tab.name) names[i] = tab.name;
+    if (tab.connect) {
+      pending[i] = {
+        host: tab.connect.host,
+        port: tab.connect.port,
+        username: tab.connect.username,
+        auth: tab.connect.auth,
+      };
+    }
+  });
+  return { ids, names, pending, nextId: ids.length };
+}
+
 /**
  * Multi-session shell around {@link SshSession}. Each tab is an independent SSH
  * connection with its own WebSocket, terminal and file browser; sessions stay
@@ -19,9 +61,13 @@ import { PromptDialog, type DialogRequest } from "./PromptDialog";
  * the background. Add tabs with "＋", close them with the ✕ on each tab.
  */
 export function SshClient() {
-  const nextIdRef = useRef(1);
-  const [ids, setIds] = useState<number[]>([0]);
-  const [activeId, setActiveId] = useState(0);
+  // Restore the tab strip from localStorage on first render (#25): each tab's
+  // name and connection identity (never a secret). Computed once.
+  const restored = useMemo(() => restoreOpenTabs(), []);
+
+  const nextIdRef = useRef(restored.nextId);
+  const [ids, setIds] = useState<number[]>(restored.ids);
+  const [activeId, setActiveId] = useState(restored.ids[0] ?? 0);
   const [metas, setMetas] = useState<Record<number, SessionMeta>>({});
   // Live connections per tab (in-memory only), so a new tab can offer a
   // one-click "same server" login without re-entering — or re-typing — anything.
@@ -30,13 +76,14 @@ export function SshClient() {
   >({});
   // User-assigned tab names (override the auto `user@host` label). Editing state
   // holds the id being renamed and the in-progress draft.
-  const [names, setNames] = useState<Record<number, string>>({});
+  const [names, setNames] = useState<Record<number, string>>(restored.names);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
-  // Connect-form prefill for a freshly-duplicated tab (#83), consumed on mount.
+  // Connect-form prefill for a freshly-duplicated tab (#83) or a restored tab
+  // (#25), consumed on mount by that tab's connect form.
   const [pendingInitial, setPendingInitial] = useState<
     Record<number, ConnectFormInitial>
-  >({});
+  >(restored.pending);
   // A pending confirm dialog (e.g. "close a busy tab?", #85); null when idle.
   const [dialog, setDialog] = useState<DialogRequest | null>(null);
 
@@ -177,6 +224,37 @@ export function SshClient() {
     },
     [metas, names, doClose],
   );
+
+  // Persist the tab strip (identity only, no secrets) whenever it changes (#25).
+  useEffect(() => {
+    const tabs: PersistedTab[] = ids.map((id) => {
+      const conn = connections[id];
+      const seed = pendingInitial[id];
+      let connect;
+      if (conn && conn.host && conn.username) {
+        connect = {
+          host: conn.host,
+          port: String(conn.port),
+          username: conn.username,
+          auth: (conn.privateKey ? "key" : "password") as "key" | "password",
+        };
+      } else if (seed?.host && seed?.username) {
+        connect = {
+          host: seed.host,
+          port: seed.port ?? "22",
+          username: seed.username,
+          auth: (seed.auth === "key" ? "key" : "password") as
+            "key" | "password",
+        };
+      }
+      return { name: names[id], connect };
+    });
+    try {
+      localStorage.setItem(OPEN_TABS_KEY, serializeOpenTabs(tabs));
+    } catch {
+      /* storage unavailable (private mode) — tabs just won't persist */
+    }
+  }, [ids, names, connections, pendingInitial]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
