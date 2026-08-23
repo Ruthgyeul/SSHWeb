@@ -395,6 +395,77 @@ describe("security: private-key authentication", () => {
   });
 });
 
+describe("security: credentials never leak into client-bound frames (#93)", () => {
+  let bridge;
+  let target;
+  const SENTINEL = "LEAK-6c4f7a-do-not-echo";
+  const WRONG_PASSWORD = `PW-${SENTINEL}`;
+  const BAD_KEY = `-----BEGIN OPENSSH PRIVATE KEY-----\nKEY-${SENTINEL}\n-----END OPENSSH PRIVATE KEY-----\n`;
+  const PASSPHRASE = `PASS-${SENTINEL}`;
+
+  beforeAll(async () => {
+    target = await startMockSshServer();
+    bridge = await startBridge();
+  });
+  afterAll(() => {
+    bridge?.stop();
+    target?.close();
+  });
+
+  /** Fail if any secret sentinel appears in ANY frame the bridge sent back. */
+  function assertNoLeak(client) {
+    const dump = client.inbox.map((m) => JSON.stringify(m)).join("\n");
+    expect(dump).not.toContain(SENTINEL);
+  }
+
+  it("does not echo a wrong password in the auth-failure error frame", async () => {
+    const ws = openWs(bridge.port);
+    await once(ws, "open");
+    const client = new MessageClient(ws);
+    client.send({
+      t: "connect",
+      host: "127.0.0.1",
+      port: target.port,
+      username: MOCK_USER,
+      password: WRONG_PASSWORD,
+      cols: 80,
+      rows: 24,
+    });
+    await client.waitFor((m) => m.t === "hostkey");
+    client.send({ t: "hostkey-response", accept: true });
+    // Auth fails against the mock (wrong password) → an error frame.
+    await client.waitFor((m) => m.t === "error");
+    assertNoLeak(client);
+    ws.close();
+  });
+
+  it("does not echo a private key or passphrase when the key is unparseable", async () => {
+    const ws = openWs(bridge.port);
+    await once(ws, "open");
+    const client = new MessageClient(ws);
+    client.send({
+      t: "connect",
+      host: "127.0.0.1",
+      port: target.port,
+      username: MOCK_USER,
+      privateKey: BAD_KEY,
+      passphrase: PASSPHRASE,
+      cols: 80,
+      rows: 24,
+    });
+    // A malformed key surfaces as an error frame (or a closed status); either
+    // way, wait until the bridge has spoken, then scan everything it sent.
+    await client.waitFor(
+      (m) => m.t === "error" || (m.t === "status" && m.state !== "connecting"),
+      15_000,
+    );
+    // Give any trailing frames a beat to arrive before scanning.
+    await new Promise((r) => setTimeout(r, 250));
+    assertNoLeak(client);
+    ws.close();
+  });
+});
+
 describe("security: keyboard-interactive (2FA)", () => {
   let bridge;
   let target;
