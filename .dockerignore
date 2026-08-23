@@ -1,0 +1,18 @@
+# Keep the build context small and never ship local secrets or build output.
+node_modules
+.next
+coverage
+.git
+.github
+.husky
+npm-debug.log*
+# Local env files — the image is configured via runtime env vars / compose.
+.env
+.env.*
+!.env.example
+# Docs / dev-only assets not needed in the image.
+docs
+*.md
+!README.md
+.vscode
+.idea

@@ -1,0 +1,50 @@
+# nginx reverse-proxy example for SSHWeb (alternative to deploy/Caddyfile).
+#
+# The critical part is the WebSocket upgrade: the browser opens a same-origin
+# WebSocket at /api/ssh to the bridge, so nginx MUST forward the Upgrade/
+# Connection headers. Forward the real client IP + scheme too, so the rate
+# limiter sees the right IP (right-most X-Forwarded-For hop) and the access
+# cookie is flagged Secure. TLS termination + certs are assumed to be set up
+# (e.g. certbot); adjust paths/domain for your host.
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name ssh.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/ssh.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/ssh.example.com/privkey.pem;
+
+    # Allow large editor saves / uploads (tune to your SSH_MAX_UPLOAD_MB).
+    client_max_body_size 64m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+
+        # WebSocket upgrade (required for the terminal + SFTP bridge).
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        # Preserve origin/host (same-origin WS check) and real client identity.
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Don't cut long-lived SSH sessions off at the default 60s read timeout.
+        proxy_read_timeout  3600s;
+        proxy_send_timeout  3600s;
+    }
+}
+
+# Redirect plain HTTP to HTTPS.
+server {
+    listen 80;
+    server_name ssh.example.com;
+    return 301 https://$host$request_uri;
+}

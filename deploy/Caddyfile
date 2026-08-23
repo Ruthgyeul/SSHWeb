@@ -1,0 +1,13 @@
+# Caddy reverse proxy for SSHWeb (used by docker-compose.yml).
+#
+# Caddy auto-provisions HTTPS for {$SSHWEB_DOMAIN} and forwards HTTP *and* the
+# WebSocket upgrade to the bridge — `reverse_proxy` handles Connection/Upgrade
+# transparently, so the same-origin WebSocket at /api/ssh just works. Caddy also
+# preserves the client Host header and appends the real client IP to
+# X-Forwarded-For (which SSHWeb reads as the right-most trusted hop) and sets
+# X-Forwarded-Proto so the access cookie is flagged Secure.
+
+{$SSHWEB_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy sshweb:3000
+}
