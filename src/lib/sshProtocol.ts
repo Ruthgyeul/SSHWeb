@@ -212,6 +212,9 @@ export type ClientMessage =
   // Compute a hash of a remote file's contents (default sha256), streamed on the
   // bridge so a large file isn't buffered. The original is only read.
   | { t: "sftp-checksum"; path: string; algo?: string }
+  // Query filesystem disk usage for `path` (df), via the OpenSSH statvfs SFTP
+  // extension. Not all servers support it; unsupported → an error frame.
+  | { t: "sftp-df"; path: string }
   // Download a directory as a (store-only) zip archive.
   | { t: "sftp-download-dir"; path: string }
   // Download several selected entries (files and/or directories) as a single
@@ -273,6 +276,7 @@ export const CLIENT_MESSAGE_FIELDS: Record<
   "sftp-symlink": { target: "string", path: "string" },
   "sftp-chmod": { path: "string", mode: "number" },
   "sftp-checksum": { path: "string" },
+  "sftp-df": { path: "string" },
   "sftp-download-dir": { path: "string" },
   "sftp-download-many": { paths: "string[]" },
   "thumb-purge": {},
@@ -438,6 +442,9 @@ export type ServerMessage =
   | { t: "sftp-ok"; op: string; path: string }
   // Result of a `sftp-checksum` request: the hex digest of the file's contents.
   | { t: "sftp-checksum"; path: string; algo: string; hex: string }
+  // Result of a `sftp-df` request: total/free bytes of the filesystem holding
+  // the queried path.
+  | { t: "sftp-df"; path: string; total: number; free: number }
   // Optional per-session capability advertisement, sent once the session is
   // ready. `sudo` reflects whether the server permits elevated (root) file
   // access (`SSH_ALLOW_SUDO`), so the client only shows the sudo toggle when the
@@ -618,6 +625,14 @@ export function formatSize(bytes: number, type: FileEntry["type"]): string {
     unit++;
   }
   return `${size.toFixed(size >= 10 || size % 1 === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+/** Human-readable one-line disk-usage summary for the df toast (#49). */
+export function formatDiskUsage(total: number, free: number): string {
+  if (!Number.isFinite(total) || total <= 0) return "Disk usage unavailable";
+  const used = Math.max(0, total - free);
+  const pct = Math.round((used / total) * 100);
+  return `Disk: ${formatSize(free, "file")} free of ${formatSize(total, "file")} (${pct}% used)`;
 }
 
 /**

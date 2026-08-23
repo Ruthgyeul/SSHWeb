@@ -533,6 +533,7 @@ const CLIENT_MESSAGE_FIELDS = {
   "sftp-symlink": { target: "string", path: "string" },
   "sftp-chmod": { path: "string", mode: "number" },
   "sftp-checksum": { path: "string" },
+  "sftp-df": { path: "string" },
   "sftp-download-dir": { path: "string" },
   "sftp-download-many": { paths: "string[]" },
   "thumb-purge": {},
@@ -3995,6 +3996,26 @@ wss.on("connection", (ws, req) => {
 
         case "sftp-checksum":
           handleChecksum(msg);
+          break;
+
+        case "sftp-df":
+          withSftp((s) => {
+            // The df figures come from the OpenSSH statvfs SFTP extension; not
+            // every server implements it, so fail gracefully when it's absent.
+            if (typeof s.ext_openssh_statvfs !== "function") {
+              return sendError(
+                "Disk usage isn't supported by this server.",
+                "sftp",
+              );
+            }
+            s.ext_openssh_statvfs(msg.path, (err, st) => {
+              if (err) return sendError(err.message, "sftp");
+              const unit = Number(st.f_frsize || st.f_bsize || 512);
+              const total = Number(st.f_blocks) * unit;
+              const free = Number(st.f_bavail) * unit;
+              send({ t: "sftp-df", path: msg.path, total, free });
+            });
+          });
           break;
 
         case "sftp-download-dir":

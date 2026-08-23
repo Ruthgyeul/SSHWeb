@@ -257,6 +257,7 @@ export function FileBrowser({
   elevatedPending,
   onToggleElevated,
   onOpenTerminalHere,
+  onDiskUsage,
   onNavigate,
   onDownload,
   onDownloadDir,
@@ -306,6 +307,8 @@ export function FileBrowser({
   onToggleElevated: () => void;
   /** cd the shell to the current directory and switch to the terminal (#50). */
   onOpenTerminalHere: () => void;
+  /** Show the current filesystem's disk usage (df) as a toast (#49). */
+  onDiskUsage: () => void;
   onNavigate: (path: string) => void;
   onDownload: (path: string) => void;
   onDownloadDir: (path: string) => void;
@@ -624,6 +627,15 @@ export function FileBrowser({
           aria-label="Open terminal here"
         >
           {">_"}
+        </button>
+        <button
+          type="button"
+          onClick={onDiskUsage}
+          className="rounded border border-term-border px-2 py-1 font-mono text-xs text-term-muted hover:text-term-text"
+          title="Show disk usage (df)"
+          aria-label="Show disk usage"
+        >
+          df
         </button>
         <button
           type="button"

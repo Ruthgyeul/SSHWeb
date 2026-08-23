@@ -6,6 +6,7 @@ import {
   compareHostKey,
   encodeMessage,
   formatSize,
+  formatDiskUsage,
   hostKeyId,
   isBrowserRenderableImage,
   isLargeForEditor,
@@ -768,6 +769,11 @@ export function SshSession({
           break;
         }
 
+        case "sftp-df":
+          // #49: surface the current filesystem's free/total as a toast.
+          notify("info", formatDiskUsage(msg.total, msg.free));
+          break;
+
         case "sftp-ok":
           if (msg.op === "write") {
             delete uploadCtlRef.current[msg.path];
@@ -1237,6 +1243,12 @@ export function SshSession({
     xtermRef.current?.focus();
   };
 
+  // Request disk usage (df) for the current directory (#49); the result comes
+  // back as an `sftp-df` frame surfaced as a toast.
+  const requestDiskUsage = () => {
+    if (connected) send({ t: "sftp-df", path: cwd });
+  };
+
   // --- File browser actions (in-app dialogs, not window.prompt/confirm) ---
   const clearUploadRow = useCallback((path: string) => {
     setUploads((u) => {
@@ -1678,6 +1690,7 @@ export function SshSession({
               elevatedPending={elevatedPending}
               onToggleElevated={toggleElevated}
               onOpenTerminalHere={openTerminalHere}
+              onDiskUsage={requestDiskUsage}
               onNavigate={listDir}
               onRefresh={() => listDir(cwd)}
               onDownload={(path) => send({ t: "sftp-read", path })}
