@@ -76,21 +76,30 @@ and is read from `NEXT_PUBLIC_*` environment variables. Copy `.env.example` to
 The SSH bridge has its own (server-only) settings — `SSH_ALLOWED_HOSTS`,
 `SSH_MAX_SESSIONS`, `SSH_MAX_DOWNLOAD_MB`, `SSH_MAX_UPLOAD_MB`,
 `SSH_RATE_LIMIT_MAX`, `SSH_ALLOWED_ORIGINS`, `SSH_ACCESS_TOKEN`,
-`NEXT_PUBLIC_SSH_WS_PATH` — covered under
-[Security](#security). See [`.env.example`](.env.example) for the full,
-commented list.
+`SSH_BLOCK_PRIVATE_HOSTS`, `SSH_AUDIT_LOG`, `SSH_LOG_LEVEL`, and the
+`SSH_*_ALGORITHMS` allowlists — covered under [Security](#security). A few
+client-side knobs are also env-driven: `NEXT_PUBLIC_SSH_WS_PATH`,
+`NEXT_PUBLIC_SSH_ALLOWED_HOSTS` (a public mirror used only for a friendly
+pre-connect message), `NEXT_PUBLIC_SSH_MEDIA_CACHE_MAX_MB` (browser media-cache
+budget), and `NEXT_PUBLIC_SENTRY_DSN` (optional error reporting). See
+[`.env.example`](.env.example) for the full, commented list.
 
 ## Scripts
 
-| Command             | Description                                      |
-| ------------------- | ------------------------------------------------ |
-| `npm run dev`       | Dev server + SSH bridge (`server.mjs`)           |
-| `npm run dev:next`  | Plain `next dev` (no SSH bridge)                 |
-| `npm run build`     | Production build (fails on TS errors)            |
-| `npm run start`     | Serve the production build + SSH bridge          |
-| `npm run lint`      | ESLint                                           |
-| `npm run typecheck` | `tsc --noEmit`                                   |
-| `npm run test`      | Vitest (run once)                                |
+| Command                    | Description                                      |
+| -------------------------- | ------------------------------------------------ |
+| `npm run dev`              | Dev server + SSH bridge (`server.mjs`)           |
+| `npm run dev:next`         | Plain `next dev` (no SSH bridge)                 |
+| `npm run build`            | Production build (fails on TS errors)            |
+| `npm run start`            | Serve the production build + SSH bridge          |
+| `npm run lint`             | ESLint                                           |
+| `npm run typecheck`        | `tsc --noEmit`                                   |
+| `npm run test`             | Vitest unit tests (run once)                     |
+| `npm run test:watch`       | Vitest in watch mode                             |
+| `npm run test:coverage`    | Unit tests with the `src/lib` coverage gate      |
+| `npm run test:integration` | End-to-end bridge smoke test (vs. an in-memory ssh2 target) |
+| `npm run format`           | Prettier (write)                                 |
+| `npm run format:check`     | Prettier (check only)                            |
 
 ## Project structure
 
@@ -176,15 +185,38 @@ See the [Web SSH client block in `.env.example`](.env.example) for every knob.
 
 ## Deployment
 
-`npm run build && npm run start` behind a reverse proxy, or deploy to any Node
-host / platform that supports Next.js 16. Note that `start` runs the custom
-[`server.mjs`](server.mjs) (needed for the SSH WebSocket bridge), **not**
-`next start` — running `next start` (e.g. from a service unit) gives you a plain
-Next server with no `/api/ssh` bridge, and without a prior `next build` it exits
-immediately. The security headers and CSP in `next.config.ts` are applied the
-same way. This is **not** compatible with a static export or an edge-only host —
-the SSH bridge needs a long-lived Node process. Terminate TLS in front of it so
-the SSH WebSocket runs over `wss://`.
+SSHWeb needs a **long-lived Node process** running the custom
+[`server.mjs`](server.mjs) (the SSH WebSocket bridge) behind a TLS-terminating
+reverse proxy — it is **not** compatible with a static export or an edge-only
+host. Whatever you run, run `server.mjs`, **not** `next start`: `next start`
+serves the pages but omits the `/api/ssh` bridge, so the terminal and SFTP
+silently fail. Terminate TLS in front so the WebSocket runs over `wss://`.
+
+### Docker (recommended)
+
+A multi-stage [`Dockerfile`](Dockerfile) builds the app and runs `server.mjs`
+(with a `HEALTHCHECK` on `/api/health`), and [`docker-compose.yml`](docker-compose.yml)
+wires it behind a [Caddy](deploy/Caddyfile) reverse proxy that auto-provisions
+HTTPS and forwards the WebSocket upgrade:
+
+```bash
+# set SSHWEB_DOMAIN / NEXT_PUBLIC_SITE_URL (and any SSH_* knobs) in the compose file or a .env
+docker compose up -d --build
+```
+
+Only Caddy is published (:80/:443); the app stays on the internal network.
+Caddy preserves the client `Host` (same-origin WebSocket check), appends the
+real client IP to `X-Forwarded-For`, and sets `X-Forwarded-Proto` so the access
+cookie is flagged `Secure`.
+
+### Without Docker
+
+`npm ci && npm run build`, then run `server.mjs` under a process manager. A
+sample systemd unit is in [`deploy/sshweb.service`](deploy/sshweb.service)
+(drops privileges, hardens the sandbox, drains sessions on `SIGTERM`). Front it
+with a reverse proxy that forwards the WebSocket upgrade — an nginx example is
+in [`deploy/nginx.conf.example`](deploy/nginx.conf.example). The security
+headers and CSP in `next.config.ts` apply the same way.
 
 ## Contributing
 
