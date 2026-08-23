@@ -291,7 +291,7 @@ function thumbCacheGet(key) {
   thumbCache.delete(key);
   thumbCache.set(key, row); // move to newest for LRU
   thumbCacheHits += 1;
-  return row.buf;
+  return { buf: row.buf, bg: row.bg };
 }
 
 /** Actively drop tiles that have aged past the TTL (so memory frees on a timer,
@@ -317,11 +317,11 @@ if (THUMB_CACHE_TTL_MS > 0 && THUMB_CACHE_MAX_BYTES > 0) {
 }
 
 /** Store a finished tile, evicting least-recently-used entries once over budget. */
-function thumbCachePut(key, buf) {
+function thumbCachePut(key, buf, bg) {
   if (THUMB_CACHE_MAX_BYTES <= 0 || buf.length > THUMB_CACHE_MAX_BYTES) return;
   const existing = thumbCache.get(key);
   if (existing) thumbCacheBytes -= existing.bytes;
-  thumbCache.set(key, { buf, bytes: buf.length, lastUsed: Date.now() });
+  thumbCache.set(key, { buf, bg, bytes: buf.length, lastUsed: Date.now() });
   thumbCacheBytes += buf.length;
   if (thumbCacheBytes <= THUMB_CACHE_MAX_BYTES) return;
   const rows = [];
@@ -3151,33 +3151,50 @@ wss.on("connection", (ws, req) => {
               thumb: true,
             });
           };
-          // Send a produced WebP tile, metering it for the health probe.
-          const sendThumb = (out) => {
+          // Send a produced WebP tile, metering it for the health probe. `tile`
+          // is { buf, bg } — bg is the dominant color placeholder (#100).
+          const sendThumb = (tile) => {
             thumbsServed += 1;
-            thumbBytesOut += out.length;
+            thumbBytesOut += tile.buf.length;
             send({
               t: "sftp-read",
               path: msg.path,
               name,
-              dataB64: out.toString("base64"),
+              dataB64: tile.buf.toString("base64"),
               thumb: true,
               mime: "image/webp",
+              bg: tile.bg,
             });
           };
           // Downscale any decodable image bytes (a photo, or an ffmpeg poster
-          // frame) to a small WebP; returns null if sharp can't decode them.
+          // frame) to a small WebP, and compute its dominant color for a cheap
+          // grid placeholder (#100). Returns { buf, bg } or null if sharp can't
+          // decode the bytes.
           const toWebpThumb = async (bytes, rotate) => {
             try {
               let pipe = sharp(bytes);
               if (rotate) pipe = pipe.rotate(); // honour EXIF orientation
-              const out = await pipe
+              const buf = await pipe
                 .resize(THUMBNAIL_PIXELS, THUMBNAIL_PIXELS, {
                   fit: "inside",
                   withoutEnlargement: true,
                 })
                 .webp({ quality: 70 })
                 .toBuffer();
-              return out;
+              let bg;
+              try {
+                const { dominant } = await sharp(buf).stats();
+                if (dominant) {
+                  const hex = (n) =>
+                    Math.max(0, Math.min(255, n | 0))
+                      .toString(16)
+                      .padStart(2, "0");
+                  bg = `#${hex(dominant.r)}${hex(dominant.g)}${hex(dominant.b)}`;
+                }
+              } catch {
+                /* dominant color is optional; omit on failure */
+              }
+              return { buf, bg };
             } catch {
               return null;
             }
@@ -3213,7 +3230,7 @@ wss.on("connection", (ws, req) => {
                       // Image: decode + downscale straight to WebP.
                       const imageThumb = await toWebpThumb(buffer, true);
                       if (imageThumb) {
-                        thumbCachePut(cacheKey, imageThumb);
+                        thumbCachePut(cacheKey, imageThumb.buf, imageThumb.bg);
                         return sendThumb(imageThumb);
                       }
                       // Not a sharp-decodable image (video, or corrupt): extract
@@ -3223,7 +3240,11 @@ wss.on("connection", (ws, req) => {
                         if (frame) {
                           const videoThumb = await toWebpThumb(frame, false);
                           if (videoThumb) {
-                            thumbCachePut(cacheKey, videoThumb);
+                            thumbCachePut(
+                              cacheKey,
+                              videoThumb.buf,
+                              videoThumb.bg,
+                            );
                             return sendThumb(videoThumb);
                           }
                         }

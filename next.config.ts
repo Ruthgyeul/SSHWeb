@@ -34,6 +34,11 @@ const csp = [
   "font-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  // The large-file base64 codec offloads to a Web Worker created from an inline
+  // `blob:` URL (src/lib/base64Codec.ts); without this the browser's CSP would
+  // reject `new Worker(blob:…)` and every large save would fall back to the main
+  // thread. Scoped to same-origin + blob: only — no external worker is loaded.
+  "worker-src 'self' blob:",
   // 'self' also authorizes same-origin WebSockets (ws:// wss://), which the web
   // SSH client at /ssh opens to the bridge in server.mjs. No external origin is
   // permitted, so a page can only reach this site's own SSH relay.

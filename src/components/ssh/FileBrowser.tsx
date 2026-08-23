@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   filePreviewKind,
   filterEntries,
@@ -149,6 +149,7 @@ function SortHeader({
 function Thumbnail({
   path,
   src,
+  bg,
   kind,
   thumbnailable,
   fallback,
@@ -157,6 +158,7 @@ function Thumbnail({
 }: {
   path: string;
   src: string | undefined;
+  bg?: string;
   kind: PreviewKind | null;
   thumbnailable: boolean;
   fallback: React.ReactNode;
@@ -199,6 +201,9 @@ function Thumbnail({
     <div
       ref={ref}
       className="relative flex h-24 w-full items-center justify-center overflow-hidden rounded bg-term-panel/50"
+      // Dominant-color placeholder (#100): fills the tile while the lazy WebP
+      // decodes, so grids don't flash empty panels. Covered once the <img> paints.
+      style={bg ? { backgroundColor: bg } : undefined}
     >
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element -- remote data: URL
@@ -269,6 +274,7 @@ export function FileBrowser({
   onOpenUnsupported,
   onRefresh,
   thumbnails,
+  thumbBg,
   onRequestThumbnail,
   onThumbnailVisibility,
   search,
@@ -325,6 +331,9 @@ export function FileBrowser({
   onRefresh: () => void;
   /** Cached grid thumbnails, keyed by remote path → `data:` URL. */
   thumbnails: Record<string, string>;
+  /** Dominant color per thumbnail (`#rrggbb`), a placeholder behind the tile
+   * while its lazy WebP decodes. */
+  thumbBg?: Record<string, string>;
   /** Ask the parent to fetch a thumbnail for `path` (deduped upstream). */
   onRequestThumbnail: (path: string) => void;
   /** Report a grid tile's viewport visibility so the parent serves visible
@@ -375,26 +384,39 @@ export function FileBrowser({
   const filter = filterState.cwd === cwd ? filterState.value : "";
   const setFilter = (value: string) => setFilterState({ cwd, value });
 
-  const sorted = sortEntriesBy(entries, sort.key, sort.dir);
+  // React Compiler is NOT enabled in this project, so these derivations are
+  // memoized by hand — otherwise a directory of hundreds of entries re-sorts and
+  // re-filters on every render (every filter keystroke, thumbnail arrival, or
+  // selection toggle).
+  const sorted = useMemo(
+    () => sortEntriesBy(entries, sort.key, sort.dir),
+    [entries, sort.key, sort.dir],
+  );
   const sortArrow = sort.dir === "asc" ? "▲" : "▼";
   // The rows actually shown: `sorted` narrowed by the filter box. Selection is
   // kept against the full listing (below) so filtering never drops checks.
-  const visible = filterEntries(sorted, filter);
+  const visible = useMemo(
+    () => filterEntries(sorted, filter),
+    [sorted, filter],
+  );
   const filtering = filter.trim() !== "";
   // Files openable in the preview modal among the visible rows, in display order
   // — handed to the modal so ←/→ can step through them like a gallery. Includes
-  // media/PDF/Markdown and read-only text files. (The React Compiler memoizes
-  // this; no manual useMemo needed.)
-  const previewSiblings = visible
-    .filter(
-      (e) =>
-        e.type !== "dir" &&
-        (filePreviewKind(e.name) !== null || isProbablyTextFile(e.name)),
-    )
-    .map((e) => ({
-      path: `${cwd.replace(/\/$/, "")}/${e.name}`,
-      name: e.name,
-    }));
+  // media/PDF/Markdown and read-only text files.
+  const previewSiblings = useMemo(
+    () =>
+      visible
+        .filter(
+          (e) =>
+            e.type !== "dir" &&
+            (filePreviewKind(e.name) !== null || isProbablyTextFile(e.name)),
+        )
+        .map((e) => ({
+          path: `${cwd.replace(/\/$/, "")}/${e.name}`,
+          name: e.name,
+        })),
+    [visible, cwd],
+  );
   const atRoot = cwd === "/";
   const segments = pathSegments(cwd);
   const pathFor = (name: string) => `${cwd.replace(/\/$/, "")}/${name}`;
@@ -1193,6 +1215,7 @@ export function FileBrowser({
                         <Thumbnail
                           path={target}
                           src={thumbnails[target]}
+                          bg={thumbBg?.[target]}
                           kind={previewKind(entry.name)}
                           thumbnailable={isThumbnailable(entry)}
                           fallback={
