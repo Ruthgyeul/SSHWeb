@@ -15,6 +15,7 @@ import {
 } from "@/lib/sshProtocol";
 import { renderMarkdown } from "@/lib/markdown";
 import { highlightToHtml } from "@/lib/syntaxHighlight";
+import { hexDump } from "@/lib/hexDump";
 import { cn } from "@/lib/utils";
 import {
   useImageTransform,
@@ -279,6 +280,14 @@ export function FilePreview({
   const [showInfo, setShowInfo] = useState(false);
 
   const isText = kind === "text";
+  // Hex view (#75): render the text preview's bytes as a `hexdump -C` view. Exact
+  // for the text/config/log files that open here; computed off the shown text.
+  const [hexMode, setHexMode] = useState(false);
+  const hexText = useMemo(
+    () =>
+      hexMode && isText ? hexDump(new TextEncoder().encode(text ?? "")) : "",
+    [hexMode, isText, text],
+  );
   // Text-preview view options: soft-wrap long lines, and an in-modal find bar
   // (open/query/case + derived matches state owned by `useTextFind`).
   const [wrap, setWrap] = useState(false);
@@ -675,6 +684,15 @@ export function FilePreview({
             </button>
             <button
               type="button"
+              onClick={() => setHexMode((h) => !h)}
+              className={cn(toolBtn, hexMode && "text-term-accent")}
+              aria-pressed={hexMode}
+              title="Toggle hex view"
+            >
+              Hex
+            </button>
+            <button
+              type="button"
               onClick={() => {
                 setFindOpen(true);
                 requestAnimationFrame(() => findInputRef.current?.focus());
@@ -809,7 +827,12 @@ export function FilePreview({
             {streamStrip}
             {loading && spinner}
             {galleryArrows}
-            {!loading && (
+            {!loading && hexMode && (
+              <pre className="min-h-full overflow-x-auto whitespace-pre px-4 py-3 font-mono text-xs leading-5 text-term-text">
+                {hexText}
+              </pre>
+            )}
+            {!loading && !hexMode && (
               <div className="flex min-h-full font-mono text-xs leading-5">
                 {!wrap && (
                   <pre
