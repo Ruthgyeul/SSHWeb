@@ -46,7 +46,7 @@ import {
   type SearchState,
   type SearchMode,
 } from "./FileBrowser";
-import { FileEditor, type EditorFile } from "./FileEditor";
+import { FileEditor } from "./FileEditor";
 import type { PreviewState } from "./preview/previewState";
 import { FilePreview } from "./FilePreview";
 import { PasteConfirm } from "./PasteConfirm";
@@ -63,6 +63,7 @@ import { useSshSocket } from "./hooks/useSshSocket";
 import { useFileActions } from "./hooks/useFileActions";
 import { usePreviewCache } from "./hooks/usePreviewCache";
 import { usePreviewGallery } from "./hooks/usePreviewGallery";
+import { useEditors } from "./hooks/useEditors";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -191,11 +192,17 @@ export function SshSession({
   const [elevated, setElevated] = useState(false);
   const [elevatedPending, setElevatedPending] = useState(false);
   const [authPrompt, setAuthPrompt] = useState<AuthPromptState | null>(null);
-  // Files open in the inline editor (tabs), plus which one is shown and which
-  // (if any) is being saved right now.
-  const [editors, setEditors] = useState<EditorFile[]>([]);
-  const [activeEditor, setActiveEditor] = useState<string | null>(null);
-  const [savingPath, setSavingPath] = useState<string | null>(null);
+  // Files open in the inline editor (tabs), which one is shown, and which (if
+  // any) is being saved right now — all owned by the useEditors hook.
+  const editorsApi = useEditors();
+  const { editors, activeEditor, savingPath } = editorsApi;
+  // Kept current so the memoized message handler / cleanup callbacks can reach
+  // the editor operations without listing the (per-render) api object as a dep —
+  // the same ref pattern the rest of this component uses for stable callbacks.
+  const editorsApiRef = useRef(editorsApi);
+  useEffect(() => {
+    editorsApiRef.current = editorsApi;
+  }, [editorsApi]);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   // Mirrors the open preview's path so a late `sftp-read` reply can tell whether
   // the user is still viewing that file before it builds a blob URL for it.
@@ -293,9 +300,6 @@ export function SshSession({
     clear: previewCacheClearOnly,
     sizeBytes: previewCacheSizeBytes,
   } = usePreviewCache(entryVersionRef);
-  // Text captured at save time per path, so `sftp-ok` can reconcile the editor's
-  // saved content (marking that file clean) without a re-read.
-  const editorSaveTextRef = useRef<Record<string, string>>({});
   // In-flight chunked uploads, keyed by remote path. Holds the source File and
   // enough state to cancel or resume: `sent` tracks bytes acknowledged as sent,
   // `cancelled` short-circuits the streaming loop, `running` guards against two
@@ -670,12 +674,7 @@ export function SshSession({
         case "sftp-read":
           if (msg.edit) {
             const text = new TextDecoder().decode(base64ToBytes(msg.dataB64));
-            setEditors((prev) =>
-              prev.some((e) => e.path === msg.path)
-                ? prev // already open — just focus it (don't clobber edits)
-                : [...prev, { path: msg.path, name: msg.name, content: text }],
-            );
-            setActiveEditor(msg.path);
+            editorsApiRef.current.openForEdit(msg.path, msg.name, text);
           } else if (msg.thumb) {
             // Free the concurrency slot and let the next queued tile go, whether
             // this one produced a thumbnail or not.
@@ -742,15 +741,8 @@ export function SshSession({
               delete rest[msg.path];
               return rest;
             });
-            setSavingPath((cur) => (cur === msg.path ? null : cur));
-            const saved = editorSaveTextRef.current[msg.path];
-            if (saved !== undefined) {
-              setEditors((prev) =>
-                prev.map((e) =>
-                  e.path === msg.path ? { ...e, content: saved } : e,
-                ),
-              );
-              delete editorSaveTextRef.current[msg.path];
+            editorsApiRef.current.clearSaving(msg.path);
+            if (editorsApiRef.current.markSaved(msg.path)) {
               // #26: positive confirmation of a save (the ● dirty marker just
               // clears otherwise). Uploads intentionally don't toast — a batch
               // would spam; their progress row covers completion.
@@ -816,7 +808,7 @@ export function SshSession({
             // status text is hidden — a toast is the only visible channel.
             // Clear any in-flight spinners so a failed list/save doesn't hang.
             setFilesLoading(false);
-            setSavingPath(null);
+            editorsApiRef.current.clearSaving();
             setElevatedPending(false);
             // An in-flight "load original" that fails (e.g. the original is over
             // the download cap) should keep the WebP preview and just clear the
@@ -959,10 +951,7 @@ export function SshSession({
     setElevatedPending(false);
     setStatusMessage("");
     setAuthPrompt(null);
-    setEditors([]);
-    setActiveEditor(null);
-    setSavingPath(null);
-    editorSaveTextRef.current = {};
+    editorsApiRef.current.reset();
     setPreview(null);
     setPastePending(null);
     setDialog(null);
@@ -1458,7 +1447,7 @@ export function SshSession({
   // without a prompt (the read reply just refocuses the existing tab).
   const requestEdit = (path: string, name: string, size: number) => {
     const openEditor = () => send({ t: "sftp-read", path, edit: true });
-    const alreadyOpen = editors.some((e) => e.path === path);
+    const alreadyOpen = editorsApi.isOpen(path);
     if (!alreadyOpen && isLargeForEditor(size)) {
       setDialog({
         title: "Open a large file?",
@@ -1471,8 +1460,7 @@ export function SshSession({
     openEditor();
   };
   const onSaveEdit = (path: string, text: string) => {
-    editorSaveTextRef.current[path] = text;
-    setSavingPath(path);
+    editorsApi.beginSave(path, text);
     // Offload the base64 encode to a worker for large files so saving a big file
     // doesn't jank the UI (#98); falls back to a synchronous encode when workers
     // are unavailable, so the frame is always sent.
@@ -1487,27 +1475,11 @@ export function SshSession({
         wsRef.current !== originWs ||
         originWs?.readyState !== WebSocket.OPEN
       ) {
-        setSavingPath((cur) => (cur === path ? null : cur));
+        editorsApi.clearSaving(path);
         return;
       }
       send({ t: "sftp-write", path, dataB64 });
     });
-  };
-  // Close one editor tab; if it was active, fall back to the last remaining file.
-  const closeEditorFile = (path: string) => {
-    const remaining = editors.filter((e) => e.path !== path);
-    setEditors(remaining);
-    setActiveEditor((cur) =>
-      cur !== path
-        ? cur
-        : remaining.length
-          ? remaining[remaining.length - 1].path
-          : null,
-    );
-  };
-  const closeAllEditors = () => {
-    setEditors([]);
-    setActiveEditor(null);
   };
 
   return (
@@ -1849,9 +1821,9 @@ export function SshSession({
             activePath={activeEditor}
             savingPath={savingPath}
             onSave={onSaveEdit}
-            onSelect={setActiveEditor}
-            onCloseFile={closeEditorFile}
-            onCloseAll={closeAllEditors}
+            onSelect={editorsApi.select}
+            onCloseFile={editorsApi.close}
+            onCloseAll={editorsApi.closeAll}
           />
         )}
 

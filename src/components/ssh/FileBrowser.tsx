@@ -433,6 +433,25 @@ export function FileBrowser({
     else if (isProbablyTextFile(r.name)) onEdit(r.path, r.name, r.size);
     else onOpenUnsupported(r.path, r.name);
   };
+
+  // Per-entry derivations shared by the list rows and the grid tiles (the two
+  // views render very different markup but classify and open an entry the same
+  // way). Click always *views* the file, never downloads it (download is the
+  // explicit ↓ button): dir → navigate, image/video/audio → preview, text →
+  // editor, anything else → a download-only modal (the browser can't render it).
+  const entryOpenInfo = (entry: FileEntry) => {
+    const isDir = entry.type === "dir";
+    const target = pathFor(entry.name);
+    const editable = !isDir && isProbablyTextFile(entry.name);
+    const previewable = !isDir && filePreviewKind(entry.name) !== null;
+    const open = () => {
+      if (isDir) onNavigate(target);
+      else if (previewable) onPreview(target, entry.name, previewSiblings);
+      else if (editable) onEdit(target, entry.name, entry.size);
+      else onOpenUnsupported(target, entry.name);
+    };
+    return { isDir, target, editable, previewable, open };
+  };
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
     onSearch(searchInput, searchMode);
@@ -1037,22 +1056,8 @@ export function FileBrowser({
                 </thead>
                 <tbody>
                   {visible.map((entry) => {
-                    const isDir = entry.type === "dir";
-                    const target = pathFor(entry.name);
-                    const editable = !isDir && isProbablyTextFile(entry.name);
-                    const previewable =
-                      !isDir && filePreviewKind(entry.name) !== null;
-                    // Click opens by type — always *viewing* the file, never
-                    // downloading it (download is only the explicit ↓ button): dir →
-                    // navigate, image/video/audio → preview, text → editor, anything
-                    // else → a download-only modal (the browser can't render it).
-                    const open = () => {
-                      if (isDir) onNavigate(target);
-                      else if (previewable)
-                        onPreview(target, entry.name, previewSiblings);
-                      else if (editable) onEdit(target, entry.name, entry.size);
-                      else onOpenUnsupported(target, entry.name);
-                    };
+                    const { isDir, target, editable, previewable, open } =
+                      entryOpenInfo(entry);
                     return (
                       <tr
                         key={entry.name}
@@ -1149,22 +1154,8 @@ export function FileBrowser({
             {viewMode === "grid" && visible.length > 0 && (
               <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                 {visible.map((entry) => {
-                  const isDir = entry.type === "dir";
-                  const target = pathFor(entry.name);
-                  const editable = !isDir && isProbablyTextFile(entry.name);
-                  const previewable =
-                    !isDir && filePreviewKind(entry.name) !== null;
-                  // Click opens by type — always *viewing* the file, never
-                  // downloading it (download is only the explicit ↓ button): dir →
-                  // navigate, image/video/audio → preview, text → editor, anything
-                  // else → a download-only modal (the browser can't render it).
-                  const open = () => {
-                    if (isDir) onNavigate(target);
-                    else if (previewable)
-                      onPreview(target, entry.name, previewSiblings);
-                    else if (editable) onEdit(target, entry.name, entry.size);
-                    else onOpenUnsupported(target, entry.name);
-                  };
+                  const { isDir, target, editable, previewable, open } =
+                    entryOpenInfo(entry);
                   return (
                     <div
                       key={entry.name}
