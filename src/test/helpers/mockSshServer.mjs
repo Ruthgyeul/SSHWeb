@@ -20,6 +20,9 @@ const { OPEN_MODE, STATUS_CODE } = ssh2.utils.sftp;
 export const MOCK_USER = "testuser";
 export const MOCK_PASSWORD = "testpass";
 
+/** The one-time code the keyboard-interactive (2FA) mock accepts. */
+export const MOCK_OTP = "246810";
+
 /** The one readable file the mock serves (for an edit/download round-trip). */
 export const MOCK_FILE_PATH = "/home/testuser/readme.txt";
 export const MOCK_FILE_CONTENT = "hello from the mock ssh target\n";
@@ -153,22 +156,65 @@ function handleSftp(sftp) {
 /**
  * Start the mock server on an ephemeral port. Resolves with `{ port, close }`.
  * `close()` stops accepting and drops connections.
+ *
+ * `opts` selects which authentication methods the mock offers, so the security
+ * integration suite can exercise the bridge's private-key and
+ * keyboard-interactive (2FA) paths without a real server:
+ *   - `allowPassword`         (default true)  accept MOCK_USER / MOCK_PASSWORD
+ *   - `allowPublicKey`        (default false) accept any offered public key
+ *   - `keyboardInteractive`   (default false) challenge for MOCK_OTP
+ * With the defaults the mock behaves exactly as before (password only).
  */
-export function startMockSshServer() {
+export function startMockSshServer(opts = {}) {
+  const {
+    allowPassword = true,
+    allowPublicKey = false,
+    keyboardInteractive = false,
+  } = opts;
   const hostKey = utils.generateKeyPairSync("ed25519").private;
 
   const server = new Server({ hostKeys: [hostKey] }, (client) => {
+    // The bridge is killed abruptly in some integration tests (SIGKILL in
+    // teardown, SIGTERM in the graceful-shutdown test), which resets this
+    // in-process TCP peer; swallow the resulting ECONNRESET so it doesn't
+    // surface as an unhandled error in the test run.
+    client.on("error", () => {});
     client.on("authentication", (ctx) => {
       if (
+        allowPublicKey &&
+        ctx.method === "publickey" &&
+        ctx.username === MOCK_USER
+      ) {
+        // A mock target: accept any offered key (both the initial "is this key
+        // acceptable?" probe, which has no signature, and the signed request)
+        // without cryptographic verification — enough to drive the bridge's
+        // private-key relay path end-to-end.
+        return ctx.accept();
+      }
+      if (keyboardInteractive && ctx.method === "keyboard-interactive") {
+        return ctx.prompt(
+          [{ prompt: "Verification code: ", echo: false }],
+          (answers) => {
+            if (answers && answers[0] === MOCK_OTP) return ctx.accept();
+            return ctx.reject();
+          },
+        );
+      }
+      if (
+        allowPassword &&
         ctx.method === "password" &&
         ctx.username === MOCK_USER &&
         ctx.password === MOCK_PASSWORD
       ) {
         return ctx.accept();
       }
-      // Advertise password as the only method so the client retries it.
-      if (ctx.method !== "password") return ctx.reject(["password"]);
-      return ctx.reject();
+      // Advertise exactly the methods this mock supports so the ssh2 client
+      // retries with one of them (e.g. falls back to keyboard-interactive).
+      const methods = [];
+      if (allowPublicKey) methods.push("publickey");
+      if (keyboardInteractive) methods.push("keyboard-interactive");
+      if (allowPassword) methods.push("password");
+      return ctx.reject(methods.length ? methods : undefined);
     });
 
     client.on("ready", () => {

@@ -15,12 +15,7 @@
  * after `npm run build`) and falls back to dev mode otherwise, so it works
  * locally with no prior build.
  */
-import { spawn } from "node:child_process";
 import { once } from "node:events";
-import net from "node:net";
-import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { WebSocket } from "ws";
 
@@ -31,113 +26,18 @@ import {
   MOCK_FILE_PATH,
   MOCK_FILE_CONTENT,
 } from "./helpers/mockSshServer.mjs";
-
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-
-/** Grab a currently-free localhost port by binding to 0 and reading it back. */
-function getFreePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const { port } = srv.address();
-      srv.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitForHealth(port, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/api/health`);
-      if (res.ok) return;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  throw new Error(`bridge did not become healthy within ${timeoutMs}ms`);
-}
-
-/** A WebSocket wrapper that buffers every inbound message so a test can await a
- * predicate against messages that may have already arrived or are still coming. */
-class MessageClient {
-  constructor(ws) {
-    this.ws = ws;
-    this.inbox = [];
-    this.waiters = [];
-    ws.on("message", (raw) => {
-      let msg;
-      try {
-        msg = JSON.parse(raw.toString());
-      } catch {
-        return;
-      }
-      this.inbox.push(msg);
-      this.waiters = this.waiters.filter((w) => {
-        if (w.predicate(msg)) {
-          w.resolve(msg);
-          return false;
-        }
-        return true;
-      });
-    });
-  }
-
-  send(obj) {
-    this.ws.send(JSON.stringify(obj));
-  }
-
-  waitFor(predicate, timeoutMs = 10_000) {
-    const existing = this.inbox.find(predicate);
-    if (existing) return Promise.resolve(existing);
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.waiters = this.waiters.filter((w) => w.resolve !== resolve);
-        reject(
-          new Error(
-            `timed out; message types seen: ${this.inbox.map((m) => m.t).join(", ")}`,
-          ),
-        );
-      }, timeoutMs);
-      this.waiters.push({
-        predicate,
-        resolve: (m) => {
-          clearTimeout(timer);
-          resolve(m);
-        },
-      });
-    });
-  }
-}
+import { startBridge, MessageClient } from "./helpers/bridgeHarness.mjs";
 
 describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
   let target;
-  let child;
+  let bridge;
   let client;
   let port;
 
   beforeAll(async () => {
     target = await startMockSshServer();
-    port = await getFreePort();
-
-    // Production mode when a build exists (CI runs this right after `npm run
-    // build`); dev mode otherwise so a bare checkout can run it with no build.
-    const hasBuild = existsSync(join(REPO_ROOT, ".next"));
-    child = spawn("node", ["server.mjs"], {
-      cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        NODE_ENV: hasBuild ? "production" : "development",
-        PORT: String(port),
-        HOSTNAME: "127.0.0.1",
-        SSH_LOG: "off",
-      },
-      stdio: ["ignore", "ignore", "inherit"],
-    });
-
-    await waitForHealth(port, 90_000);
+    bridge = await startBridge();
+    port = bridge.port;
 
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ssh`, {
       headers: { origin: `http://127.0.0.1:${port}` },
@@ -166,7 +66,7 @@ describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
     } catch {
       /* already closed */
     }
-    child?.kill("SIGKILL");
+    bridge?.stop();
     target?.close();
   });
 
