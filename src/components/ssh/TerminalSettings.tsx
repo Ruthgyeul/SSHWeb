@@ -27,6 +27,7 @@ function formatBytes(n: number): string {
 export function TerminalSettings({
   onClearThumbnailCache,
   getCacheBytes,
+  notifications,
 }: {
   /** Evict this connection's cached grid thumbnails from the bridge, plus the
    * in-memory thumbnail + preview copies this browser is holding. */
@@ -34,6 +35,14 @@ export function TerminalSettings({
   /** Current bytes of cached media held in this browser (grid thumbnails +
    * recently-viewed previews), read when the popover opens to show the size. */
   getCacheBytes?: () => number;
+  /** Desktop-notification toggle (#52): supported/enabled state + a setter.
+   * Omitted when the browser has no Notification API. */
+  notifications?: {
+    supported: boolean;
+    enabled: boolean;
+    permission: string;
+    onToggle: (next: boolean) => void;
+  };
 }) {
   const [open, setOpen] = useState(false);
   const [cacheCleared, setCacheCleared] = useState(false);
@@ -174,6 +183,28 @@ export function TerminalSettings({
               </ul>
             )}
           </div>
+
+          {/* Desktop notifications (#52) */}
+          {notifications?.supported && (
+            <div className="mt-3 border-t border-term-border pt-3">
+              <label className="flex items-center gap-2 text-xs text-term-dim">
+                <input
+                  type="checkbox"
+                  checked={notifications.enabled}
+                  onChange={(e) => notifications.onToggle(e.target.checked)}
+                  className="accent-term-accent"
+                />
+                Desktop notifications on disconnect
+              </label>
+              {notifications.enabled &&
+                notifications.permission === "denied" && (
+                  <p className="mt-1 text-[10px] text-term-yellow">
+                    Blocked by the browser — allow notifications in site
+                    settings.
+                  </p>
+                )}
+            </div>
+          )}
 
           {/* Grid thumbnail cache */}
           {onClearThumbnailCache && (

@@ -151,6 +151,7 @@ function handleSftp(sftp) {
   sftp.on("REMOVE", ok);
   sftp.on("RMDIR", ok);
   sftp.on("SETSTAT", ok);
+  sftp.on("SYMLINK", ok);
 }
 
 /**

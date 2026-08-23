@@ -14,6 +14,7 @@ import {
   type FileEntry,
   type ServerMessage,
 } from "@/lib/sshProtocol";
+import { cdCommand } from "@/lib/shellQuote";
 import { fileVersionTag } from "@/lib/thumbnailCache";
 import {
   KNOWN_HOSTS_KEY,
@@ -64,6 +65,7 @@ import { useFileActions } from "./hooks/useFileActions";
 import { usePreviewCache } from "./hooks/usePreviewCache";
 import { usePreviewGallery } from "./hooks/usePreviewGallery";
 import { useEditors } from "./hooks/useEditors";
+import { useDesktopNotifications } from "./hooks/useDesktopNotifications";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -196,6 +198,9 @@ export function SshSession({
   // any) is being saved right now — all owned by the useEditors hook.
   const editorsApi = useEditors();
   const { editors, activeEditor, savingPath } = editorsApi;
+  // Opt-in desktop notifications (#52) — fires on an unexpected disconnect while
+  // the tab is backgrounded.
+  const desktopNotify = useDesktopNotifications();
   // Kept current so the memoized message handler / cleanup callbacks can reach
   // the editor operations without listing the (per-render) api object as a dep —
   // the same ref pattern the rest of this component uses for stable callbacks.
@@ -378,6 +383,27 @@ export function SshSession({
   // Reconnection bookkeeping (refs so the ws close handler sees fresh values).
   const lastDetailsRef = useRef<ConnectDetails | null>(null);
   const userClosedRef = useRef(false);
+
+  // Desktop-notify on an unexpected disconnect (#52): fire when the status
+  // leaves "connected" for a dropped/errored state that the user didn't cause.
+  // The hook's gate suppresses it unless the tab is backgrounded and the user
+  // opted in with permission granted.
+  const { notify: notifyDesktop } = desktopNotify;
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (
+      prev === "connected" &&
+      (status === "reconnecting" ||
+        status === "dropped" ||
+        status === "error") &&
+      !userClosedRef.current
+    ) {
+      const who = target ? `${target.user}@${target.host}` : "SSH session";
+      notifyDesktop("SSHWeb — disconnected", `${who} session dropped.`);
+    }
+  }, [status, target, notifyDesktop]);
   // The attempt counter, in-flight/was-connected flags, and backoff timer live
   // in useReconnect; this hook decides whether/when to retry a dropped socket.
   const reconnect = useReconnect({
@@ -410,6 +436,8 @@ export function SshSession({
     onDeletePath,
     onMovePath,
     onChmod,
+    onSymlink,
+    onChecksum,
   } = useFileActions({ cwd, entries, send, setDialog });
 
   const {
@@ -730,6 +758,13 @@ export function SshSession({
             ctl.queued = true;
             enqueueUpload({ path: msg.path, startOffset: offset });
           }
+          break;
+        }
+
+        case "sftp-checksum": {
+          // #46: surface the digest as a toast the user can read/copy.
+          const base = msg.path.split("/").pop() || msg.path;
+          notify("info", `${msg.algo} ${base}: ${msg.hex}`);
           break;
         }
 
@@ -1190,6 +1225,18 @@ export function SshSession({
     xtermRef.current?.focus();
   };
 
+  // "Open terminal here" (#50): cd the shell to the file browser's current
+  // directory and switch to the terminal. Unlike a snippet, this runs the cd
+  // (trailing newline) since it's an explicit, safe navigation the user asked
+  // for; the path is single-quoted so metacharacters can't break out.
+  const openTerminalHere = () => {
+    if (!connected) return;
+    disarmMods();
+    send({ t: "data", data: cdCommand(cwd) });
+    setTab("terminal");
+    xtermRef.current?.focus();
+  };
+
   // --- File browser actions (in-app dialogs, not window.prompt/confirm) ---
   const clearUploadRow = useCallback((path: string) => {
     setUploads((u) => {
@@ -1542,6 +1589,12 @@ export function SshSession({
               <TerminalSettings
                 onClearThumbnailCache={clearThumbnails}
                 getCacheBytes={clientCacheBytes}
+                notifications={{
+                  supported: desktopNotify.supported,
+                  enabled: desktopNotify.enabled,
+                  permission: desktopNotify.permission,
+                  onToggle: desktopNotify.setEnabled,
+                }}
               />
             </div>
 
@@ -1624,6 +1677,7 @@ export function SshSession({
               elevated={elevated}
               elevatedPending={elevatedPending}
               onToggleElevated={toggleElevated}
+              onOpenTerminalHere={openTerminalHere}
               onNavigate={listDir}
               onRefresh={() => listDir(cwd)}
               onDownload={(path) => send({ t: "sftp-read", path })}
@@ -1640,6 +1694,8 @@ export function SshSession({
               onCopy={onCopy}
               onMove={onMove}
               onChmod={onChmod}
+              onSymlink={onSymlink}
+              onChecksum={onChecksum}
               onEdit={requestEdit}
               onPreview={openPreviewFile}
               onOpenUnsupported={(path, name) =>

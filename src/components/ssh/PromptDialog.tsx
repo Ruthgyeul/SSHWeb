@@ -21,12 +21,15 @@ export interface DialogRequest {
     /** Render a masked password field (e.g. for a sudo password). */
     password?: boolean;
   };
+  /** Optional checkbox (e.g. "apply recursively"); its state is passed to
+   * `onConfirm` as the second argument. */
+  checkbox?: { label: string; initialValue?: boolean };
   confirmLabel?: string;
   /** Style the confirm button as a destructive action (e.g. delete). */
   danger?: boolean;
   /** Return an error string to block submission, or null when the value is ok. */
   validate?: (value: string) => string | null;
-  onConfirm: (value: string) => void;
+  onConfirm: (value: string, checked: boolean) => void;
 }
 
 const inputClass =
@@ -40,6 +43,9 @@ export function PromptDialog({
   onClose: () => void;
 }) {
   const [value, setValue] = useState(request.input?.initialValue ?? "");
+  const [checked, setChecked] = useState(
+    request.checkbox?.initialValue ?? false,
+  );
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useModalA11y<HTMLDivElement>({ onClose });
@@ -61,7 +67,7 @@ export function PromptDialog({
         return;
       }
     }
-    request.onConfirm(value);
+    request.onConfirm(value, checked);
     onClose();
   };
 
@@ -121,6 +127,20 @@ export function PromptDialog({
               className={inputClass}
             />
             {error && <p className="mt-2 text-xs text-term-red">{error}</p>}
+          </div>
+        )}
+
+        {request.checkbox && (
+          <div className={cn("px-5", request.input ? "pb-4" : "py-4")}>
+            <label className="flex items-center gap-2 text-xs text-term-muted">
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={(e) => setChecked(e.target.checked)}
+                className="accent-term-accent"
+              />
+              {request.checkbox.label}
+            </label>
           </div>
         )}
 
