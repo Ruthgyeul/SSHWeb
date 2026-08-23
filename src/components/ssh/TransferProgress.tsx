@@ -1,6 +1,13 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { summarizeUploads } from "@/lib/sshProtocol";
+import {
+  computeTransferStats,
+  formatRate,
+  formatEta,
+  type TransferSample,
+} from "@/lib/transferStats";
 import { cn } from "@/lib/utils";
 import type { DownloadItem, UploadItem } from "./FileBrowser";
 
@@ -31,6 +38,67 @@ export function TransferProgress({
   onResumeUpload,
   onCancelDownload,
 }: TransferProgressProps) {
+  // Rate/ETA (#42) is computed off the render path (React forbids reading refs
+  // or the clock during render): an effect keeps a baseline sample per active
+  // transfer and, on a 500ms tick plus every progress change, writes a
+  // "1.2 MB/s · ~8s" label per key into state, which render just reads. The
+  // baseline is captured when a transfer first becomes active and pruned when it
+  // finishes, so the average rate is measured from that point.
+  const samplesRef = useRef<Map<string, TransferSample>>(new Map());
+  const [rateLabels, setRateLabels] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const recompute = () => {
+      const now = Date.now();
+      const samples = samplesRef.current;
+      const active = new Set<string>();
+      const next: Record<string, string> = {};
+      const consider = (key: string, transferred: number, total: number) => {
+        active.add(key);
+        let sample = samples.get(key);
+        if (!sample) {
+          sample = { t0: now, b0: transferred };
+          samples.set(key, sample);
+        }
+        const { bps, etaMs } = computeTransferStats(
+          transferred,
+          total,
+          sample,
+          now,
+        );
+        const eta = formatEta(etaMs);
+        const label = [formatRate(bps), eta && `~${eta}`]
+          .filter(Boolean)
+          .join(" · ");
+        if (label) next[key] = label;
+      };
+      for (const u of uploads)
+        if (u.status !== "queued" && u.status !== "interrupted")
+          consider(`up:${u.path}`, u.sent, u.total);
+      for (const d of downloads) consider(`dn:${d.path}`, d.received, d.total);
+      for (const k of [...samples.keys()])
+        if (!active.has(k)) samples.delete(k);
+      // Skip a no-op state update so an idle panel doesn't re-render every tick.
+      setRateLabels((prev) => {
+        const keys = Object.keys(next);
+        if (
+          keys.length === Object.keys(prev).length &&
+          keys.every((k) => prev[k] === next[k])
+        )
+          return prev;
+        return next;
+      });
+    };
+    // All state updates happen in async callbacks (not synchronously in the
+    // effect body) so the clock/ref access stays off the render path.
+    const kickoff = setTimeout(recompute, 0);
+    const id = setInterval(recompute, 500);
+    return () => {
+      clearTimeout(kickoff);
+      clearInterval(id);
+    };
+  }, [uploads, downloads]);
+
   return (
     <>
       {uploads.length > 0 &&
@@ -106,9 +174,16 @@ export function TransferProgress({
                             </button>
                           </>
                         ) : (
-                          <span className="tabular-nums text-term-faint">
-                            {pct}%
-                          </span>
+                          <>
+                            {rateLabels[`up:${u.path}`] && (
+                              <span className="tabular-nums text-term-faint">
+                                {rateLabels[`up:${u.path}`]}
+                              </span>
+                            )}
+                            <span className="tabular-nums text-term-faint">
+                              {pct}%
+                            </span>
+                          </>
                         )}
                         <button
                           type="button"
@@ -147,6 +222,11 @@ export function TransferProgress({
                 <div className="flex items-center justify-between gap-2 text-term-muted">
                   <span className="truncate">↓ {d.name}</span>
                   <span className="flex shrink-0 items-center gap-2">
+                    {rateLabels[`dn:${d.path}`] && (
+                      <span className="tabular-nums text-term-faint">
+                        {rateLabels[`dn:${d.path}`]}
+                      </span>
+                    )}
                     <span className="tabular-nums text-term-faint">{pct}%</span>
                     <button
                       type="button"
