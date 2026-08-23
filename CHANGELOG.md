@@ -26,11 +26,18 @@ All notable changes to this project are documented here. The format is based on
   color thumbnail placeholders.
 - Pre-commit hooks (husky + lint-staged) and a `server.mjs`↔`src/lib`
   mirror-sync guard test; CI uploads a coverage report.
+- Test backfill: end-to-end security-gate integration tests (access token,
+  origin, rate limit, allowlist, SSRF, capacity, idle timeout, graceful
+  shutdown, private-key + keyboard-interactive auth), a credential-leak
+  redaction assertion, and component/hook tests for `FileBrowser`, `FileEditor`,
+  and `useConnectionProfiles`.
 
 ### Changed
 
 - Removed the terminal color-theme presets and the light/system theme toggle;
   SSHWeb now uses a single fixed dark theme.
+- Refactor: the inline-editor state moved out of `SshSession` into a `useEditors`
+  hook, and the file browser's list/grid views now share one row-open helper.
 - Numerous bridge limits are now env-tunable (stream chunk size, WS backpressure
   watermarks, search/grep caps, ffmpeg timeout, keepalive interval, per-session
   transfer cap, preview/transcode concurrency).
