@@ -29,6 +29,10 @@ interface FileEntryActionsProps {
   onRename: (entry: FileEntry) => void;
   onCopy: (entry: FileEntry) => void;
   onChmod: (entry: FileEntry) => void;
+  /** Create a symlink pointing at this entry (list view only when provided). */
+  onSymlink?: (entry: FileEntry) => void;
+  /** Compute a checksum of this file (list view only; files only). */
+  onChecksum?: (entry: FileEntry) => void;
   onDelete: (entry: FileEntry) => void;
 }
 
@@ -51,6 +55,8 @@ export function FileEntryActions({
   onRename,
   onCopy,
   onChmod,
+  onSymlink,
+  onChecksum,
   onDelete,
 }: FileEntryActionsProps) {
   return (
@@ -118,6 +124,26 @@ export function FileEntryActions({
           title="Change permissions"
         >
           chmod
+        </button>
+      )}
+      {onSymlink && (
+        <button
+          type="button"
+          onClick={() => onSymlink(entry)}
+          className={cn(actionBtn, "hover:text-term-text")}
+          title="Create a symbolic link to this"
+        >
+          ln
+        </button>
+      )}
+      {onChecksum && !isDir && (
+        <button
+          type="button"
+          onClick={() => onChecksum(entry)}
+          className={cn(actionBtn, "hover:text-term-text")}
+          title="Compute SHA-256 checksum"
+        >
+          sum
         </button>
       )}
       <button

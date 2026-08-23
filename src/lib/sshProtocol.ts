@@ -203,7 +203,15 @@ export type ClientMessage =
   // source into the destination (recursively for a directory) — the original is
   // only read, never modified. Move is done with `sftp-rename` instead.
   | { t: "sftp-copy"; from: string; to: string }
-  | { t: "sftp-chmod"; path: string; mode: number }
+  // Create a symbolic link at `path` pointing to `target` (the target is stored
+  // verbatim; a relative target resolves against the link's directory).
+  | { t: "sftp-symlink"; target: string; path: string }
+  // Change mode bits. `recursive` (directories only) walks the subtree applying
+  // the same mode to every entry.
+  | { t: "sftp-chmod"; path: string; mode: number; recursive?: boolean }
+  // Compute a hash of a remote file's contents (default sha256), streamed on the
+  // bridge so a large file isn't buffered. The original is only read.
+  | { t: "sftp-checksum"; path: string; algo?: string }
   // Download a directory as a (store-only) zip archive.
   | { t: "sftp-download-dir"; path: string }
   // Download several selected entries (files and/or directories) as a single
@@ -262,7 +270,9 @@ export const CLIENT_MESSAGE_FIELDS: Record<
   "sftp-rm": { path: "string" },
   "sftp-rename": { from: "string", to: "string" },
   "sftp-copy": { from: "string", to: "string" },
+  "sftp-symlink": { target: "string", path: "string" },
   "sftp-chmod": { path: "string", mode: "number" },
+  "sftp-checksum": { path: "string" },
   "sftp-download-dir": { path: "string" },
   "sftp-download-many": { paths: "string[]" },
   "thumb-purge": {},
@@ -426,6 +436,8 @@ export type ServerMessage =
       bg?: string;
     }
   | { t: "sftp-ok"; op: string; path: string }
+  // Result of a `sftp-checksum` request: the hex digest of the file's contents.
+  | { t: "sftp-checksum"; path: string; algo: string; hex: string }
   // Optional per-session capability advertisement, sent once the session is
   // ready. `sudo` reflects whether the server permits elevated (root) file
   // access (`SSH_ALLOW_SUDO`), so the client only shows the sudo toggle when the

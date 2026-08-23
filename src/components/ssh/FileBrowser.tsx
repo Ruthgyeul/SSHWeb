@@ -270,6 +270,8 @@ export function FileBrowser({
   onCopy,
   onMove,
   onChmod,
+  onSymlink,
+  onChecksum,
   onEdit,
   onPreview,
   onOpenUnsupported,
@@ -319,6 +321,10 @@ export function FileBrowser({
   /** Move an entry (absolute `fromPath`) into directory `toDir` (drag-drop). */
   onMove: (fromPath: string, toDir: string) => void;
   onChmod: (entry: FileEntry) => void;
+  /** Create a symbolic link pointing at an entry (#48). */
+  onSymlink: (entry: FileEntry) => void;
+  /** Compute a checksum of a file, surfaced as a toast (#46). */
+  onChecksum: (entry: FileEntry) => void;
   onEdit: (path: string, name: string, size: number) => void;
   /** Open the preview modal. `siblings` (in display order) is the set of other
    * previewable files in the same view, so the modal can step ←/→ through them
@@ -1154,6 +1160,8 @@ export function FileBrowser({
                             onRename={onRename}
                             onCopy={onCopy}
                             onChmod={onChmod}
+                            onSymlink={onSymlink}
+                            onChecksum={onChecksum}
                             onDelete={onDelete}
                           />
                         </td>

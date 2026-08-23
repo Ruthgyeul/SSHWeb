@@ -411,6 +411,8 @@ export function SshSession({
     onDeletePath,
     onMovePath,
     onChmod,
+    onSymlink,
+    onChecksum,
   } = useFileActions({ cwd, entries, send, setDialog });
 
   const {
@@ -731,6 +733,13 @@ export function SshSession({
             ctl.queued = true;
             enqueueUpload({ path: msg.path, startOffset: offset });
           }
+          break;
+        }
+
+        case "sftp-checksum": {
+          // #46: surface the digest as a toast the user can read/copy.
+          const base = msg.path.split("/").pop() || msg.path;
+          notify("info", `${msg.algo} ${base}: ${msg.hex}`);
           break;
         }
 
@@ -1654,6 +1663,8 @@ export function SshSession({
               onCopy={onCopy}
               onMove={onMove}
               onChmod={onChmod}
+              onSymlink={onSymlink}
+              onChecksum={onChecksum}
               onEdit={requestEdit}
               onPreview={openPreviewFile}
               onOpenUnsupported={(path, name) =>
