@@ -21,8 +21,6 @@ import {
   subtitleLabel,
   subtitleNeedsConversion,
 } from "@/lib/subtitles";
-import { triggerDownload } from "../dom/download";
-import type { DownloadItem } from "../FileBrowser";
 import {
   previewFieldsFromBytes,
   previewRenderKind,
@@ -71,12 +69,11 @@ function mediaStreamSrc(
 /** The state SshSession owns (via useState/useRef) that the preview/gallery
  * handlers read and mutate. Passed in so the handlers live here while the state
  * stays with the component (whose render, effects, error and disconnect paths
- * also touch it). The pure helpers (codecs, subtitle conversion, field builder,
- * triggerDownload) are imported directly, not injected. */
+ * also touch it). The pure helpers (codecs, subtitle conversion, field builder)
+ * are imported directly, not injected. */
 export interface PreviewGalleryDeps {
   send: (msg: ClientMessage) => void;
   setPreview: Dispatch<SetStateAction<PreviewState | null>>;
-  setDownloads: Dispatch<SetStateAction<Record<string, DownloadItem>>>;
   /** Store fully-loaded preview bytes in the recently-viewed cache. */
   cachePreview: (
     path: string,
@@ -93,9 +90,6 @@ export interface PreviewGalleryDeps {
   previewPathRef: RefObject<string | null>;
   previewBuffersRef: RefObject<Record<string, Uint8Array[]>>;
   previewMimeRef: RefObject<Record<string, string>>;
-  downloadBuffersRef: RefObject<
-    Record<string, { name: string; chunks: Uint8Array[] }>
-  >;
   prefetchPathsRef: RefObject<Set<string>>;
   originalLoadPathsRef: RefObject<Set<string>>;
   subtitleReadsRef: RefObject<Map<string, { videoPath: string; name: string }>>;
@@ -107,9 +101,6 @@ export interface PreviewGalleryDeps {
   streamTokenRef: RefObject<string | null>;
   downloadCapRef: RefObject<number>;
   entryVersionRef: RefObject<Map<string, string>>;
-  /** Optional: notified when a real (non-preview) download finishes, so the
-   * session can surface a success toast (#26). */
-  onDownloaded?: (name: string) => void;
 }
 
 /** The SshSession preview/gallery subsystem: opening a file into the modal,
@@ -124,7 +115,6 @@ export function usePreviewGallery(deps: PreviewGalleryDeps) {
   const {
     send,
     setPreview,
-    setDownloads,
     cachePreview,
     previewCacheGet,
     previewCacheHas,
@@ -132,7 +122,6 @@ export function usePreviewGallery(deps: PreviewGalleryDeps) {
     previewPathRef,
     previewBuffersRef,
     previewMimeRef,
-    downloadBuffersRef,
     prefetchPathsRef,
     originalLoadPathsRef,
     subtitleReadsRef,
@@ -144,7 +133,6 @@ export function usePreviewGallery(deps: PreviewGalleryDeps) {
     streamTokenRef,
     downloadCapRef,
     entryVersionRef,
-    onDownloaded,
   } = deps;
 
   // Stream the gallery neighbours of `path` (the previous & next previewable
@@ -250,18 +238,9 @@ export function usePreviewGallery(deps: PreviewGalleryDeps) {
                 ? { ...prev, received: 0, total: msg.size, originalDims }
                 : prev,
             );
-            break;
           }
-          downloadBuffersRef.current[msg.path] = { name: msg.name, chunks: [] };
-          setDownloads((d) => ({
-            ...d,
-            [msg.path]: {
-              path: msg.path,
-              name: msg.name,
-              received: 0,
-              total: msg.size,
-            },
-          }));
+          // Plain (non-preview) downloads are owned by `useDownloadTransfers`;
+          // only preview frames reach this handler.
           break;
         }
 
@@ -296,20 +275,8 @@ export function usePreviewGallery(deps: PreviewGalleryDeps) {
                   }
                 : prev,
             );
-            break;
           }
-          const buf = downloadBuffersRef.current[msg.path];
-          if (!buf) break;
-          const bytes = base64ToBytes(msg.dataB64);
-          buf.chunks.push(bytes);
-          setDownloads((d) => {
-            const cur = d[msg.path];
-            if (!cur) return d;
-            return {
-              ...d,
-              [msg.path]: { ...cur, received: cur.received + bytes.length },
-            };
-          });
+          // Plain (non-preview) download chunks are handled elsewhere.
           break;
         }
 
@@ -417,19 +384,9 @@ export function usePreviewGallery(deps: PreviewGalleryDeps) {
             // ←/→ step (unless this stream was itself a promoted prefetch).
             if (!wasPrefetch)
               prefetchNeighbors(msg.path, previewRef.current?.siblings);
-            break;
           }
-          const buf = downloadBuffersRef.current[msg.path];
-          delete downloadBuffersRef.current[msg.path];
-          setDownloads((d) => {
-            const rest = { ...d };
-            delete rest[msg.path];
-            return rest;
-          });
-          if (buf) {
-            triggerDownload(buf.name, concatBytes(buf.chunks));
-            onDownloaded?.(buf.name);
-          }
+          // Plain (non-preview) download completion is handled by
+          // `useDownloadTransfers`; only preview frames reach this handler.
           break;
         }
       }
@@ -439,17 +396,14 @@ export function usePreviewGallery(deps: PreviewGalleryDeps) {
       cachePreview,
       prefetchNeighbors,
       setPreview,
-      setDownloads,
       previewRef,
       previewPathRef,
       previewBuffersRef,
       previewMimeRef,
-      downloadBuffersRef,
       prefetchPathsRef,
       originalLoadPathsRef,
       subtitleReadsRef,
       subtitleUrlRef,
-      onDownloaded,
     ],
   );
 

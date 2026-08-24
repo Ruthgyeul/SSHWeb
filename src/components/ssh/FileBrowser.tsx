@@ -52,11 +52,15 @@ export interface UploadItem {
 
 /** One in-flight download's progress, shown in the progress panel. */
 export interface DownloadItem {
-  /** Remote source path — the handle for cancel. */
+  /** Remote source path — the handle for cancel/resume. */
   path: string;
   name: string;
   received: number;
   total: number;
+  /** "downloading" while it streams, "queued" while it waits behind the
+   * concurrency limit (#74), "interrupted" when a dropped connection paused it
+   * (offers Resume; #41). Absent is treated as "downloading". */
+  status?: "downloading" | "queued" | "interrupted";
 }
 
 /** Which axis a recursive search runs on: file *names* or file *contents*. */
@@ -254,6 +258,7 @@ export function FileBrowser({
   onCancelAllUploads,
   onResumeUpload,
   onCancelDownload,
+  onResumeDownload,
   canElevate,
   elevated,
   elevatedPending,
@@ -301,8 +306,10 @@ export function FileBrowser({
   onCancelAllUploads: () => void;
   /** Resume an upload paused by a dropped connection. */
   onResumeUpload: (path: string) => void;
-  /** Abort an in-flight download. */
+  /** Abort an in-flight/queued/interrupted download. */
   onCancelDownload: (path: string) => void;
+  /** Resume a download paused by a dropped connection (#41). */
+  onResumeDownload: (path: string) => void;
   /** Whether the server permits elevated (sudo) file access at all. */
   canElevate: boolean;
   /** Whether elevated (root) mode is currently active. */
@@ -1108,6 +1115,7 @@ export function FileBrowser({
         onCancelAllUploads={onCancelAllUploads}
         onResumeUpload={onResumeUpload}
         onCancelDownload={onCancelDownload}
+        onResumeDownload={onResumeDownload}
       />
 
       {/* Selection bar: select-all + bulk actions on the checked entries */}

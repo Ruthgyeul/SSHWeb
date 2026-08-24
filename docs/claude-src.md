@@ -22,7 +22,8 @@ src/
 │   └── ssh/             # web SSH client UI (client components), plus:
 │       ├── hooks/       #   co-located hooks (useFileSort, useFileViewMode,
 │       │                #     useSnippets, useThumbnailQueue,
-│       │                #     useUploadQueue, useReconnect, useSshSocket,
+│       │                #     useUploadQueue, useDownloadQueue,
+│       │                #     useDownloadTransfers, useReconnect, useSshSocket,
 │       │                #     useConnectionProfiles, useModalA11y,
 │       │                #     useImageTransform, useTextFind, usePreviewKeyboard)
 │       ├── preview/     #   FilePreview view components (PreviewMedia, PreviewFilmstrip)

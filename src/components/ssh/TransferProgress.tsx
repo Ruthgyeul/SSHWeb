@@ -20,8 +20,10 @@ interface TransferProgressProps {
   onCancelAllUploads: () => void;
   /** Resume an upload paused by a dropped connection. */
   onResumeUpload: (path: string) => void;
-  /** Abort an in-flight download. */
+  /** Abort an in-flight/queued/interrupted download. */
   onCancelDownload: (path: string) => void;
+  /** Resume a download paused by a dropped connection (#41). */
+  onResumeDownload: (path: string) => void;
 }
 
 /** The upload + download progress panels shown above the listing while
@@ -37,6 +39,7 @@ export function TransferProgress({
   onCancelAllUploads,
   onResumeUpload,
   onCancelDownload,
+  onResumeDownload,
 }: TransferProgressProps) {
   // Rate/ETA (#42) is computed off the render path (React forbids reading refs
   // or the clock during render): an effect keeps a baseline sample per active
@@ -75,7 +78,9 @@ export function TransferProgress({
       for (const u of uploads)
         if (u.status !== "queued" && u.status !== "interrupted")
           consider(`up:${u.path}`, u.sent, u.total);
-      for (const d of downloads) consider(`dn:${d.path}`, d.received, d.total);
+      for (const d of downloads)
+        if (d.status !== "queued" && d.status !== "interrupted")
+          consider(`dn:${d.path}`, d.received, d.total);
       for (const k of [...samples.keys()])
         if (!active.has(k)) samples.delete(k);
       // Skip a no-op state update so an idle panel doesn't re-render every tick.
@@ -217,17 +222,39 @@ export function TransferProgress({
           {downloads.map((d) => {
             const pct =
               d.total > 0 ? Math.round((d.received / d.total) * 100) : 100;
+            const queued = d.status === "queued";
+            const interrupted = d.status === "interrupted";
             return (
               <div key={d.path} className="text-xs">
                 <div className="flex items-center justify-between gap-2 text-term-muted">
                   <span className="truncate">↓ {d.name}</span>
                   <span className="flex shrink-0 items-center gap-2">
-                    {rateLabels[`dn:${d.path}`] && (
-                      <span className="tabular-nums text-term-faint">
-                        {rateLabels[`dn:${d.path}`]}
-                      </span>
+                    {queued ? (
+                      <span className="text-term-faint">queued</span>
+                    ) : interrupted ? (
+                      <>
+                        <span className="text-term-yellow">interrupted</span>
+                        <button
+                          type="button"
+                          onClick={() => onResumeDownload(d.path)}
+                          className="rounded px-1 text-term-accent hover:bg-term-border"
+                          title="Resume download"
+                        >
+                          Resume
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {rateLabels[`dn:${d.path}`] && (
+                          <span className="tabular-nums text-term-faint">
+                            {rateLabels[`dn:${d.path}`]}
+                          </span>
+                        )}
+                        <span className="tabular-nums text-term-faint">
+                          {pct}%
+                        </span>
+                      </>
                     )}
-                    <span className="tabular-nums text-term-faint">{pct}%</span>
                     <button
                       type="button"
                       onClick={() => onCancelDownload(d.path)}
@@ -241,8 +268,11 @@ export function TransferProgress({
                 </div>
                 <div className="mt-1 h-1 overflow-hidden rounded bg-term-border">
                   <div
-                    className="h-full bg-term-green transition-all"
-                    style={{ width: `${pct}%` }}
+                    className={cn(
+                      "h-full transition-all",
+                      interrupted ? "bg-term-yellow" : "bg-term-green",
+                    )}
+                    style={{ width: `${queued ? 0 : pct}%` }}
                   />
                 </div>
               </div>

@@ -39,6 +39,9 @@ export interface SshSocketOptions {
   onMessage: (msg: ServerMessage) => void;
   /** Socket opened — send the `connect` handshake. */
   onOpen: (details: ConnectDetails) => void;
+  /** A live (previously-connected) session dropped and a reconnect is being
+   * scheduled — a hook to park in-flight work (e.g. downloads) as interrupted. */
+  onDrop?: () => void;
   /** Socket closed before ever connecting (auth/host failure). */
   onNeverConnected: () => void;
   /** Transport-level socket error. */
@@ -82,6 +85,7 @@ export function useSshSocket(options: SshSocketOptions): SshSocket {
         userClosedRef,
         onMessage,
         onOpen,
+        onDrop,
         onNeverConnected,
         onSocketError,
       } = optsRef.current;
@@ -101,7 +105,8 @@ export function useSshSocket(options: SshSocketOptions): SshSocket {
         wsRef.current = null;
         if (userClosedRef.current) return; // disconnect() owns the state
         if (reconnect.beginReconnectAfterDrop()) {
-          // A live session dropped — try to bring it back.
+          // A live session dropped — park in-flight work, then try to bring it back.
+          onDrop?.();
           scheduleReconnect();
         } else {
           // Never reached "connected" → auth/host failure; don't loop.
