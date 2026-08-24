@@ -213,6 +213,11 @@ const MAX_DOWNLOAD_BYTES =
 // per-type via `isThumbnailable` (32 MB images / 64 MB videos), which is a
 // bandwidth nicety rather than the security bound.
 const THUMBNAIL_VIDEO_MAX_BYTES = 64 * 1024 * 1024;
+// Max PDF size the bridge will read to rasterize a first-page thumbnail. Mirrors
+// `THUMBNAIL_PDF_MAX_BYTES` in src/lib/sshProtocol.ts and is enforced server-side
+// so a direct WebSocket client can't force a larger PDF read than the client
+// helper allows (#77 review).
+const THUMBNAIL_PDF_MAX_BYTES = 16 * 1024 * 1024;
 // Longest edge (px) of a generated thumbnail. Mirrors `THUMBNAIL_PIXELS` in
 // src/lib/sshProtocol.ts. Images are downscaled to fit this box and re-encoded
 // as WebP before being sent to the grid.
@@ -2482,6 +2487,10 @@ wss.on("connection", (ws, req) => {
   /** Turn elevated (sudo) SFTP mode on or off for this session. */
   function handleSudo(msg) {
     const enable = msg.enable === true;
+    // A follow captured whichever SFTP handle was in effect when it started, so
+    // stop them all when the privilege mode changes — the client re-follows if
+    // still viewing the file (Codex #8).
+    stopAllFollows();
     if (!enable) {
       elevated = false;
       const prev = elevatedSftp;
@@ -2818,61 +2827,111 @@ wss.on("connection", (ws, req) => {
   function handleFollow(msg) {
     const path = String(msg.path || "");
     if (!path || follows.has(path)) return;
+    // Reserve the path synchronously so duplicate `sftp-follow` frames arriving
+    // before the async SFTP setup finishes are deduped (they'd otherwise each
+    // spawn a timer, leaking all but the last) — Codex #1.
+    const state = { timer: null, offset: 0, reading: false, mtime: null };
+    follows.set(path, state);
     withSftp((s) => {
-      const readRange = (start, end, flags) => {
-        // end is exclusive; read [start, end).
-        if (end <= start) return;
+      if (follows.get(path) !== state) return; // stopped during setup
+      // Read [start, end) and, on success, advance the offset via `done(true)`.
+      // Only one range is ever in flight (the poll checks `state.reading`), and
+      // the offset is committed only after a successful read — so a slow or
+      // failed read can't reorder or drop output — Codex #2.
+      const readRange = (start, end, flags, done) => {
+        if (end <= start) return done(false);
         const stream = s.createReadStream(path, { start, end: end - 1 });
         const parts = [];
+        let errored = false;
         stream.on("data", (d) => parts.push(d));
-        stream.on("error", (err) => sendError(err.message, "sftp"));
+        stream.on("error", (err) => {
+          errored = true;
+          sendError(err.message, "sftp");
+          done(false);
+        });
         stream.on("end", () => {
-          if (!follows.has(path)) return;
-          bytesDown += end - start;
-          sftpBytesDown += end - start;
+          if (errored || follows.get(path) !== state) return done(false);
+          const buf = Buffer.concat(parts);
+          bytesDown += buf.length;
+          sftpBytesDown += buf.length;
           touch(); // new log activity keeps the session alive while following
           send({
             t: "sftp-follow-data",
             path,
-            dataB64: Buffer.concat(parts).toString("base64"),
+            dataB64: buf.toString("base64"),
             ...flags,
           });
+          done(true);
         });
       };
       s.stat(path, (err, st) => {
-        if (err || !st) return sendError(err?.message || "Not found.", "sftp");
-        let offset = Math.max(0, st.size || 0);
-        const initialStart = Math.max(0, offset - FOLLOW_INITIAL_TAIL);
-        readRange(initialStart, offset, { initial: true });
+        if (err || !st) {
+          follows.delete(path);
+          return sendError(err?.message || "Not found.", "sftp");
+        }
+        if (follows.get(path) !== state) return; // stopped during setup
+        const size = Math.max(0, st.size || 0);
+        state.offset = Math.max(0, size - FOLLOW_INITIAL_TAIL);
+        state.mtime = st.mtime;
+        state.reading = true;
+        readRange(state.offset, size, { initial: true }, (ok) => {
+          state.reading = false;
+          if (ok) state.offset = size;
+        });
         const timer = setInterval(() => {
-          if (!follows.has(path)) return;
+          if (follows.get(path) !== state || state.reading) return;
+          // Backpressure: don't queue more follow frames while the socket's send
+          // buffer is congested — otherwise a slow client grows bridge memory
+          // and hurts every session — Codex #3.
+          if (ws.bufferedAmount > WS_BACKPRESSURE_HIGH_BYTES) return;
           s.stat(path, (e2, st2) => {
-            if (e2 || !st2 || !follows.has(path)) return;
-            const size = Math.max(0, st2.size || 0);
-            if (size < offset) {
-              // Truncated / rotated — restart from the beginning.
-              offset = 0;
-              readRange(0, Math.min(size, FOLLOW_MAX_CHUNK), { reset: true });
-              offset = Math.min(size, FOLLOW_MAX_CHUNK);
-            } else if (size > offset) {
-              const end = Math.min(size, offset + FOLLOW_MAX_CHUNK);
-              readRange(offset, end);
-              offset = end;
-            }
+            if (e2 || !st2 || follows.get(path) !== state || state.reading)
+              return;
+            const sz = Math.max(0, st2.size || 0);
+            // Reset on truncation, or on a rotation that swapped in a new file
+            // whose mtime changed without the size growing past our offset —
+            // Codex #9 (best-effort without an inode over SFTP).
+            const rotated =
+              sz < state.offset ||
+              (sz <= state.offset &&
+                state.mtime != null &&
+                st2.mtime !== state.mtime);
+            state.mtime = st2.mtime;
+            if (rotated) state.offset = 0;
+            if (sz <= state.offset) return;
+            const start = state.offset;
+            const end = Math.min(sz, start + FOLLOW_MAX_CHUNK);
+            state.reading = true;
+            readRange(start, end, rotated ? { reset: true } : {}, (ok) => {
+              state.reading = false;
+              if (ok) state.offset = end;
+            });
           });
         }, FOLLOW_POLL_MS);
         timer.unref?.();
-        follows.set(path, { timer });
+        state.timer = timer;
       });
     });
   }
 
   function handleFollowStop(msg) {
-    const f = follows.get(msg.path);
+    stopFollow(msg.path);
+  }
+
+  /** Stop a single follow (poll timer + map entry). */
+  function stopFollow(path) {
+    const f = follows.get(path);
     if (f) {
-      clearInterval(f.timer);
-      follows.delete(msg.path);
+      if (f.timer) clearInterval(f.timer);
+      follows.delete(path);
     }
+  }
+
+  /** Stop every active follow — used when the SFTP privilege mode changes, since
+   * each follow captured the SFTP handle in effect at start (Codex #8). */
+  function stopAllFollows() {
+    for (const [, f] of follows) if (f.timer) clearInterval(f.timer);
+    follows.clear();
   }
 
   function handleConnect(msg) {
@@ -3358,6 +3417,12 @@ wss.on("connection", (ws, req) => {
           };
           // No sharp = no WebP = no thumbnails at all (icons only).
           if (statErr || stats.size > THUMBNAIL_VIDEO_MAX_BYTES || !sharp) {
+            return skipThumb();
+          }
+          // Enforce the PDF-specific bound before reading the file, so a direct
+          // client can't force a larger PDF read than the client helper allows
+          // (#77 review).
+          if (/\.pdf$/i.test(name) && stats.size > THUMBNAIL_PDF_MAX_BYTES) {
             return skipThumb();
           }
           // Serve straight from the in-memory cache when we already hold this
