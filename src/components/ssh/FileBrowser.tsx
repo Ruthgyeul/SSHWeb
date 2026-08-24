@@ -257,6 +257,7 @@ export function FileBrowser({
   elevatedPending,
   onToggleElevated,
   onOpenTerminalHere,
+  onDiskUsage,
   onNavigate,
   onDownload,
   onDownloadDir,
@@ -272,6 +273,7 @@ export function FileBrowser({
   onChmod,
   onSymlink,
   onChecksum,
+  onDiff,
   onEdit,
   onPreview,
   onOpenUnsupported,
@@ -306,6 +308,8 @@ export function FileBrowser({
   onToggleElevated: () => void;
   /** cd the shell to the current directory and switch to the terminal (#50). */
   onOpenTerminalHere: () => void;
+  /** Show the current filesystem's disk usage (df) as a toast (#49). */
+  onDiskUsage: () => void;
   onNavigate: (path: string) => void;
   onDownload: (path: string) => void;
   onDownloadDir: (path: string) => void;
@@ -325,6 +329,8 @@ export function FileBrowser({
   onSymlink: (entry: FileEntry) => void;
   /** Compute a checksum of a file, surfaced as a toast (#46). */
   onChecksum: (entry: FileEntry) => void;
+  /** Diff exactly two selected text files (#76). */
+  onDiff: (entries: FileEntry[]) => void;
   onEdit: (path: string, name: string, size: number) => void;
   /** Open the preview modal. `siblings` (in display order) is the set of other
    * previewable files in the same view, so the modal can step ←/→ through them
@@ -624,6 +630,15 @@ export function FileBrowser({
           aria-label="Open terminal here"
         >
           {">_"}
+        </button>
+        <button
+          type="button"
+          onClick={onDiskUsage}
+          className="rounded border border-term-border px-2 py-1 font-mono text-xs text-term-muted hover:text-term-text"
+          title="Show disk usage (df)"
+          aria-label="Show disk usage"
+        >
+          df
         </button>
         <button
           type="button"
@@ -956,6 +971,19 @@ export function FileBrowser({
               >
                 ↓ Download zip
               </button>
+              {selectedCount === 2 &&
+                selectedEntries.every(
+                  (e) => e.type !== "dir" && isProbablyTextFile(e.name),
+                ) && (
+                  <button
+                    type="button"
+                    onClick={() => onDiff(selectedEntries)}
+                    className="rounded border border-term-border px-2 py-0.5 text-term-muted hover:text-term-text"
+                    title="Diff the two selected files"
+                  >
+                    ⇄ Diff
+                  </button>
+                )}
               <button
                 type="button"
                 onClick={() => onDeleteMany(selectedEntries)}

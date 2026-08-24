@@ -6,6 +6,8 @@ import {
   compareHostKey,
   encodeMessage,
   formatSize,
+  formatDiskUsage,
+  DIFF_MAX_BYTES,
   hostKeyId,
   isBrowserRenderableImage,
   isLargeForEditor,
@@ -66,6 +68,7 @@ import { usePreviewCache } from "./hooks/usePreviewCache";
 import { usePreviewGallery } from "./hooks/usePreviewGallery";
 import { useEditors } from "./hooks/useEditors";
 import { useDesktopNotifications } from "./hooks/useDesktopNotifications";
+import { DiffView, type DiffSide } from "./DiffView";
 import { AuthPromptModal, type AuthPromptState } from "./AuthPrompt";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -201,6 +204,14 @@ export function SshSession({
   // Opt-in desktop notifications (#52) — fires on an unexpected disconnect while
   // the tab is backgrounded.
   const desktopNotify = useDesktopNotifications();
+  // Two-file diff (#76): the open diff modal, plus a pending collector that
+  // gathers both files' contents (fetched via the editor read path) before
+  // opening it.
+  const [diff, setDiff] = useState<{ a: DiffSide; b: DiffSide } | null>(null);
+  const diffPendingRef = useRef<{
+    paths: [string, string];
+    got: Record<string, DiffSide>;
+  } | null>(null);
   // Kept current so the memoized message handler / cleanup callbacks can reach
   // the editor operations without listing the (per-render) api object as a dep —
   // the same ref pattern the rest of this component uses for stable callbacks.
@@ -702,6 +713,23 @@ export function SshSession({
         case "sftp-read":
           if (msg.edit) {
             const text = new TextDecoder().decode(base64ToBytes(msg.dataB64));
+            // #76: a read requested for a diff (echoed `diff` flag) feeds the
+            // diff collector, never the editor — even a stale reply whose path
+            // no longer matches the pending pair is dropped, not opened.
+            if (msg.diff) {
+              const pend = diffPendingRef.current;
+              if (pend && pend.paths.includes(msg.path)) {
+                pend.got[msg.path] = { name: msg.name, content: text };
+                if (pend.paths.every((p) => pend.got[p])) {
+                  setDiff({
+                    a: pend.got[pend.paths[0]],
+                    b: pend.got[pend.paths[1]],
+                  });
+                  diffPendingRef.current = null;
+                }
+              }
+              break;
+            }
             editorsApiRef.current.openForEdit(msg.path, msg.name, text);
           } else if (msg.thumb) {
             // Free the concurrency slot and let the next queued tile go, whether
@@ -767,6 +795,11 @@ export function SshSession({
           notify("info", `${msg.algo} ${base}: ${msg.hex}`);
           break;
         }
+
+        case "sftp-df":
+          // #49: surface the current filesystem's free/total as a toast.
+          notify("info", formatDiskUsage(msg.total, msg.free));
+          break;
 
         case "sftp-ok":
           if (msg.op === "write") {
@@ -845,6 +878,9 @@ export function SshSession({
             setFilesLoading(false);
             editorsApiRef.current.clearSaving();
             setElevatedPending(false);
+            // A failed diff read must not wedge the collector (which would
+            // otherwise swallow later reads for those paths) (#76 review).
+            diffPendingRef.current = null;
             // An in-flight "load original" that fails (e.g. the original is over
             // the download cap) should keep the WebP preview and just clear the
             // loading badge so it can be retried.
@@ -987,6 +1023,10 @@ export function SshSession({
     setStatusMessage("");
     setAuthPrompt(null);
     editorsApiRef.current.reset();
+    // #76 review: drop the open diff + its collector so remote file contents
+    // don't linger on screen after logout or into a later connection.
+    setDiff(null);
+    diffPendingRef.current = null;
     setPreview(null);
     setPastePending(null);
     setDialog(null);
@@ -1235,6 +1275,38 @@ export function SshSession({
     send({ t: "data", data: cdCommand(cwd) });
     setTab("terminal");
     xtermRef.current?.focus();
+  };
+
+  // Request disk usage (df) for the current directory (#49); the result comes
+  // back as an `sftp-df` frame surfaced as a toast.
+  const requestDiskUsage = () => {
+    if (connected) send({ t: "sftp-df", path: cwd });
+  };
+
+  // Diff two selected text files (#76): read both via the editor read path into
+  // the pending-diff collector, which opens the modal once both arrive.
+  const onDiff = (items: FileEntry[]) => {
+    if (!connected || items.length !== 2) return;
+    if (diffPendingRef.current) return; // a diff is already loading
+    // Refuse up front when either file is too big to diff, rather than
+    // transferring two whole files the line-capped diff mostly discards.
+    const tooBig = items.find((e) => e.size > DIFF_MAX_BYTES);
+    if (tooBig) {
+      notify(
+        "error",
+        `Too large to diff: ${tooBig.name} (> ${formatSize(DIFF_MAX_BYTES, "file")}).`,
+      );
+      return;
+    }
+    const base = cwd.replace(/\/$/, "");
+    const paths: [string, string] = [
+      `${base}/${items[0].name}`,
+      `${base}/${items[1].name}`,
+    ];
+    diffPendingRef.current = { paths, got: {} };
+    // `diff: true` is echoed on each reply so it routes to the diff collector.
+    for (const p of paths)
+      send({ t: "sftp-read", path: p, edit: true, diff: true });
   };
 
   // --- File browser actions (in-app dialogs, not window.prompt/confirm) ---
@@ -1678,6 +1750,7 @@ export function SshSession({
               elevatedPending={elevatedPending}
               onToggleElevated={toggleElevated}
               onOpenTerminalHere={openTerminalHere}
+              onDiskUsage={requestDiskUsage}
               onNavigate={listDir}
               onRefresh={() => listDir(cwd)}
               onDownload={(path) => send({ t: "sftp-read", path })}
@@ -1696,6 +1769,7 @@ export function SshSession({
               onChmod={onChmod}
               onSymlink={onSymlink}
               onChecksum={onChecksum}
+              onDiff={onDiff}
               onEdit={requestEdit}
               onPreview={openPreviewFile}
               onOpenUnsupported={(path, name) =>
@@ -1881,6 +1955,10 @@ export function SshSession({
             onCloseFile={editorsApi.close}
             onCloseAll={editorsApi.closeAll}
           />
+        )}
+
+        {diff && (
+          <DiffView a={diff.a} b={diff.b} onClose={() => setDiff(null)} />
         )}
 
         {showOverlay && (

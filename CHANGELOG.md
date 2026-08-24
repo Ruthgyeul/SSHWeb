@@ -12,7 +12,8 @@ All notable changes to this project are documented here. The format is based on
 - SFTP/UX features: transfer throughput + ETA on progress rows, a hex-view
   toggle in the text preview, "open terminal here" (cd the shell to the browsed
   folder), file checksums (sha256/sha1/md5), symbolic-link creation, recursive
-  chmod, and opt-in desktop notifications on an unexpected disconnect.
+  chmod, opt-in desktop notifications on an unexpected disconnect, remote disk
+  usage (df), and a two-file diff view.
 - MIT `LICENSE`.
 - Deployment assets: multi-stage `Dockerfile` (runs `server.mjs`, with a
   `/api/health` `HEALTHCHECK`), `docker-compose.yml` behind a Caddy reverse

@@ -149,6 +149,9 @@ export type ClientMessage =
       // whole by an explicit Download. Ignored for non-image / SVG / GIF reads
       // and when `sharp` is unavailable — those stream the original as before.
       previewResize?: boolean;
+      // Correlation flag for a two-file diff read (#76): the bridge echoes it on
+      // the reply so the client routes it to the diff collector, not the editor.
+      diff?: boolean;
     }
   // Write a file. When `offset` is a number the write is chunked (offset 0
   // opens the stream, `final: true` closes it) — this drives upload progress;
@@ -212,6 +215,9 @@ export type ClientMessage =
   // Compute a hash of a remote file's contents (default sha256), streamed on the
   // bridge so a large file isn't buffered. The original is only read.
   | { t: "sftp-checksum"; path: string; algo?: string }
+  // Query filesystem disk usage for `path` (df), via the OpenSSH statvfs SFTP
+  // extension. Not all servers support it; unsupported → an error frame.
+  | { t: "sftp-df"; path: string }
   // Download a directory as a (store-only) zip archive.
   | { t: "sftp-download-dir"; path: string }
   // Download several selected entries (files and/or directories) as a single
@@ -273,6 +279,7 @@ export const CLIENT_MESSAGE_FIELDS: Record<
   "sftp-symlink": { target: "string", path: "string" },
   "sftp-chmod": { path: "string", mode: "number" },
   "sftp-checksum": { path: "string" },
+  "sftp-df": { path: "string" },
   "sftp-download-dir": { path: "string" },
   "sftp-download-many": { paths: "string[]" },
   "thumb-purge": {},
@@ -425,6 +432,9 @@ export type ServerMessage =
       edit?: boolean;
       preview?: boolean;
       thumb?: boolean;
+      /** Echoed diff correlation flag (#76): this edit read was requested for a
+       * two-file diff, so the client feeds it to the diff collector. */
+      diff?: boolean;
       /** MIME type of `dataB64` when it differs from what the file name implies
        * — set for `thumb` replies whose image was re-encoded to WebP server-side.
        * A `thumb` reply with an empty `dataB64` means "no thumbnail" (skipped or
@@ -438,6 +448,9 @@ export type ServerMessage =
   | { t: "sftp-ok"; op: string; path: string }
   // Result of a `sftp-checksum` request: the hex digest of the file's contents.
   | { t: "sftp-checksum"; path: string; algo: string; hex: string }
+  // Result of a `sftp-df` request: total/free bytes of the filesystem holding
+  // the queried path.
+  | { t: "sftp-df"; path: string; total: number; free: number }
   // Optional per-session capability advertisement, sent once the session is
   // ready. `sudo` reflects whether the server permits elevated (root) file
   // access (`SSH_ALLOW_SUDO`), so the client only shows the sudo toggle when the
@@ -618,6 +631,19 @@ export function formatSize(bytes: number, type: FileEntry["type"]): string {
     unit++;
   }
   return `${size.toFixed(size >= 10 || size % 1 === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+/** Max size of either file the two-file diff (#76) will fetch. The diff caps at
+ * MAX_DIFF_LINES anyway, so a very large file is refused up front rather than
+ * transferred whole and mostly discarded. */
+export const DIFF_MAX_BYTES = 2 * 1024 * 1024;
+
+/** Human-readable one-line disk-usage summary for the df toast (#49). */
+export function formatDiskUsage(total: number, free: number): string {
+  if (!Number.isFinite(total) || total <= 0) return "Disk usage unavailable";
+  const used = Math.max(0, total - free);
+  const pct = Math.round((used / total) * 100);
+  return `Disk: ${formatSize(free, "file")} free of ${formatSize(total, "file")} (${pct}% used)`;
 }
 
 /**

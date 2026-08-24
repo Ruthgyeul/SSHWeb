@@ -8,6 +8,7 @@ import {
   filterEntries,
   formatMode,
   formatSize,
+  formatDiskUsage,
   hostKeyId,
   imageMimeType,
   isBrowserRenderableImage,
@@ -648,6 +649,20 @@ describe("formatSize", () => {
     expect(formatSize(1024, "file")).toBe("1 KB");
     expect(formatSize(1536, "file")).toBe("1.5 KB");
     expect(formatSize(5 * 1024 * 1024, "file")).toBe("5 MB");
+  });
+});
+
+describe("formatDiskUsage", () => {
+  it("summarizes free/total and a used percentage", () => {
+    const gb = 1024 * 1024 * 1024;
+    expect(formatDiskUsage(100 * gb, 25 * gb)).toBe(
+      "Disk: 25 GB free of 100 GB (75% used)",
+    );
+  });
+
+  it("guards against a zero/invalid total", () => {
+    expect(formatDiskUsage(0, 0)).toBe("Disk usage unavailable");
+    expect(formatDiskUsage(Number.NaN, 10)).toBe("Disk usage unavailable");
   });
 });
 
