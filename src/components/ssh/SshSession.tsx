@@ -7,6 +7,7 @@ import {
   encodeMessage,
   formatSize,
   formatDiskUsage,
+  DIFF_MAX_BYTES,
   hostKeyId,
   isBrowserRenderableImage,
   isLargeForEditor,
@@ -712,17 +713,20 @@ export function SshSession({
         case "sftp-read":
           if (msg.edit) {
             const text = new TextDecoder().decode(base64ToBytes(msg.dataB64));
-            // #76: a read requested for a pending diff feeds the diff collector
-            // instead of opening the editor; once both sides arrive, show it.
-            const pend = diffPendingRef.current;
-            if (pend && pend.paths.includes(msg.path)) {
-              pend.got[msg.path] = { name: msg.name, content: text };
-              if (pend.paths.every((p) => pend.got[p])) {
-                setDiff({
-                  a: pend.got[pend.paths[0]],
-                  b: pend.got[pend.paths[1]],
-                });
-                diffPendingRef.current = null;
+            // #76: a read requested for a diff (echoed `diff` flag) feeds the
+            // diff collector, never the editor — even a stale reply whose path
+            // no longer matches the pending pair is dropped, not opened.
+            if (msg.diff) {
+              const pend = diffPendingRef.current;
+              if (pend && pend.paths.includes(msg.path)) {
+                pend.got[msg.path] = { name: msg.name, content: text };
+                if (pend.paths.every((p) => pend.got[p])) {
+                  setDiff({
+                    a: pend.got[pend.paths[0]],
+                    b: pend.got[pend.paths[1]],
+                  });
+                  diffPendingRef.current = null;
+                }
               }
               break;
             }
@@ -874,6 +878,9 @@ export function SshSession({
             setFilesLoading(false);
             editorsApiRef.current.clearSaving();
             setElevatedPending(false);
+            // A failed diff read must not wedge the collector (which would
+            // otherwise swallow later reads for those paths) (#76 review).
+            diffPendingRef.current = null;
             // An in-flight "load original" that fails (e.g. the original is over
             // the download cap) should keep the WebP preview and just clear the
             // loading badge so it can be retried.
@@ -1016,6 +1023,10 @@ export function SshSession({
     setStatusMessage("");
     setAuthPrompt(null);
     editorsApiRef.current.reset();
+    // #76 review: drop the open diff + its collector so remote file contents
+    // don't linger on screen after logout or into a later connection.
+    setDiff(null);
+    diffPendingRef.current = null;
     setPreview(null);
     setPastePending(null);
     setDialog(null);
@@ -1276,13 +1287,26 @@ export function SshSession({
   // the pending-diff collector, which opens the modal once both arrive.
   const onDiff = (items: FileEntry[]) => {
     if (!connected || items.length !== 2) return;
+    if (diffPendingRef.current) return; // a diff is already loading
+    // Refuse up front when either file is too big to diff, rather than
+    // transferring two whole files the line-capped diff mostly discards.
+    const tooBig = items.find((e) => e.size > DIFF_MAX_BYTES);
+    if (tooBig) {
+      notify(
+        "error",
+        `Too large to diff: ${tooBig.name} (> ${formatSize(DIFF_MAX_BYTES, "file")}).`,
+      );
+      return;
+    }
     const base = cwd.replace(/\/$/, "");
     const paths: [string, string] = [
       `${base}/${items[0].name}`,
       `${base}/${items[1].name}`,
     ];
     diffPendingRef.current = { paths, got: {} };
-    for (const p of paths) send({ t: "sftp-read", path: p, edit: true });
+    // `diff: true` is echoed on each reply so it routes to the diff collector.
+    for (const p of paths)
+      send({ t: "sftp-read", path: p, edit: true, diff: true });
   };
 
   // --- File browser actions (in-app dialogs, not window.prompt/confirm) ---

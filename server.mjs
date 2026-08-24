@@ -3563,6 +3563,9 @@ wss.on("connection", (ws, req) => {
               name,
               dataB64: buffer.toString("base64"),
               edit: true,
+              // Echo the diff correlation flag so the client routes this reply to
+              // its diff collector instead of the editor (#76 review).
+              ...(msg.diff === true ? { diff: true } : {}),
             });
           });
           return;
@@ -4000,21 +4003,26 @@ wss.on("connection", (ws, req) => {
 
         case "sftp-df":
           withSftp((s) => {
-            // The df figures come from the OpenSSH statvfs SFTP extension; not
-            // every server implements it, so fail gracefully when it's absent.
-            if (typeof s.ext_openssh_statvfs !== "function") {
-              return sendError(
-                "Disk usage isn't supported by this server.",
-                "sftp",
-              );
+            // The df figures come from the OpenSSH statvfs SFTP extension. ssh2
+            // always defines the method, but it throws synchronously when the
+            // server didn't negotiate the extension — so the call itself must be
+            // guarded (a `typeof` check always passes). Fail gracefully either
+            // way (sync throw or async err).
+            const unsupported = () =>
+              sendError("Disk usage isn't supported by this server.", "sftp");
+            if (typeof s.ext_openssh_statvfs !== "function")
+              return unsupported();
+            try {
+              s.ext_openssh_statvfs(msg.path, (err, st) => {
+                if (err || !st) return unsupported();
+                const unit = Number(st.f_frsize || st.f_bsize || 512);
+                const total = Number(st.f_blocks) * unit;
+                const free = Number(st.f_bavail) * unit;
+                send({ t: "sftp-df", path: msg.path, total, free });
+              });
+            } catch {
+              unsupported();
             }
-            s.ext_openssh_statvfs(msg.path, (err, st) => {
-              if (err) return sendError(err.message, "sftp");
-              const unit = Number(st.f_frsize || st.f_bsize || 512);
-              const total = Number(st.f_blocks) * unit;
-              const free = Number(st.f_bavail) * unit;
-              send({ t: "sftp-df", path: msg.path, total, free });
-            });
           });
           break;
 

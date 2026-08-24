@@ -149,6 +149,9 @@ export type ClientMessage =
       // whole by an explicit Download. Ignored for non-image / SVG / GIF reads
       // and when `sharp` is unavailable — those stream the original as before.
       previewResize?: boolean;
+      // Correlation flag for a two-file diff read (#76): the bridge echoes it on
+      // the reply so the client routes it to the diff collector, not the editor.
+      diff?: boolean;
     }
   // Write a file. When `offset` is a number the write is chunked (offset 0
   // opens the stream, `final: true` closes it) — this drives upload progress;
@@ -429,6 +432,9 @@ export type ServerMessage =
       edit?: boolean;
       preview?: boolean;
       thumb?: boolean;
+      /** Echoed diff correlation flag (#76): this edit read was requested for a
+       * two-file diff, so the client feeds it to the diff collector. */
+      diff?: boolean;
       /** MIME type of `dataB64` when it differs from what the file name implies
        * — set for `thumb` replies whose image was re-encoded to WebP server-side.
        * A `thumb` reply with an empty `dataB64` means "no thumbnail" (skipped or
@@ -626,6 +632,11 @@ export function formatSize(bytes: number, type: FileEntry["type"]): string {
   }
   return `${size.toFixed(size >= 10 || size % 1 === 0 ? 0 : 1)} ${units[unit]}`;
 }
+
+/** Max size of either file the two-file diff (#76) will fetch. The diff caps at
+ * MAX_DIFF_LINES anyway, so a very large file is refused up front rather than
+ * transferred whole and mostly discarded. */
+export const DIFF_MAX_BYTES = 2 * 1024 * 1024;
 
 /** Human-readable one-line disk-usage summary for the df toast (#49). */
 export function formatDiskUsage(total: number, free: number): string {
