@@ -17,7 +17,6 @@ function makeDeps(preview: PreviewState | null) {
   const deps: PreviewGalleryDeps = {
     send,
     setPreview,
-    setDownloads: vi.fn(),
     cachePreview: vi.fn(),
     previewCacheGet: vi.fn(() => null),
     previewCacheHas: vi.fn(() => false),
@@ -25,7 +24,6 @@ function makeDeps(preview: PreviewState | null) {
     previewPathRef: { current: null },
     previewBuffersRef: { current: {} },
     previewMimeRef: { current: {} },
-    downloadBuffersRef: { current: {} },
     prefetchPathsRef: { current: new Set() },
     originalLoadPathsRef: { current: new Set() },
     subtitleReadsRef: { current: new Map() },

@@ -124,6 +124,55 @@ describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
     );
   });
 
+  it("streams a plain download and its resumable continuation (#41)", async () => {
+    // A whole-file plain download streams over the download frames.
+    client.send({ t: "sftp-read", path: MOCK_FILE_PATH });
+    const begin = await client.waitFor(
+      (m) => m.t === "sftp-download-begin" && m.path === MOCK_FILE_PATH,
+    );
+    expect(begin.size).toBe(MOCK_FILE_CONTENT.length);
+    expect(begin.offset).toBeUndefined(); // fresh stream from 0
+    await client.waitFor(
+      (m) => m.t === "sftp-download-end" && m.path === MOCK_FILE_PATH,
+    );
+    const whole = Buffer.concat(
+      client.inbox
+        .filter(
+          (m) => m.t === "sftp-download-chunk" && m.path === MOCK_FILE_PATH,
+        )
+        .map((m) => Buffer.from(m.dataB64, "base64")),
+    );
+    expect(whole.toString()).toBe(MOCK_FILE_CONTENT);
+
+    // Resume from a byte offset: the begin echoes the offset and only the tail
+    // (from that offset) is streamed, so the client can append onto its partial.
+    client.inbox.length = 0;
+    const resumeAt = 6;
+    client.send({
+      t: "sftp-read",
+      path: MOCK_FILE_PATH,
+      resumeOffset: resumeAt,
+    });
+    const rbegin = await client.waitFor(
+      (m) => m.t === "sftp-download-begin" && m.path === MOCK_FILE_PATH,
+    );
+    expect(rbegin.size).toBe(MOCK_FILE_CONTENT.length); // full size, not the tail
+    expect(rbegin.offset).toBe(resumeAt);
+    await client.waitFor(
+      (m) => m.t === "sftp-download-end" && m.path === MOCK_FILE_PATH,
+    );
+    const tail = Buffer.concat(
+      client.inbox
+        .filter(
+          (m) => m.t === "sftp-download-chunk" && m.path === MOCK_FILE_PATH,
+        )
+        .map((m) => Buffer.from(m.dataB64, "base64")),
+    );
+    expect(tail.toString()).toBe(MOCK_FILE_CONTENT.slice(resumeAt));
+    // Leave the shared inbox free of download-chunk frames for the next test.
+    client.inbox.length = 0;
+  });
+
   it("streams a store-only ZIP for a multi-file download", async () => {
     client.send({ t: "sftp-download-many", paths: [MOCK_FILE_PATH] });
     const begin = await client.waitFor(

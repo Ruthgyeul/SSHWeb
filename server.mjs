@@ -3513,18 +3513,38 @@ wss.on("connection", (ws, req) => {
             MAX_TRANSFERS_PER_SESSION > 0 &&
             downloads.size >= MAX_TRANSFERS_PER_SESSION
           ) {
-            return sendError(
+            sendError(
               "Too many concurrent transfers. Wait for some to finish.",
               "sftp",
             );
+            // Tear the client's queued download row + slot down (#74) so a
+            // rejected plain download doesn't leak a concurrency slot.
+            if (!isPreview)
+              send({ t: "sftp-download-end", path: msg.path, error: true });
+            return;
           }
           // A capped read only pulls the file's head (`{ start, end }`), so a
           // huge log previews as text without transferring the whole thing.
           const truncated = cap > 0 && stats.size > cap;
+          // Resume a plain download from a byte offset (#41): honored only for an
+          // uncapped plain (non-preview) read and only when the offset lands
+          // inside the current file — otherwise stream the whole file from 0
+          // (the file may have changed since the interrupted attempt, so a stale
+          // offset must not be trusted; the client restarts on a size mismatch).
+          const resumeAt =
+            !isPreview &&
+            cap === 0 &&
+            typeof msg.resumeOffset === "number" &&
+            msg.resumeOffset > 0 &&
+            msg.resumeOffset < stats.size
+              ? msg.resumeOffset
+              : 0;
           const transferStartedAt = Date.now();
           const stream = truncated
             ? s.createReadStream(msg.path, { start: 0, end: cap - 1 })
-            : s.createReadStream(msg.path);
+            : resumeAt > 0
+              ? s.createReadStream(msg.path, { start: resumeAt })
+              : s.createReadStream(msg.path);
           downloads.set(msg.path, stream);
           send({
             t: "sftp-download-begin",
@@ -3532,6 +3552,9 @@ wss.on("connection", (ws, req) => {
             name,
             size: truncated ? cap : stats.size,
             preview: isPreview,
+            // Echo the actual start so a resumed download appends rather than
+            // restarts; omitted for a fresh (offset-0) stream.
+            ...(resumeAt > 0 ? { offset: resumeAt } : {}),
           });
           stream.on("data", (chunk) => {
             bytesDown += chunk.length;
@@ -3563,6 +3586,11 @@ wss.on("connection", (ws, req) => {
             if (downloads.has(msg.path)) {
               downloads.delete(msg.path);
               sendError(err.message, "sftp");
+              // A plain download's progress row + queue slot is torn down by a
+              // terminal end frame (#74); previews degrade via the error frame
+              // and the modal's own loading state instead.
+              if (!isPreview)
+                send({ t: "sftp-download-end", path: msg.path, error: true });
             }
           });
           stream.on("end", () => {
@@ -3699,10 +3727,14 @@ wss.on("connection", (ws, req) => {
           cap = MAX_DOWNLOAD_BYTES;
         }
         if (!cap && MAX_DOWNLOAD_BYTES > 0 && stats.size > MAX_DOWNLOAD_BYTES) {
-          return sendError(
+          sendError(
             `File too large to download (> ${MAX_DOWNLOAD_MB} MB).`,
             "sftp",
           );
+          // Free the client's queued download row + slot (#74).
+          if (!isPreview)
+            send({ t: "sftp-download-end", path: msg.path, error: true });
+          return;
         }
 
         // Edit reads need the whole file in one message (they build an editor

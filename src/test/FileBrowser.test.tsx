@@ -27,6 +27,7 @@ function renderBrowser(
     onCancelAllUploads: vi.fn(),
     onResumeUpload: vi.fn(),
     onCancelDownload: vi.fn(),
+    onResumeDownload: vi.fn(),
     canElevate: false,
     elevated: false,
     elevatedPending: false,

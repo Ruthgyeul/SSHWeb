@@ -152,6 +152,14 @@ export type ClientMessage =
       // Correlation flag for a two-file diff read (#76): the bridge echoes it on
       // the reply so the client routes it to the diff collector, not the editor.
       diff?: boolean;
+      // Resume a plain download from this byte offset (#41): a download
+      // interrupted by a dropped connection re-requests the file starting where
+      // it left off, and the bridge streams `{ start: resumeOffset }` instead of
+      // the whole file. Honored only for a plain (non-edit/preview/thumb) read
+      // and only when `0 < resumeOffset < size`; otherwise the bridge streams
+      // the whole file from 0. The `sftp-download-begin` reply echoes the actual
+      // start as `offset` so the client knows whether to append or restart.
+      resumeOffset?: number;
     }
   // Write a file. When `offset` is a number the write is chunked (offset 0
   // opens the stream, `final: true` closes it) — this drives upload progress;
@@ -370,6 +378,12 @@ export type ServerMessage =
       name: string;
       size: number;
       preview?: boolean;
+      // Resumed-download start offset (#41): present (> 0) when this stream
+      // continues a plain download from a byte offset the client asked for
+      // (`resumeOffset` on the read). `size` stays the file's FULL size, so the
+      // client appends the incoming bytes onto its buffered partial and shows
+      // true overall progress. Absent/0 = a fresh stream from the start.
+      offset?: number;
       // Set only when the bridge transcoded a `previewResize` image: the content
       // type of the bytes that follow (always `image/webp`). Its presence tells
       // the client these are an *optimized* preview, not the original — so the
@@ -394,6 +408,12 @@ export type ServerMessage =
       path: string;
       preview?: boolean;
       truncated?: boolean;
+      // Terminal failure of a plain (non-preview) download stream (#41/#74): the
+      // bridge sends this so the client tears down the download's progress row
+      // and frees its concurrency-queue slot instead of leaking it. When set the
+      // client does NOT save the partial bytes; a separate `error` frame (or the
+      // client's own toast) explains the failure.
+      error?: boolean;
     }
   // Reply to `sftp-write-resume`: the destination's current on-disk size, so the
   // client resumes its chunked upload from exactly there (0 = file missing, so

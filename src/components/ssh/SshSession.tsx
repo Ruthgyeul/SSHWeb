@@ -45,7 +45,6 @@ import {
 import {
   FileBrowser,
   type UploadItem,
-  type DownloadItem,
   type SearchState,
   type SearchMode,
 } from "./FileBrowser";
@@ -61,6 +60,7 @@ import { TerminalSettings } from "./TerminalSettings";
 import { SearchIcon } from "./icons";
 import { useThumbnailQueue } from "./hooks/useThumbnailQueue";
 import { useUploadQueue, type UploadJob } from "./hooks/useUploadQueue";
+import { useDownloadTransfers } from "./hooks/useDownloadTransfers";
 import { useReconnect } from "./hooks/useReconnect";
 import { useSshSocket } from "./hooks/useSshSocket";
 import { useFileActions } from "./hooks/useFileActions";
@@ -78,6 +78,10 @@ const UPLOAD_CHUNK = 256 * 1024;
  * so dropping a folder of hundreds of files reads only a few into memory at a
  * time (each active upload holds its whole file) instead of all at once. */
 const MAX_INFLIGHT_UPLOADS = 3;
+/** How many plain file downloads stream at once (#74); the rest queue and start
+ * as slots free up, so firing many downloads can't open unbounded streams or hit
+ * the bridge's per-session transfer cap. */
+const MAX_INFLIGHT_DOWNLOADS = 3;
 // Cap the retained tail -f text so a long-running follow can't grow browser
 // memory / re-highlight cost without bound — keep only the trailing window (#47).
 const FOLLOW_MAX_TEXT = 512 * 1024;
@@ -303,12 +307,6 @@ export function SshSession({
   // (root): elevated in-memory caches are dropped on `sudo` toggle and logout.
   const elevatedRef = useRef(false);
   const [uploads, setUploads] = useState<Record<string, UploadItem>>({});
-  const [downloads, setDownloads] = useState<Record<string, DownloadItem>>({});
-  // Accumulated download chunks (bytes), keyed by remote path. A ref so pushing
-  // chunks doesn't re-render; the `downloads` state above drives the progress UI.
-  const downloadBuffersRef = useRef<
-    Record<string, { name: string; chunks: Uint8Array[] }>
-  >({});
   // Accumulated preview chunks (bytes), keyed by remote path. Previews stream in
   // over the same `sftp-download-*` frames (tagged `preview`), but land in the
   // modal (as a blob/text) instead of a saved file — so they buffer here.
@@ -446,6 +444,26 @@ export function SshSession({
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(encodeMessage(msg));
   }, []);
 
+  // Plain file downloads (#41 resumable, #74 queue): the concurrency-limited
+  // download state machine, mirroring the upload side. Owns the `downloads`
+  // progress state, the accumulated bytes, and the offset-resume path. Preview
+  // streams flow through `usePreviewGallery` instead; only non-preview frames
+  // are routed to `handleDownloadMessage` below.
+  const {
+    downloads,
+    handleDownloadMessage,
+    startDownload,
+    cancelDownload,
+    resumeDownload,
+    interruptInFlight: interruptDownloads,
+    resumeInterrupted: resumeInterruptedDownloads,
+    reset: resetDownloads,
+  } = useDownloadTransfers({
+    send,
+    onDownloaded: (name: string) => notify("success", `Downloaded ${name}`),
+    maxInFlight: MAX_INFLIGHT_DOWNLOADS,
+  });
+
   // File-browser mutating actions (delete/mkdir/touch/rename/copy/move/chmod):
   // each builds a PromptDialog request and, on confirm, sends the SFTP message.
   const {
@@ -555,10 +573,8 @@ export function SshSession({
     pruneAndStep,
     closeSubtitleTrack,
   } = usePreviewGallery({
-    onDownloaded: (name: string) => notify("success", `Downloaded ${name}`),
     send,
     setPreview,
-    setDownloads,
     cachePreview,
     previewCacheGet,
     previewCacheHas,
@@ -566,7 +582,6 @@ export function SshSession({
     previewPathRef,
     previewBuffersRef,
     previewMimeRef,
-    downloadBuffersRef,
     prefetchPathsRef,
     originalLoadPathsRef,
     subtitleReadsRef,
@@ -628,6 +643,9 @@ export function SshSession({
                 send({ t: "sftp-write-resume", path });
               }
             }
+            // Symmetrically, re-drive any download interrupted by the drop from
+            // its byte offset (#41), through the same concurrency queue (#74).
+            resumeInterruptedDownloads();
             // Re-establish a live-follow on the fresh session — the old one was
             // torn down when the previous socket dropped (Codex #5).
             if (followPathRef.current) {
@@ -787,7 +805,10 @@ export function SshSession({
         case "sftp-download-begin":
         case "sftp-download-chunk":
         case "sftp-download-end":
-          handleTransferMessage(msg);
+          // Preview streams drive the modal; plain downloads drive the download
+          // queue/progress. They share these frames, split by the `preview` tag.
+          if (msg.preview) handleTransferMessage(msg);
+          else handleDownloadMessage(msg);
           break;
 
         case "sftp-write-at": {
@@ -975,6 +996,8 @@ export function SshSession({
       enqueueUpload,
       clearPreviewCache,
       handleTransferMessage,
+      handleDownloadMessage,
+      resumeInterruptedDownloads,
       handleSearchResult,
       pruneAndStep,
       reconnect,
@@ -1011,6 +1034,9 @@ export function SshSession({
     lastDetailsRef,
     onMessage: handleServerMessage,
     onOpen: sendConnect,
+    // A live session dropped: park streaming downloads as interrupted (keeping
+    // their partial bytes) so they auto-resume from offset on reconnect (#41).
+    onDrop: interruptDownloads,
     onNeverConnected: () => {
       // Login/host failure. Return to the connect form pre-filled with the same
       // host/port/user (and key material) but a cleared password — re-seed it by
@@ -1087,10 +1113,9 @@ export function SshSession({
     setLatency(null);
     setConnectedAt(null);
     setUploads({});
-    setDownloads({});
     uploadCtlRef.current = {};
     resetUploads();
-    downloadBuffersRef.current = {};
+    resetDownloads();
     previewBuffersRef.current = {};
     previewMimeRef.current = {};
     previewCacheClearOnly();
@@ -1116,7 +1141,14 @@ export function SshSession({
     setCtrlArmed(false);
     setAltArmed(false);
     xtermRef.current?.clear();
-  }, [send, resetThumbs, resetUploads, reconnect, previewCacheClearOnly]);
+  }, [
+    send,
+    resetThumbs,
+    resetUploads,
+    resetDownloads,
+    reconnect,
+    previewCacheClearOnly,
+  ]);
 
   const decideHostKey = useCallback(
     (accept: boolean) => {
@@ -1583,20 +1615,6 @@ export function SshSession({
     [send],
   );
 
-  // Cancel an in-flight download: tell the bridge to stop streaming and discard
-  // whatever we've buffered so far.
-  const cancelDownload = useCallback(
-    (path: string) => {
-      send({ t: "sftp-download-cancel", path });
-      delete downloadBuffersRef.current[path];
-      setDownloads((d) => {
-        const rest = { ...d };
-        delete rest[path];
-        return rest;
-      });
-    },
-    [send],
-  );
   // Inject the queue's starter once `runUpload` exists (it's defined after the
   // ws message handler that enqueues), so a `sftp-write-at` resume reply can kick
   // the queue. The hook holds `startUpload` in a ref, so this stays current.
@@ -1833,6 +1851,7 @@ export function SshSession({
               onCancelAllUploads={cancelAllUploads}
               onResumeUpload={resumeUpload}
               onCancelDownload={cancelDownload}
+              onResumeDownload={resumeDownload}
               canElevate={canElevate}
               elevated={elevated}
               elevatedPending={elevatedPending}
@@ -1843,7 +1862,7 @@ export function SshSession({
               onCopyPath={copyPath}
               onNavigate={listDir}
               onRefresh={() => listDir(cwd)}
-              onDownload={(path) => send({ t: "sftp-read", path })}
+              onDownload={(path) => startDownload(path)}
               onDownloadDir={(path) => send({ t: "sftp-download-dir", path })}
               onDownloadMany={(paths) =>
                 send({ t: "sftp-download-many", paths })
@@ -2006,7 +2025,7 @@ export function SshSession({
                   // untouched original on demand (streamed, with a progress bar).
                   preview.bytes && !preview.optimized
                     ? triggerDownload(preview.name, preview.bytes)
-                    : send({ t: "sftp-read", path: preview.path })
+                    : startDownload(preview.path)
                 }
                 onCancel={() => {
                   // Abort the in-flight preview stream and close the modal.

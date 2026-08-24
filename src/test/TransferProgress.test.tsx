@@ -12,6 +12,7 @@ const base = {
   onCancelAllUploads: noop,
   onResumeUpload: noop,
   onCancelDownload: noop,
+  onResumeDownload: noop,
 };
 
 describe("TransferProgress", () => {

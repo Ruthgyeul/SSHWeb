@@ -19,6 +19,11 @@ All notable changes to this project are documented here. The format is based on
   persisted where applicable.
 - Live-follow (tail -f) for text previews, and first-page PDF thumbnails in the
   grid (when the bridge's `sharp` has PDF support).
+- Resumable downloads and a concurrency-limited download queue: plain file
+  downloads stream through a client queue (only a few at a time; the rest show
+  *queued*), and a download interrupted by a dropped connection auto-resumes
+  from its byte offset on reconnect (or via a Resume button) — the download
+  mirror of the existing upload-resume path.
 - MIT `LICENSE`.
 - Deployment assets: multi-stage `Dockerfile` (runs `server.mjs`, with a
   `/api/health` `HEALTHCHECK`), `docker-compose.yml` behind a Caddy reverse
