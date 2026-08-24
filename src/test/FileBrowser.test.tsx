@@ -31,8 +31,10 @@ function renderBrowser(
     elevated: false,
     elevatedPending: false,
     onToggleElevated: vi.fn(),
+    active: true,
     onOpenTerminalHere: vi.fn(),
     onDiskUsage: vi.fn(),
+    onCopyPath: vi.fn(),
     onNavigate: vi.fn(),
     onDownload: vi.fn(),
     onDownloadDir: vi.fn(),
@@ -159,5 +161,87 @@ describe("FileBrowser sort headers", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sort by name" }));
     // Directory first even though its name sorts last alphabetically.
     expect(rowOrder()[0]).toBe("zzz-dir");
+  });
+});
+
+describe("FileBrowser hidden files (#70)", () => {
+  it("hides dotfiles by default and reveals them on toggle", () => {
+    renderBrowser([file(".env", 1), file("visible.txt", 2)]);
+    expect(rowOrder()).toEqual(["visible.txt"]);
+    fireEvent.click(screen.getByLabelText("Toggle hidden files"));
+    expect(rowOrder()).toEqual([".env", "visible.txt"]);
+  });
+});
+
+describe("FileBrowser go-to-path (#69)", () => {
+  it("navigates to an absolute path typed into the go-to bar", () => {
+    const { props } = renderBrowser([file("a.txt", 1)]);
+    fireEvent.click(screen.getByLabelText("Toggle go-to-path"));
+    const input = screen.getByLabelText("Go to path") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "/var/log" } });
+    fireEvent.submit(input.closest("form")!);
+    expect(props.onNavigate).toHaveBeenCalledWith("/var/log");
+  });
+});
+
+describe("FileBrowser copy path (#72)", () => {
+  it("copies the current directory from the toolbar", () => {
+    const { props } = renderBrowser([file("a.txt", 1)], { cwd: "/home/u" });
+    fireEvent.click(screen.getByLabelText("Copy current path"));
+    expect(props.onCopyPath).toHaveBeenCalledWith("/home/u");
+  });
+});
+
+describe("FileBrowser column customize (#71)", () => {
+  it("toggles the Size column off and on", () => {
+    renderBrowser([file("a.txt", 1)]);
+    // The Size column header is present by default (list view).
+    expect(
+      screen.getByRole("button", { name: "Sort by size" }),
+    ).toBeInTheDocument();
+    // The chip that hides it lives in the Columns group (accessible name is its
+    // "Size" text; the header button's name is "Sort by size").
+    fireEvent.click(screen.getByRole("button", { name: "Size" }));
+    expect(screen.queryByRole("button", { name: "Sort by size" })).toBeNull();
+  });
+});
+
+describe("FileBrowser spacebar quicklook (#68)", () => {
+  it("opens the preview for a single selected previewable file", () => {
+    const { props } = renderBrowser([file("photo.jpg", 10)], {
+      cwd: "/home/u",
+    });
+    fireEvent.click(screen.getByLabelText("Select photo.jpg"));
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    expect(props.onPreview).toHaveBeenCalledWith(
+      "/home/u/photo.jpg",
+      "photo.jpg",
+      expect.any(Array),
+    );
+  });
+
+  it("does nothing when more than one file is selected", () => {
+    const { props } = renderBrowser([file("a.jpg", 1), file("b.jpg", 2)]);
+    fireEvent.click(screen.getByLabelText("Select all"));
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    expect(props.onPreview).not.toHaveBeenCalled();
+  });
+});
+
+describe("FileBrowser hidden-only + quicklook scoping (Codex #135)", () => {
+  it("shows a hidden-items affordance, not 'empty', for a dotfile-only folder", () => {
+    renderBrowser([file(".env", 1), file(".gitignore", 2)]);
+    expect(screen.queryByText("This directory is empty")).toBeNull();
+    expect(screen.getByText("2 hidden items")).toBeInTheDocument();
+    // The affordance reveals them.
+    fireEvent.click(screen.getByRole("button", { name: "Show hidden files" }));
+    expect(rowOrder()).toEqual([".env", ".gitignore"]);
+  });
+
+  it("does not handle spacebar quicklook when the browser is inactive", () => {
+    const { props } = renderBrowser([file("photo.jpg", 1)], { active: false });
+    fireEvent.click(screen.getByLabelText("Select photo.jpg"));
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    expect(props.onPreview).not.toHaveBeenCalled();
   });
 });

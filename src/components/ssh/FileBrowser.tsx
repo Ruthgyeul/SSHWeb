@@ -35,6 +35,8 @@ import { TransferProgress } from "./TransferProgress";
 import { collectDroppedFiles, droppedEntries } from "./dom/dropUpload";
 import { useFileViewMode } from "./hooks/useFileViewMode";
 import { useFileSort } from "./hooks/useFileSort";
+import { useShowHidden } from "./hooks/useShowHidden";
+import { useFileColumns } from "./hooks/useFileColumns";
 
 /** One in-flight upload's progress, shown in the progress panel. */
 export interface UploadItem {
@@ -256,8 +258,10 @@ export function FileBrowser({
   elevated,
   elevatedPending,
   onToggleElevated,
+  active,
   onOpenTerminalHere,
   onDiskUsage,
+  onCopyPath,
   onNavigate,
   onDownload,
   onDownloadDir,
@@ -306,10 +310,15 @@ export function FileBrowser({
   /** Whether an elevate/de-elevate request is in flight. */
   elevatedPending: boolean;
   onToggleElevated: () => void;
+  /** Whether this session's browser is the foreground tab — gates window-level
+   * shortcuts (spacebar quicklook) so a background session never reacts (#68). */
+  active: boolean;
   /** cd the shell to the current directory and switch to the terminal (#50). */
   onOpenTerminalHere: () => void;
   /** Show the current filesystem's disk usage (df) as a toast (#49). */
   onDiskUsage: () => void;
+  /** Copy a path to the clipboard (breadcrumb or a row) (#72). */
+  onCopyPath: (path: string) => void;
   onNavigate: (path: string) => void;
   onDownload: (path: string) => void;
   onDownloadDir: (path: string) => void;
@@ -373,11 +382,18 @@ export function FileBrowser({
   const [searchInput, setSearchInput] = useState("");
   // Search axis: match file names, or grep file contents.
   const [searchMode, setSearchMode] = useState<SearchMode>("name");
+  // Go-to-path bar (#69): absolute-path navigation box, toggled from the toolbar.
+  const [showGoto, setShowGoto] = useState(false);
+  const [gotoInput, setGotoInput] = useState("");
   // List vs. grid (thumbnail) layout, persisted across sessions/tabs.
   const [viewMode, setViewMode] = useFileViewMode();
   // Sort field + direction, persisted across sessions/tabs. `toggleSort` flips
   // direction on the active field or switches field at its natural default.
   const [sort, toggleSort] = useFileSort();
+  // Show/hide dotfiles (#70) and which optional list columns show (#71), both
+  // persisted across sessions/tabs.
+  const [showHidden, setShowHidden] = useShowHidden();
+  const [columns, toggleColumn] = useFileColumns();
 
   // `webkitdirectory` isn't a typed React attribute; set it on the folder input
   // imperatively so clicking "↑ folder" opens a directory picker.
@@ -403,10 +419,14 @@ export function FileBrowser({
   // memoized by hand — otherwise a directory of hundreds of entries re-sorts and
   // re-filters on every render (every filter keystroke, thumbnail arrival, or
   // selection toggle).
-  const sorted = useMemo(
-    () => sortEntriesBy(entries, sort.key, sort.dir),
-    [entries, sort.key, sort.dir],
-  );
+  const sorted = useMemo(() => {
+    // Hide dotfiles unless the toggle is on (#70). Selection derives from
+    // `sorted`, so a hidden file can't be selected while it's hidden.
+    const shown = showHidden
+      ? entries
+      : entries.filter((e) => !e.name.startsWith("."));
+    return sortEntriesBy(shown, sort.key, sort.dir);
+  }, [entries, showHidden, sort.key, sort.dir]);
   const sortArrow = sort.dir === "asc" ? "▲" : "▼";
   // The rows actually shown: `sorted` narrowed by the filter box. Selection is
   // kept against the full listing (below) so filtering never drops checks.
@@ -527,6 +547,40 @@ export function FileBrowser({
     });
   const clearSelection = () => setSelection({ cwd, names: new Set() });
 
+  // Spacebar quicklook (#68): with exactly one previewable/editable file
+  // selected, Space opens its preview — unless focus is in a text field (where
+  // Space types) or a modifier is held.
+  useEffect(() => {
+    // Only the foreground session's browser handles the shortcut, so a
+    // background session (still mounted, just hidden) never reacts to Space.
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== " " && e.code !== "Space") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // Don't hijack Space from a text field or an interactive control (a
+      // focused button/link/select/checkbox still needs Space to activate).
+      const t = e.target;
+      if (
+        t instanceof Element &&
+        t.closest(
+          "input, textarea, select, button, a, [role='button'], [contenteditable='true']",
+        )
+      )
+        return;
+      if (selectedEntries.length !== 1) return;
+      const entry = selectedEntries[0];
+      if (entry.type === "dir") return;
+      const previewable = filePreviewKind(entry.name) !== null;
+      const editable = isProbablyTextFile(entry.name);
+      if (!previewable && !editable) return;
+      e.preventDefault();
+      const target = `${cwd.replace(/\/$/, "")}/${entry.name}`;
+      onPreview(target, entry.name, previewSiblings);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, selectedEntries, previewSiblings, onPreview, cwd]);
+
   async function handleDrop(e: React.DragEvent) {
     // An in-app move drop that missed a folder target lands here — ignore it
     // (nothing to upload); a folder's own handler does the actual move.
@@ -642,6 +696,45 @@ export function FileBrowser({
         </button>
         <button
           type="button"
+          onClick={() => onCopyPath(cwd)}
+          className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
+          title="Copy current path"
+          aria-label="Copy current path"
+        >
+          ⧉
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowGoto((v) => !v)}
+          aria-pressed={showGoto}
+          className={cn(
+            "rounded border px-2 py-1 text-xs transition-colors",
+            showGoto
+              ? "border-term-accent/50 bg-term-accent/15 text-term-accent"
+              : "border-term-border text-term-muted hover:text-term-text",
+          )}
+          title="Go to path"
+          aria-label="Toggle go-to-path"
+        >
+          ⌖
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowHidden(!showHidden)}
+          aria-pressed={showHidden}
+          className={cn(
+            "rounded border px-2 py-1 text-xs transition-colors",
+            showHidden
+              ? "border-term-accent/50 bg-term-accent/15 text-term-accent"
+              : "border-term-border text-term-muted hover:text-term-text",
+          )}
+          title={showHidden ? "Hide dotfiles" : "Show hidden files"}
+          aria-label="Toggle hidden files"
+        >
+          .*
+        </button>
+        <button
+          type="button"
           onClick={() => setShowSearch((v) => !v)}
           aria-pressed={showSearch}
           className={cn(
@@ -722,6 +815,39 @@ export function FileBrowser({
                     {sortArrow}
                   </span>
                 )}
+              </button>
+            ))}
+          </div>
+        )}
+        {/* Column visibility chips (#71) — list view only. */}
+        {viewMode === "list" && (
+          <div
+            className="flex overflow-hidden rounded border border-term-border"
+            role="group"
+            aria-label="Columns"
+          >
+            {(
+              [
+                ["size", "Size"],
+                ["perms", "Perms"],
+                ["modified", "Mod"],
+              ] as const
+            ).map(([key, label], i) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => toggleColumn(key)}
+                aria-pressed={columns[key]}
+                className={cn(
+                  "px-2 py-1 text-xs transition-colors",
+                  i > 0 && "border-l border-term-border",
+                  columns[key]
+                    ? "bg-term-accent/15 text-term-accent"
+                    : "text-term-muted hover:text-term-text",
+                )}
+                title={`${columns[key] ? "Hide" : "Show"} ${label} column`}
+              >
+                {label}
               </button>
             ))}
           </div>
@@ -818,6 +944,48 @@ export function FileBrowser({
             sudo.
           </span>
         </div>
+      )}
+
+      {/* Go-to-path bar (#69): type an absolute path and Enter to navigate. */}
+      {showGoto && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const next = gotoInput.trim();
+            if (next) {
+              onNavigate(next);
+              setShowGoto(false);
+              setGotoInput("");
+            }
+          }}
+          className="flex items-center gap-2 border-b border-term-border bg-term-panel/30 px-3 py-1.5"
+        >
+          <span className="text-term-faint">⌖</span>
+          <input
+            type="text"
+            value={gotoInput}
+            onChange={(e) => setGotoInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setShowGoto(false);
+                setGotoInput("");
+              }
+            }}
+            placeholder="Go to path, e.g. /var/log"
+            autoFocus
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="min-w-0 flex-1 rounded border border-term-border bg-term-bg px-2 py-1 font-mono text-xs text-term-text outline-none placeholder:text-term-faint focus:border-term-accent"
+            aria-label="Go to path"
+          />
+          <button
+            type="submit"
+            className="rounded border border-term-accent/40 bg-term-accent/10 px-2 py-1 text-xs text-term-accent hover:bg-term-accent/20"
+          >
+            Go
+          </button>
+        </form>
       )}
 
       {/* Recursive subtree search bar */}
@@ -1042,13 +1210,31 @@ export function FileBrowser({
             {loading && (
               <p className="px-3 py-4 text-xs text-term-muted">Loading…</p>
             )}
-            {!loading && sorted.length === 0 && (
+            {!loading && entries.length === 0 && (
               <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
                 <FolderOpenIcon className="h-8 w-8 opacity-60" />
                 <p className="text-sm">This directory is empty</p>
                 <p className="text-xs text-term-faint">
                   Drag files here, or use “↑ upload” / “+ file” to add one.
                 </p>
+              </div>
+            )}
+            {/* Not truly empty — every entry is a dotfile the hidden toggle is
+                filtering out. Offer to reveal them instead of "empty" (#71/#70). */}
+            {!loading && entries.length > 0 && sorted.length === 0 && (
+              <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
+                <FolderOpenIcon className="h-8 w-8 opacity-60" />
+                <p className="text-sm">
+                  {entries.length} hidden{" "}
+                  {entries.length === 1 ? "item" : "items"}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowHidden(true)}
+                  className="text-xs text-term-accent hover:text-term-accent-soft"
+                >
+                  Show hidden files
+                </button>
               </div>
             )}
             {!loading && sorted.length > 0 && visible.length === 0 && (
@@ -1077,26 +1263,32 @@ export function FileBrowser({
                       onSort={toggleSort}
                       className="pl-1"
                     />
-                    <SortHeader
-                      label="Size"
-                      col="size"
-                      activeKey={sort.key}
-                      dir={sort.dir}
-                      onSort={toggleSort}
-                      align="right"
-                      className="hidden whitespace-nowrap sm:table-cell"
-                    />
-                    <th className="hidden px-2 py-1.5 text-left font-medium text-term-muted md:table-cell">
-                      Perms
-                    </th>
-                    <SortHeader
-                      label="Modified"
-                      col="mtime"
-                      activeKey={sort.key}
-                      dir={sort.dir}
-                      onSort={toggleSort}
-                      className="hidden whitespace-nowrap lg:table-cell"
-                    />
+                    {columns.size && (
+                      <SortHeader
+                        label="Size"
+                        col="size"
+                        activeKey={sort.key}
+                        dir={sort.dir}
+                        onSort={toggleSort}
+                        align="right"
+                        className="hidden whitespace-nowrap sm:table-cell"
+                      />
+                    )}
+                    {columns.perms && (
+                      <th className="hidden px-2 py-1.5 text-left font-medium text-term-muted md:table-cell">
+                        Perms
+                      </th>
+                    )}
+                    {columns.modified && (
+                      <SortHeader
+                        label="Modified"
+                        col="mtime"
+                        activeKey={sort.key}
+                        dir={sort.dir}
+                        onSort={toggleSort}
+                        className="hidden whitespace-nowrap lg:table-cell"
+                      />
+                    )}
                     <th className="py-1.5 pl-2 pr-3" aria-hidden />
                   </tr>
                 </thead>
@@ -1163,15 +1355,21 @@ export function FileBrowser({
                             )}
                           </button>
                         </td>
-                        <td className="hidden whitespace-nowrap px-2 py-1.5 text-right font-mono text-xs text-term-faint sm:table-cell">
-                          {formatSize(entry.size, entry.type)}
-                        </td>
-                        <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint md:table-cell">
-                          {formatMode(entry.mode, entry.type)}
-                        </td>
-                        <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint lg:table-cell">
-                          {formatMtime(entry.mtime)}
-                        </td>
+                        {columns.size && (
+                          <td className="hidden whitespace-nowrap px-2 py-1.5 text-right font-mono text-xs text-term-faint sm:table-cell">
+                            {formatSize(entry.size, entry.type)}
+                          </td>
+                        )}
+                        {columns.perms && (
+                          <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint md:table-cell">
+                            {formatMode(entry.mode, entry.type)}
+                          </td>
+                        )}
+                        {columns.modified && (
+                          <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint lg:table-cell">
+                            {formatMtime(entry.mtime)}
+                          </td>
+                        )}
                         <td className="whitespace-nowrap py-1.5 pl-2 pr-3 text-right">
                           <FileEntryActions
                             entry={entry}
@@ -1190,6 +1388,7 @@ export function FileBrowser({
                             onChmod={onChmod}
                             onSymlink={onSymlink}
                             onChecksum={onChecksum}
+                            onCopyPath={onCopyPath}
                             onDelete={onDelete}
                           />
                         </td>

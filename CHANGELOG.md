@@ -14,6 +14,9 @@ All notable changes to this project are documented here. The format is based on
   folder), file checksums (sha256/sha1/md5), symbolic-link creation, recursive
   chmod, opt-in desktop notifications on an unexpected disconnect, remote disk
   usage (df), and a two-file diff view.
+- File-browser UX: a hidden-files (dotfile) toggle, a go-to-path box, copy-path
+  actions, list-view column customization, and spacebar quicklook — all
+  persisted where applicable.
 - MIT `LICENSE`.
 - Deployment assets: multi-stage `Dockerfile` (runs `server.mjs`, with a
   `/api/health` `HEALTHCHECK`), `docker-compose.yml` behind a Caddy reverse

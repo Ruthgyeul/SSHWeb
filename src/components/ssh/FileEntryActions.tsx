@@ -33,6 +33,8 @@ interface FileEntryActionsProps {
   onSymlink?: (entry: FileEntry) => void;
   /** Compute a checksum of this file (list view only; files only). */
   onChecksum?: (entry: FileEntry) => void;
+  /** Copy this entry's absolute path to the clipboard (list view only). */
+  onCopyPath?: (path: string) => void;
   onDelete: (entry: FileEntry) => void;
 }
 
@@ -57,6 +59,7 @@ export function FileEntryActions({
   onChmod,
   onSymlink,
   onChecksum,
+  onCopyPath,
   onDelete,
 }: FileEntryActionsProps) {
   return (
@@ -144,6 +147,17 @@ export function FileEntryActions({
           title="Compute SHA-256 checksum"
         >
           sum
+        </button>
+      )}
+      {onCopyPath && (
+        <button
+          type="button"
+          onClick={() => onCopyPath(target)}
+          className={cn(actionBtn, "hover:text-term-text")}
+          title="Copy path"
+          aria-label={`Copy path of ${entry.name}`}
+        >
+          ⧉
         </button>
       )}
       <button

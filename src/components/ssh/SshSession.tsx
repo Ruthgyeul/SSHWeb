@@ -1247,6 +1247,15 @@ export function SshSession({
       notify("error", "Clipboard unavailable (needs HTTPS or localhost).");
     }
   };
+  // Copy a file/breadcrumb path to the clipboard (#72), with a toast either way.
+  const copyPath = async (path: string) => {
+    try {
+      await navigator.clipboard.writeText(path);
+      notify("success", `Copied path: ${path}`);
+    } catch {
+      notify("error", "Clipboard unavailable (needs HTTPS or localhost).");
+    }
+  };
   const doPaste = async () => {
     try {
       const text = await navigator.clipboard.readText();
@@ -1749,8 +1758,10 @@ export function SshSession({
               elevated={elevated}
               elevatedPending={elevatedPending}
               onToggleElevated={toggleElevated}
+              active={active}
               onOpenTerminalHere={openTerminalHere}
               onDiskUsage={requestDiskUsage}
+              onCopyPath={copyPath}
               onNavigate={listDir}
               onRefresh={() => listDir(cwd)}
               onDownload={(path) => send({ t: "sftp-read", path })}
