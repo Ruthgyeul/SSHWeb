@@ -3093,6 +3093,7 @@ wss.on("connection", (ws, req) => {
           sudo: ALLOW_SUDO,
           streamToken,
           maxDownloadBytes: MAX_DOWNLOAD_BYTES,
+          maxTransfers: MAX_TRANSFERS_PER_SESSION,
         });
         ssh.shell(
           {
@@ -3498,8 +3499,19 @@ wss.on("connection", (ws, req) => {
           return;
         }
 
-        if (statErr) return sendError(statErr.message, "sftp");
         const isPreview = msg.preview === true;
+        // A stat failure (permission denied, file vanished) before any download
+        // frame: for a plain download, send a terminal end so the client tears
+        // its row down and frees its concurrency-queue slot (#74) rather than
+        // leaking it (the `thumb`/`edit`/preview paths handle their own errors).
+        const isPlainDownload =
+          msg.thumb !== true && msg.edit !== true && !isPreview;
+        if (statErr) {
+          sendError(statErr.message, "sftp");
+          if (isPlainDownload)
+            send({ t: "sftp-download-end", path: msg.path, error: true });
+          return;
+        }
 
         // Stream a file (optionally head-only via `cap`) as download/preview
         // frames, pausing on WebSocket backpressure so a big file never
@@ -3527,16 +3539,23 @@ wss.on("connection", (ws, req) => {
           // huge log previews as text without transferring the whole thing.
           const truncated = cap > 0 && stats.size > cap;
           // Resume a plain download from a byte offset (#41): honored only for an
-          // uncapped plain (non-preview) read and only when the offset lands
-          // inside the current file — otherwise stream the whole file from 0
-          // (the file may have changed since the interrupted attempt, so a stale
-          // offset must not be trusted; the client restarts on a size mismatch).
+          // uncapped plain (non-preview) read, only when the offset lands inside
+          // the current file, AND only when the client's captured `size:mtime`
+          // version still matches the file's current one — the file may have
+          // changed while the socket was down (grown, or same-size edit), and
+          // appending a new tail onto the old prefix would silently save a
+          // corrupted hybrid. Any mismatch (or an absent version) streams the
+          // whole file from 0. The version tag is the client's
+          // `fileVersionTag` = `${size}:${mtimeMs}`, and the listing reports
+          // mtime in ms, so mirror that here (stat mtime is in seconds).
+          const currentVersion = `${stats.size}:${(stats.mtime || 0) * 1000}`;
           const resumeAt =
             !isPreview &&
             cap === 0 &&
             typeof msg.resumeOffset === "number" &&
             msg.resumeOffset > 0 &&
-            msg.resumeOffset < stats.size
+            msg.resumeOffset < stats.size &&
+            msg.resumeVersion === currentVersion
               ? msg.resumeOffset
               : 0;
           const transferStartedAt = Date.now();

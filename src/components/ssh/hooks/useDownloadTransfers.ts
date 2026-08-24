@@ -22,6 +22,12 @@ interface DownloadCtl {
   interrupted: boolean;
   queued: boolean;
   resumable: boolean;
+  /** The file's `size:mtime` version at download start, sent on a resume so the
+   * bridge can confirm the file is unchanged before appending (#41). */
+  version?: string;
+  /** Whether the download was started under elevated (sudo) SFTP: a resume must
+   * not fire until elevation is restored, or a root-only file fails to read. */
+  elevated: boolean;
 }
 
 /** Project a control block into the progress-panel row shape (pure). */
@@ -43,8 +49,14 @@ export interface DownloadTransfersDeps {
   send: (msg: ClientMessage) => void;
   /** Notified when a real download finishes, so the session can toast (#26). */
   onDownloaded?: (name: string) => void;
-  /** How many plain downloads may stream at once (#74). */
+  /** How many plain downloads may stream at once (#74). Clamp to the bridge's
+   * advertised per-session transfer cap so the client never fires reads the
+   * bridge will only reject. */
   maxInFlight: number;
+  /** Whether the session is currently elevated (sudo). A download started while
+   * elevated stays interrupted across a reconnect until elevation is restored,
+   * so a root-only file doesn't fail to resume through the login-user SFTP. */
+  isElevated?: () => boolean;
 }
 
 export interface DownloadTransfers {
@@ -57,8 +69,10 @@ export interface DownloadTransfers {
       { t: "sftp-download-begin" | "sftp-download-chunk" | "sftp-download-end" }
     >,
   ) => void;
-  /** Begin a plain file download (queued behind the concurrency limit). */
-  startDownload: (path: string, size?: number) => void;
+  /** Begin a plain file download (queued behind the concurrency limit). `version`
+   * is the file's `size:mtime` tag, sent on a resume so the bridge can verify
+   * the file is unchanged before appending (#41). */
+  startDownload: (path: string, version?: string) => void;
   /** Abort an in-flight/queued/interrupted download (frees its slot). */
   cancelDownload: (path: string) => void;
   /** Resume a download paused by a dropped connection (from its offset). */
@@ -90,7 +104,7 @@ export interface DownloadTransfers {
 export function useDownloadTransfers(
   deps: DownloadTransfersDeps,
 ): DownloadTransfers {
-  const { send, onDownloaded, maxInFlight } = deps;
+  const { send, onDownloaded, maxInFlight, isElevated } = deps;
   const [downloads, setDownloads] = useState<Record<string, DownloadItem>>({});
   const ctlRef = useRef<Record<string, DownloadCtl>>({});
   const {
@@ -124,10 +138,14 @@ export function useDownloadTransfers(
       ctl.running = true;
       ctl.queued = false;
       ctl.interrupted = false;
+      const resuming = job.resumeOffset > 0;
       send({
         t: "sftp-read",
         path: job.path,
-        resumeOffset: job.resumeOffset > 0 ? job.resumeOffset : undefined,
+        resumeOffset: resuming ? job.resumeOffset : undefined,
+        // Send the captured version only on a resume, so the bridge can confirm
+        // the file is unchanged before appending onto the buffered partial (#41).
+        resumeVersion: resuming ? ctl.version : undefined,
       });
       patchRow(job.path, downloadRow(ctl, job.path));
       return true;
@@ -140,14 +158,14 @@ export function useDownloadTransfers(
   }, [startJob, setStart]);
 
   const startDownload = useCallback(
-    (path: string, size?: number) => {
+    (path: string, version?: string) => {
       const existing = ctlRef.current[path];
       // Ignore a duplicate request for a download already in flight/queued.
       if (existing && !existing.cancelled) return;
       const name = path.split("/").pop() || "download";
       const ctl: DownloadCtl = {
         name,
-        total: size ?? 0,
+        total: 0,
         received: 0,
         chunks: [],
         cancelled: false,
@@ -155,12 +173,14 @@ export function useDownloadTransfers(
         interrupted: false,
         queued: true,
         resumable: true,
+        version,
+        elevated: isElevated ? isElevated() : false,
       };
       ctlRef.current[path] = ctl;
       patchRow(path, downloadRow(ctl, path));
       enqueue({ path, resumeOffset: 0 });
     },
-    [enqueue, patchRow],
+    [enqueue, patchRow, isElevated],
   );
 
   const cancelDownload = useCallback(
@@ -178,16 +198,26 @@ export function useDownloadTransfers(
     [send, dropRow, removeQueued, onReleased],
   );
 
+  // A download started under sudo can only resume once elevation is restored —
+  // through the login-user SFTP it would fail to read a root-only file. A
+  // non-elevated download resumes fine even while elevated (root can read it).
+  const canResumeNow = useCallback(
+    (ctl: DownloadCtl) =>
+      !(ctl.elevated && !(isElevated ? isElevated() : false)),
+    [isElevated],
+  );
+
   const resumeDownload = useCallback(
     (path: string) => {
       const ctl = ctlRef.current[path];
       if (!ctl || ctl.running || ctl.cancelled || !ctl.interrupted) return;
+      if (!canResumeNow(ctl)) return; // wait for elevation to be restored
       ctl.interrupted = false;
       ctl.queued = true;
       patchRow(path, downloadRow(ctl, path));
       enqueue({ path, resumeOffset: ctl.received });
     },
-    [enqueue, patchRow],
+    [enqueue, patchRow, canResumeNow],
   );
 
   const handleDownloadMessage = useCallback(
@@ -235,6 +265,7 @@ export function useDownloadTransfers(
               interrupted: false,
               queued: false,
               resumable: false,
+              elevated: false,
             };
             ctlRef.current[msg.path] = ctl;
           }
@@ -302,14 +333,19 @@ export function useDownloadTransfers(
 
   const resumeInterrupted = useCallback(() => {
     for (const [path, ctl] of Object.entries(ctlRef.current)) {
-      if (ctl.interrupted && !ctl.running && !ctl.cancelled) {
+      if (
+        ctl.interrupted &&
+        !ctl.running &&
+        !ctl.cancelled &&
+        canResumeNow(ctl)
+      ) {
         ctl.interrupted = false;
         ctl.queued = true;
         patchRow(path, downloadRow(ctl, path));
         enqueue({ path, resumeOffset: ctl.received });
       }
     }
-  }, [enqueue, patchRow]);
+  }, [enqueue, patchRow, canResumeNow]);
 
   const reset = useCallback(() => {
     ctlRef.current = {};

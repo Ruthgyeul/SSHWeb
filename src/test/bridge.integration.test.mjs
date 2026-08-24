@@ -144,14 +144,23 @@ describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
     );
     expect(whole.toString()).toBe(MOCK_FILE_CONTENT);
 
-    // Resume from a byte offset: the begin echoes the offset and only the tail
-    // (from that offset) is streamed, so the client can append onto its partial.
+    // Resume from a byte offset: the client passes the file's `size:mtime`
+    // version so the bridge can confirm the file is unchanged before honoring
+    // the offset. With a matching version the begin echoes the offset and only
+    // the tail (from that offset) is streamed. Derive the version from a listing
+    // exactly as the client (`fileVersionTag`) does.
     client.inbox.length = 0;
+    client.send({ t: "sftp-list", path: "/home/testuser" });
+    const listing = await client.waitFor((m) => m.t === "sftp-list");
+    const entry = listing.entries.find((e) => e.name === "readme.txt");
+    const version = `${entry.size}:${entry.mtime}`;
     const resumeAt = 6;
+    client.inbox.length = 0;
     client.send({
       t: "sftp-read",
       path: MOCK_FILE_PATH,
       resumeOffset: resumeAt,
+      resumeVersion: version,
     });
     const rbegin = await client.waitFor(
       (m) => m.t === "sftp-download-begin" && m.path === MOCK_FILE_PATH,
@@ -169,6 +178,31 @@ describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
         .map((m) => Buffer.from(m.dataB64, "base64")),
     );
     expect(tail.toString()).toBe(MOCK_FILE_CONTENT.slice(resumeAt));
+
+    // A stale/mismatched version must NOT be honored — the bridge restarts the
+    // stream from 0 (no `offset`), so a changed file can't save a corrupt hybrid.
+    client.inbox.length = 0;
+    client.send({
+      t: "sftp-read",
+      path: MOCK_FILE_PATH,
+      resumeOffset: resumeAt,
+      resumeVersion: "999999:0",
+    });
+    const stale = await client.waitFor(
+      (m) => m.t === "sftp-download-begin" && m.path === MOCK_FILE_PATH,
+    );
+    expect(stale.offset).toBeUndefined();
+    await client.waitFor(
+      (m) => m.t === "sftp-download-end" && m.path === MOCK_FILE_PATH,
+    );
+    const restarted = Buffer.concat(
+      client.inbox
+        .filter(
+          (m) => m.t === "sftp-download-chunk" && m.path === MOCK_FILE_PATH,
+        )
+        .map((m) => Buffer.from(m.dataB64, "base64")),
+    );
+    expect(restarted.toString()).toBe(MOCK_FILE_CONTENT);
     // Leave the shared inbox free of download-chunk frames for the next test.
     client.inbox.length = 0;
   });

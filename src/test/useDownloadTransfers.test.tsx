@@ -22,12 +22,12 @@ const chunk = (
   dataB64: bytesToBase64(new Uint8Array(bytes)),
 });
 
-function setup(maxInFlight = 2) {
+function setup(maxInFlight = 2, isElevated?: () => boolean) {
   const sent: ClientMessage[] = [];
   const send = (m: ClientMessage) => sent.push(m);
   const onDownloaded = vi.fn();
   const hook = renderHook(() =>
-    useDownloadTransfers({ send, onDownloaded, maxInFlight }),
+    useDownloadTransfers({ send, onDownloaded, maxInFlight, isElevated }),
   );
   return { sent, onDownloaded, api: () => hook.result.current };
 }
@@ -267,6 +267,67 @@ describe("useDownloadTransfers", () => {
     expect(api().downloads["/z.zip"]).toBeUndefined();
     act(() => api().resumeInterrupted());
     expect(holder.triggerDownload).not.toHaveBeenCalled();
+  });
+
+  it("sends the captured version on a resume so the bridge can verify identity (#41)", () => {
+    const { sent, api } = setup();
+    // startDownload captures the file's size:mtime version.
+    act(() => api().startDownload("/log", "500:1700000000000"));
+    // A fresh start carries no version (offset 0 → nothing to verify).
+    expect(reads(sent).at(-1)!.resumeVersion).toBeUndefined();
+    act(() =>
+      api().handleDownloadMessage({
+        t: "sftp-download-begin",
+        path: "/log",
+        name: "log",
+        size: 5,
+      }),
+    );
+    act(() => api().handleDownloadMessage(chunk("/log", [1, 2])));
+    act(() => api().interruptInFlight());
+    act(() => api().resumeInterrupted());
+    // The resume read carries the captured version so the bridge can confirm the
+    // file is unchanged before appending onto the buffered prefix.
+    expect(reads(sent).at(-1)).toEqual({
+      t: "sftp-read",
+      path: "/log",
+      resumeOffset: 2,
+      resumeVersion: "500:1700000000000",
+    });
+  });
+
+  it("holds an elevated download interrupted until elevation is restored (#41)", () => {
+    let elevated = true;
+    const { sent, api } = setup(2, () => elevated);
+    act(() => api().startDownload("/root/secret")); // captured while elevated
+    act(() =>
+      api().handleDownloadMessage({
+        t: "sftp-download-begin",
+        path: "/root/secret",
+        name: "secret",
+        size: 4,
+      }),
+    );
+    act(() => api().handleDownloadMessage(chunk("/root/secret", [1, 2])));
+
+    // Reconnect drops elevation, then the socket comes back non-elevated.
+    elevated = false;
+    act(() => api().interruptInFlight());
+    const before = reads(sent).length;
+    act(() => api().resumeInterrupted());
+    // The elevated download is NOT resumed through the login-user SFTP.
+    expect(reads(sent).length).toBe(before);
+    expect(api().downloads["/root/secret"].status).toBe("interrupted");
+
+    // Once elevation is restored, it resumes.
+    elevated = true;
+    act(() => api().resumeInterrupted());
+    expect(reads(sent).at(-1)).toEqual({
+      t: "sftp-read",
+      path: "/root/secret",
+      resumeOffset: 2,
+      resumeVersion: undefined,
+    });
   });
 
   it("reset clears rows and control state (logout)", () => {

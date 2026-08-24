@@ -444,6 +444,14 @@ export function SshSession({
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(encodeMessage(msg));
   }, []);
 
+  // Effective plain-download concurrency (#74): our client default, clamped to
+  // the bridge's advertised per-session transfer cap (from `caps.maxTransfers`)
+  // so we never start more downloads than the bridge will accept — otherwise the
+  // excess get capacity rejections and a batch can shed every download but one.
+  const [downloadConcurrency, setDownloadConcurrency] = useState(
+    MAX_INFLIGHT_DOWNLOADS,
+  );
+
   // Plain file downloads (#41 resumable, #74 queue): the concurrency-limited
   // download state machine, mirroring the upload side. Owns the `downloads`
   // progress state, the accumulated bytes, and the offset-resume path. Preview
@@ -461,7 +469,8 @@ export function SshSession({
   } = useDownloadTransfers({
     send,
     onDownloaded: (name: string) => notify("success", `Downloaded ${name}`),
-    maxInFlight: MAX_INFLIGHT_DOWNLOADS,
+    maxInFlight: downloadConcurrency,
+    isElevated: () => elevatedRef.current,
   });
 
   // File-browser mutating actions (delete/mkdir/touch/rename/copy/move/chmod):
@@ -698,6 +707,12 @@ export function SshSession({
           setCanElevate(msg.sudo);
           streamTokenRef.current = msg.streamToken ?? null;
           downloadCapRef.current = msg.maxDownloadBytes ?? 0;
+          // Clamp the client download queue to the bridge's transfer cap (#74).
+          setDownloadConcurrency(
+            msg.maxTransfers && msg.maxTransfers > 0
+              ? Math.min(MAX_INFLIGHT_DOWNLOADS, msg.maxTransfers)
+              : MAX_INFLIGHT_DOWNLOADS,
+          );
           break;
 
         case "sftp-sudo":
@@ -708,6 +723,12 @@ export function SshSession({
               "success",
               "Elevated access on — file operations run as root.",
             );
+            // Elevation restored (e.g. after a reconnect re-elevate): a download
+            // started under sudo was held interrupted until now — resume it
+            // through the root SFTP handle. Update the ref first so the resume's
+            // elevation check sees the new state before the syncing effect runs.
+            elevatedRef.current = true;
+            resumeInterruptedDownloads();
           }
           // The access identity just changed, so drop every cached thumbnail:
           // an image only root could read must not linger after dropping root
@@ -1862,7 +1883,9 @@ export function SshSession({
               onCopyPath={copyPath}
               onNavigate={listDir}
               onRefresh={() => listDir(cwd)}
-              onDownload={(path) => startDownload(path)}
+              onDownload={(path) =>
+                startDownload(path, entryVersionRef.current.get(path))
+              }
               onDownloadDir={(path) => send({ t: "sftp-download-dir", path })}
               onDownloadMany={(paths) =>
                 send({ t: "sftp-download-many", paths })
@@ -2025,7 +2048,10 @@ export function SshSession({
                   // untouched original on demand (streamed, with a progress bar).
                   preview.bytes && !preview.optimized
                     ? triggerDownload(preview.name, preview.bytes)
-                    : startDownload(preview.path)
+                    : startDownload(
+                        preview.path,
+                        entryVersionRef.current.get(preview.path),
+                      )
                 }
                 onCancel={() => {
                   // Abort the in-flight preview stream and close the modal.
