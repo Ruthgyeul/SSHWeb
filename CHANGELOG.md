@@ -17,6 +17,8 @@ All notable changes to this project are documented here. The format is based on
 - File-browser UX: a hidden-files (dotfile) toggle, a go-to-path box, copy-path
   actions, list-view column customization, and spacebar quicklook — all
   persisted where applicable.
+- Live-follow (tail -f) for text previews, and first-page PDF thumbnails in the
+  grid (when the bridge's `sharp` has PDF support).
 - MIT `LICENSE`.
 - Deployment assets: multi-stage `Dockerfile` (runs `server.mjs`, with a
   `/api/health` `HEALTHCHECK`), `docker-compose.yml` behind a Caddy reverse
