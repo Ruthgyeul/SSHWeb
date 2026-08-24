@@ -258,6 +258,7 @@ export function FileBrowser({
   elevated,
   elevatedPending,
   onToggleElevated,
+  active,
   onOpenTerminalHere,
   onDiskUsage,
   onCopyPath,
@@ -309,6 +310,9 @@ export function FileBrowser({
   /** Whether an elevate/de-elevate request is in flight. */
   elevatedPending: boolean;
   onToggleElevated: () => void;
+  /** Whether this session's browser is the foreground tab — gates window-level
+   * shortcuts (spacebar quicklook) so a background session never reacts (#68). */
+  active: boolean;
   /** cd the shell to the current directory and switch to the terminal (#50). */
   onOpenTerminalHere: () => void;
   /** Show the current filesystem's disk usage (df) as a toast (#49). */
@@ -547,12 +551,22 @@ export function FileBrowser({
   // selected, Space opens its preview — unless focus is in a text field (where
   // Space types) or a modifier is held.
   useEffect(() => {
+    // Only the foreground session's browser handles the shortcut, so a
+    // background session (still mounted, just hidden) never reacts to Space.
+    if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== " " && e.code !== "Space") return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      const tag = t?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || t?.isContentEditable) return;
+      // Don't hijack Space from a text field or an interactive control (a
+      // focused button/link/select/checkbox still needs Space to activate).
+      const t = e.target;
+      if (
+        t instanceof Element &&
+        t.closest(
+          "input, textarea, select, button, a, [role='button'], [contenteditable='true']",
+        )
+      )
+        return;
       if (selectedEntries.length !== 1) return;
       const entry = selectedEntries[0];
       if (entry.type === "dir") return;
@@ -565,7 +579,7 @@ export function FileBrowser({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedEntries, previewSiblings, onPreview, cwd]);
+  }, [active, selectedEntries, previewSiblings, onPreview, cwd]);
 
   async function handleDrop(e: React.DragEvent) {
     // An in-app move drop that missed a folder target lands here — ignore it
@@ -1196,13 +1210,31 @@ export function FileBrowser({
             {loading && (
               <p className="px-3 py-4 text-xs text-term-muted">Loading…</p>
             )}
-            {!loading && sorted.length === 0 && (
+            {!loading && entries.length === 0 && (
               <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
                 <FolderOpenIcon className="h-8 w-8 opacity-60" />
                 <p className="text-sm">This directory is empty</p>
                 <p className="text-xs text-term-faint">
                   Drag files here, or use “↑ upload” / “+ file” to add one.
                 </p>
+              </div>
+            )}
+            {/* Not truly empty — every entry is a dotfile the hidden toggle is
+                filtering out. Offer to reveal them instead of "empty" (#71/#70). */}
+            {!loading && entries.length > 0 && sorted.length === 0 && (
+              <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
+                <FolderOpenIcon className="h-8 w-8 opacity-60" />
+                <p className="text-sm">
+                  {entries.length} hidden{" "}
+                  {entries.length === 1 ? "item" : "items"}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowHidden(true)}
+                  className="text-xs text-term-accent hover:text-term-accent-soft"
+                >
+                  Show hidden files
+                </button>
               </div>
             )}
             {!loading && sorted.length > 0 && visible.length === 0 && (

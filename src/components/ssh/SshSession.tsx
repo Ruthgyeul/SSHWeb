@@ -1758,6 +1758,7 @@ export function SshSession({
               elevated={elevated}
               elevatedPending={elevatedPending}
               onToggleElevated={toggleElevated}
+              active={active}
               onOpenTerminalHere={openTerminalHere}
               onDiskUsage={requestDiskUsage}
               onCopyPath={copyPath}

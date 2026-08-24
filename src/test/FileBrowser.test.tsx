@@ -31,6 +31,7 @@ function renderBrowser(
     elevated: false,
     elevatedPending: false,
     onToggleElevated: vi.fn(),
+    active: true,
     onOpenTerminalHere: vi.fn(),
     onDiskUsage: vi.fn(),
     onCopyPath: vi.fn(),
@@ -222,6 +223,24 @@ describe("FileBrowser spacebar quicklook (#68)", () => {
   it("does nothing when more than one file is selected", () => {
     const { props } = renderBrowser([file("a.jpg", 1), file("b.jpg", 2)]);
     fireEvent.click(screen.getByLabelText("Select all"));
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    expect(props.onPreview).not.toHaveBeenCalled();
+  });
+});
+
+describe("FileBrowser hidden-only + quicklook scoping (Codex #135)", () => {
+  it("shows a hidden-items affordance, not 'empty', for a dotfile-only folder", () => {
+    renderBrowser([file(".env", 1), file(".gitignore", 2)]);
+    expect(screen.queryByText("This directory is empty")).toBeNull();
+    expect(screen.getByText("2 hidden items")).toBeInTheDocument();
+    // The affordance reveals them.
+    fireEvent.click(screen.getByRole("button", { name: "Show hidden files" }));
+    expect(rowOrder()).toEqual([".env", ".gitignore"]);
+  });
+
+  it("does not handle spacebar quicklook when the browser is inactive", () => {
+    const { props } = renderBrowser([file("photo.jpg", 1)], { active: false });
+    fireEvent.click(screen.getByLabelText("Select photo.jpg"));
     fireEvent.keyDown(window, { key: " ", code: "Space" });
     expect(props.onPreview).not.toHaveBeenCalled();
   });

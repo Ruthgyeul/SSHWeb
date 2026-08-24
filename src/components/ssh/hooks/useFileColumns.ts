@@ -46,21 +46,10 @@ const store = makePersistentStore<FileColumns>(
 export function useFileColumns(): [FileColumns, (key: FileColumnKey) => void] {
   const columns = store.useValue();
   const toggleColumn = useCallback((key: FileColumnKey) => {
-    // Read the freshest value from storage (not a possibly-stale render
-    // snapshot), flip the one key, and persist.
-    const current = parse(readRaw());
+    // Flip against the store's authoritative value (not a possibly-stale render
+    // snapshot), then persist.
+    const current = store.get();
     store.set(JSON.stringify({ ...current, [key]: !current[key] }));
   }, []);
   return [columns, toggleColumn];
-}
-
-/** Read the raw stored columns string, guarded for SSR / disabled storage. */
-function readRaw(): string | null {
-  try {
-    return typeof window === "undefined"
-      ? null
-      : localStorage.getItem("sshweb.fileColumns");
-  } catch {
-    return null;
-  }
 }

@@ -16,15 +16,29 @@ export function makePersistentStore<T>(
   fallback: T,
 ) {
   const SYNC_EVENT = `sshweb:${key}`;
-  let cachedRaw: string | null = null;
+  // Normally the store just reflects localStorage (cached by the last-seen raw
+  // string so useSyncExternalStore gets a stable reference between changes).
+  // `lastRaw` tracks the raw we last observed/persisted; when a write FAILS
+  // (quota exhausted / read-only storage), `lastRaw` stays at the old stored
+  // value while `cached` holds the new one — so the change still applies this
+  // session, yet a genuine external change (or localStorage.clear()) is still
+  // adopted because the stored raw then differs from `lastRaw`.
+  let lastRaw: string | null = null;
   let cached: T = fallback;
+  let primed = false;
 
-  const getSnapshot = (): T => {
+  const readCurrent = (): T => {
     if (typeof window === "undefined") return fallback;
-    const raw = localStorage.getItem(key);
-    if (raw !== cachedRaw) {
-      cachedRaw = raw;
+    let raw: string | null = null;
+    try {
+      raw = localStorage.getItem(key);
+    } catch {
+      raw = null;
+    }
+    if (!primed || raw !== lastRaw) {
+      lastRaw = raw;
       cached = parse(raw);
+      primed = true;
     }
     return cached;
   };
@@ -42,16 +56,26 @@ export function makePersistentStore<T>(
   };
 
   const set = (raw: string) => {
+    // Apply in memory + notify regardless of whether persistence succeeds, so
+    // the change takes effect this session even when storage is unavailable.
+    cached = parse(raw);
+    primed = true;
     try {
       localStorage.setItem(key, raw);
-      window.dispatchEvent(new Event(SYNC_EVENT));
+      lastRaw = raw; // persisted → this is now the observed stored value
     } catch {
-      /* storage unavailable (private mode) — preference just won't persist */
+      /* storage unavailable — keep `lastRaw` old so `cached` isn't overwritten */
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event(SYNC_EVENT));
     }
   };
 
   const useValue = (): T =>
-    useSyncExternalStore(subscribe, getSnapshot, () => fallback);
+    useSyncExternalStore(subscribe, readCurrent, () => fallback);
 
-  return { useValue, set };
+  /** The current value outside of render (for read-modify-write updaters). */
+  const get = (): T => readCurrent();
+
+  return { useValue, get, set };
 }
