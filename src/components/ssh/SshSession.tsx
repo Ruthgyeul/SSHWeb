@@ -212,6 +212,8 @@ export function SshSession({
     paths: [string, string];
     got: Record<string, DiffSide>;
   } | null>(null);
+  // Path currently being tail-followed in the preview (#47), or null.
+  const [followPath, setFollowPath] = useState<string | null>(null);
   // Kept current so the memoized message handler / cleanup callbacks can reach
   // the editor operations without listing the (per-render) api object as a dep —
   // the same ref pattern the rest of this component uses for stable callbacks.
@@ -801,6 +803,20 @@ export function SshSession({
           notify("info", formatDiskUsage(msg.total, msg.free));
           break;
 
+        case "sftp-follow-data": {
+          // #47: append tail -f output to the open text preview for this path.
+          const chunk = new TextDecoder().decode(base64ToBytes(msg.dataB64));
+          setPreview((prev) => {
+            if (!prev || prev.path !== msg.path || prev.kind !== "text")
+              return prev;
+            // The initial tail (and a truncation reset) replaces the view; later
+            // chunks append.
+            const base = msg.reset || msg.initial ? "" : (prev.text ?? "");
+            return { ...prev, text: base + chunk, streaming: false };
+          });
+          break;
+        }
+
         case "sftp-ok":
           if (msg.op === "write") {
             delete uploadCtlRef.current[msg.path];
@@ -1027,6 +1043,7 @@ export function SshSession({
     // don't linger on screen after logout or into a later connection.
     setDiff(null);
     diffPendingRef.current = null;
+    setFollowPath(null);
     setPreview(null);
     setPastePending(null);
     setDialog(null);
@@ -1291,6 +1308,28 @@ export function SshSession({
   const requestDiskUsage = () => {
     if (connected) send({ t: "sftp-df", path: cwd });
   };
+
+  // Toggle tail -f on the open preview's file (#47). Stops any prior follow.
+  const toggleFollow = (path: string) => {
+    if (followPath === path) {
+      send({ t: "sftp-follow-stop", path });
+      setFollowPath(null);
+      return;
+    }
+    if (followPath) send({ t: "sftp-follow-stop", path: followPath });
+    send({ t: "sftp-follow", path });
+    setFollowPath(path);
+  };
+  // Stop following automatically when the preview closes or steps to another
+  // file, so a background poll never lingers on the bridge.
+  useEffect(() => {
+    if (followPath && preview?.path !== followPath) {
+      send({ t: "sftp-follow-stop", path: followPath });
+      // Defer the state update out of the effect body (a synchronous setState
+      // here trips React's cascading-render guard).
+      queueMicrotask(() => setFollowPath(null));
+    }
+  }, [preview?.path, followPath, send]);
 
   // Diff two selected text files (#76): read both via the editor read path into
   // the pending-diff collector, which opens the modal once both arrive.
@@ -1818,6 +1857,8 @@ export function SshSession({
                   preview.total !== undefined
                 }
                 truncated={preview.truncated}
+                following={followPath === preview.path}
+                onToggleFollow={() => toggleFollow(preview.path)}
                 encodingWarning={preview.encodingWarning}
                 optimized={preview.optimized}
                 originalDims={preview.originalDims}

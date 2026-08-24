@@ -534,6 +534,8 @@ const CLIENT_MESSAGE_FIELDS = {
   "sftp-chmod": { path: "string", mode: "number" },
   "sftp-checksum": { path: "string" },
   "sftp-df": { path: "string" },
+  "sftp-follow": { path: "string" },
+  "sftp-follow-stop": { path: "string" },
   "sftp-download-dir": { path: "string" },
   "sftp-download-many": { paths: "string[]" },
   "thumb-purge": {},
@@ -2153,6 +2155,9 @@ wss.on("connection", (ws, req) => {
   // In-flight download read streams keyed by remote path, so they can be torn
   // down on cleanup or cancelled individually (`sftp-download-cancel`).
   const downloads = new Map();
+  // Active tail -f follows keyed by remote path → { timer, offset } (#47), so
+  // each poll timer can be cleared on stop / cleanup.
+  const follows = new Map();
   // Timestamp of the last genuine shell/SFTP activity (not latency pings), used
   // by the idle-timeout reaper below.
   let lastActivity = Date.now();
@@ -2267,6 +2272,9 @@ wss.on("connection", (ws, req) => {
       }
     }
     downloads.clear();
+    // Stop any tail -f poll timers (#47).
+    for (const f of follows.values()) clearInterval(f.timer);
+    follows.clear();
     // Revoke the media-stream capability so no further /api/preview requests can
     // reach this (now closed) session, and drop its dedicated SFTP channel.
     if (streamToken) {
@@ -2799,6 +2807,72 @@ wss.on("connection", (ws, req) => {
         }),
       );
     });
+  }
+
+  // tail -f (#47): send an initial tail of the file, then poll its size and
+  // stream appended bytes. A shrink (truncation / log rotation) resets to the
+  // new start. Bounded initial tail so a huge log doesn't dump whole.
+  const FOLLOW_INITIAL_TAIL = 64 * 1024; // last 64 KB shown on start
+  const FOLLOW_POLL_MS = 1000;
+  const FOLLOW_MAX_CHUNK = 512 * 1024; // cap bytes sent per poll
+  function handleFollow(msg) {
+    const path = String(msg.path || "");
+    if (!path || follows.has(path)) return;
+    withSftp((s) => {
+      const readRange = (start, end, flags) => {
+        // end is exclusive; read [start, end).
+        if (end <= start) return;
+        const stream = s.createReadStream(path, { start, end: end - 1 });
+        const parts = [];
+        stream.on("data", (d) => parts.push(d));
+        stream.on("error", (err) => sendError(err.message, "sftp"));
+        stream.on("end", () => {
+          if (!follows.has(path)) return;
+          bytesDown += end - start;
+          sftpBytesDown += end - start;
+          touch(); // new log activity keeps the session alive while following
+          send({
+            t: "sftp-follow-data",
+            path,
+            dataB64: Buffer.concat(parts).toString("base64"),
+            ...flags,
+          });
+        });
+      };
+      s.stat(path, (err, st) => {
+        if (err || !st) return sendError(err?.message || "Not found.", "sftp");
+        let offset = Math.max(0, st.size || 0);
+        const initialStart = Math.max(0, offset - FOLLOW_INITIAL_TAIL);
+        readRange(initialStart, offset, { initial: true });
+        const timer = setInterval(() => {
+          if (!follows.has(path)) return;
+          s.stat(path, (e2, st2) => {
+            if (e2 || !st2 || !follows.has(path)) return;
+            const size = Math.max(0, st2.size || 0);
+            if (size < offset) {
+              // Truncated / rotated — restart from the beginning.
+              offset = 0;
+              readRange(0, Math.min(size, FOLLOW_MAX_CHUNK), { reset: true });
+              offset = Math.min(size, FOLLOW_MAX_CHUNK);
+            } else if (size > offset) {
+              const end = Math.min(size, offset + FOLLOW_MAX_CHUNK);
+              readRange(offset, end);
+              offset = end;
+            }
+          });
+        }, FOLLOW_POLL_MS);
+        timer.unref?.();
+        follows.set(path, { timer });
+      });
+    });
+  }
+
+  function handleFollowStop(msg) {
+    const f = follows.get(msg.path);
+    if (f) {
+      clearInterval(f.timer);
+      follows.delete(msg.path);
+    }
   }
 
   function handleConnect(msg) {
@@ -3921,6 +3995,14 @@ wss.on("connection", (ws, req) => {
 
         case "sftp-read":
           handleRead(msg);
+          break;
+
+        case "sftp-follow":
+          handleFollow(msg);
+          break;
+
+        case "sftp-follow-stop":
+          handleFollowStop(msg);
           break;
 
         case "sftp-write":

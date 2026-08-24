@@ -212,6 +212,17 @@ describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
     expect(sum.path).toBe(MOCK_FILE_PATH);
   });
 
+  it("streams an initial tail for a followed file, then stops (#47)", async () => {
+    client.send({ t: "sftp-follow", path: MOCK_FILE_PATH });
+    const data = await client.waitFor(
+      (m) => m.t === "sftp-follow-data" && m.initial,
+    );
+    expect(Buffer.from(data.dataB64, "base64").toString()).toBe(
+      MOCK_FILE_CONTENT,
+    );
+    client.send({ t: "sftp-follow-stop", path: MOCK_FILE_PATH });
+  });
+
   it("writes an uploaded chunk and acks with sftp-ok", async () => {
     // A single-chunk chunked upload (offset 0, final) → open, write, close, ack.
     client.send({
