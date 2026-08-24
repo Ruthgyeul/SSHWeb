@@ -106,6 +106,8 @@ export function FilePreview({
   total,
   streaming = false,
   truncated = false,
+  following = false,
+  onToggleFollow,
   encodingWarning = false,
   optimized = false,
   originalDims,
@@ -151,6 +153,10 @@ export function FilePreview({
   streaming?: boolean;
   /** True when a text preview shows only the head of a larger file. */
   truncated?: boolean;
+  /** Whether this text file is being live-followed (tail -f) (#47). */
+  following?: boolean;
+  /** Toggle tail -f on this text file; omitted for non-text previews. */
+  onToggleFollow?: () => void;
   /** True when the decoded text looks like it isn't valid UTF-8. */
   encodingWarning?: boolean;
   /** True when the shown image is a downscaled WebP preview, not the original —
@@ -313,6 +319,12 @@ export function FilePreview({
       ?.querySelector("[data-active]")
       ?.scrollIntoView({ block: "center" });
   }, [findOpen, activeIdx, matches.length]);
+  // While following (tail -f), keep the view pinned to the newest lines (#47).
+  useEffect(() => {
+    if (following && textPaneRef.current) {
+      textPaneRef.current.scrollTop = textPaneRef.current.scrollHeight;
+    }
+  }, [following, text]);
 
   // A very large original (past LARGE_IMAGE_PIXELS) is NOT auto-fetched on zoom —
   // decoding one can spike memory / crash the tab, so it loads only on an explicit
@@ -691,6 +703,17 @@ export function FilePreview({
             >
               Hex
             </button>
+            {onToggleFollow && (
+              <button
+                type="button"
+                onClick={onToggleFollow}
+                className={cn(toolBtn, following && "text-term-accent")}
+                aria-pressed={following}
+                title="Follow file (tail -f)"
+              >
+                Follow
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {

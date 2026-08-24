@@ -78,6 +78,9 @@ const UPLOAD_CHUNK = 256 * 1024;
  * so dropping a folder of hundreds of files reads only a few into memory at a
  * time (each active upload holds its whole file) instead of all at once. */
 const MAX_INFLIGHT_UPLOADS = 3;
+// Cap the retained tail -f text so a long-running follow can't grow browser
+// memory / re-highlight cost without bound — keep only the trailing window (#47).
+const FOLLOW_MAX_TEXT = 512 * 1024;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** A file open in the preview modal (media viewed inline, or a download-only
@@ -212,6 +215,15 @@ export function SshSession({
     paths: [string, string];
     got: Record<string, DiffSide>;
   } | null>(null);
+  // Path currently being tail-followed in the preview (#47), or null. The ref
+  // mirror lets the ws message handler / reconnect re-issue the follow without
+  // depending on the state.
+  const [followPath, setFollowPath] = useState<string | null>(null);
+  const followPathRef = useRef<string | null>(null);
+  // Streaming UTF-8 decoder for follow chunks, so a multibyte character split
+  // across two ranges isn't corrupted into U+FFFD (Codex #4). Reset on each
+  // initial/reset frame.
+  const followDecoderRef = useRef<TextDecoder | null>(null);
   // Kept current so the memoized message handler / cleanup callbacks can reach
   // the editor operations without listing the (per-render) api object as a dep —
   // the same ref pattern the rest of this component uses for stable callbacks.
@@ -616,6 +628,12 @@ export function SshSession({
                 send({ t: "sftp-write-resume", path });
               }
             }
+            // Re-establish a live-follow on the fresh session — the old one was
+            // torn down when the previous socket dropped (Codex #5).
+            if (followPathRef.current) {
+              followDecoderRef.current = null;
+              send({ t: "sftp-follow", path: followPathRef.current });
+            }
           } else if (msg.state === "closed") {
             setStatusMessage(msg.message || "Connection closed.");
           } else if (msg.state === "error") {
@@ -684,6 +702,13 @@ export function SshSession({
           // linger after de-elevate (and a user-visible file shouldn't be assumed
           // still readable as root).
           clearPreviewCache();
+          // The bridge stopped any follow on a privilege change (it captured the
+          // old SFTP handle); re-issue it so it resumes under the new identity
+          // (Codex #8).
+          if (followPathRef.current) {
+            followDecoderRef.current = null;
+            send({ t: "sftp-follow", path: followPathRef.current });
+          }
           // Re-list the current directory so the view reflects root's access.
           listDir(cwdRef.current);
           break;
@@ -800,6 +825,33 @@ export function SshSession({
           // #49: surface the current filesystem's free/total as a toast.
           notify("info", formatDiskUsage(msg.total, msg.free));
           break;
+
+        case "sftp-follow-data": {
+          // #47: append tail -f output to the open text preview for this path.
+          // A fresh streaming decoder on each initial/reset frame; otherwise a
+          // persistent one carries partial multibyte chars across ranges.
+          if (msg.reset || msg.initial || !followDecoderRef.current) {
+            followDecoderRef.current = new TextDecoder();
+          }
+          const chunk = followDecoderRef.current.decode(
+            base64ToBytes(msg.dataB64),
+            { stream: true },
+          );
+          setPreview((prev) => {
+            if (!prev || prev.path !== msg.path || prev.kind !== "text")
+              return prev;
+            // The initial tail (and a truncation reset) replaces the view; later
+            // chunks append. Keep only the trailing window so memory is bounded.
+            const base = msg.reset || msg.initial ? "" : (prev.text ?? "");
+            const combined = base + chunk;
+            const text =
+              combined.length > FOLLOW_MAX_TEXT
+                ? combined.slice(combined.length - FOLLOW_MAX_TEXT)
+                : combined;
+            return { ...prev, text, streaming: false };
+          });
+          break;
+        }
 
         case "sftp-ok":
           if (msg.op === "write") {
@@ -1027,6 +1079,7 @@ export function SshSession({
     // don't linger on screen after logout or into a later connection.
     setDiff(null);
     diffPendingRef.current = null;
+    setFollowPath(null);
     setPreview(null);
     setPastePending(null);
     setDialog(null);
@@ -1291,6 +1344,32 @@ export function SshSession({
   const requestDiskUsage = () => {
     if (connected) send({ t: "sftp-df", path: cwd });
   };
+
+  // Toggle tail -f on the open preview's file (#47). Stops any prior follow.
+  const toggleFollow = (path: string) => {
+    if (followPath === path) {
+      send({ t: "sftp-follow-stop", path });
+      setFollowPath(null);
+      return;
+    }
+    if (followPath) send({ t: "sftp-follow-stop", path: followPath });
+    send({ t: "sftp-follow", path });
+    setFollowPath(path);
+  };
+  // Stop following automatically when the preview closes or steps to another
+  // file, so a background poll never lingers on the bridge.
+  useEffect(() => {
+    followPathRef.current = followPath;
+    if (!followPath) followDecoderRef.current = null;
+  }, [followPath]);
+  useEffect(() => {
+    if (followPath && preview?.path !== followPath) {
+      send({ t: "sftp-follow-stop", path: followPath });
+      // Defer the state update out of the effect body (a synchronous setState
+      // here trips React's cascading-render guard).
+      queueMicrotask(() => setFollowPath(null));
+    }
+  }, [preview?.path, followPath, send]);
 
   // Diff two selected text files (#76): read both via the editor read path into
   // the pending-diff collector, which opens the modal once both arrive.
@@ -1818,6 +1897,8 @@ export function SshSession({
                   preview.total !== undefined
                 }
                 truncated={preview.truncated}
+                following={followPath === preview.path}
+                onToggleFollow={() => toggleFollow(preview.path)}
                 encodingWarning={preview.encodingWarning}
                 optimized={preview.optimized}
                 originalDims={preview.originalDims}

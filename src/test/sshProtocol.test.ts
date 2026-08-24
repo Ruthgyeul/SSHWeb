@@ -21,6 +21,7 @@ import {
   isProbablyVideoFile,
   isResizablePreviewImage,
   isThumbnailable,
+  THUMBNAIL_PDF_MAX_BYTES,
   filePreviewKind,
   videoNeedsTranscode,
   THUMBNAIL_MAX_BYTES,
@@ -407,6 +408,18 @@ describe("isThumbnailable", () => {
     expect(
       isThumbnailable(mk({ name: "clip.webm", size: THUMBNAIL_MAX_BYTES + 1 })),
     ).toBe(true);
+  });
+
+  it("accepts a PDF up to the PDF cap (#77)", () => {
+    expect(isThumbnailable(mk({ name: "doc.pdf", size: 1024 }))).toBe(true);
+    expect(
+      isThumbnailable(mk({ name: "A.PDF", size: THUMBNAIL_PDF_MAX_BYTES })),
+    ).toBe(true);
+    expect(
+      isThumbnailable(
+        mk({ name: "big.pdf", size: THUMBNAIL_PDF_MAX_BYTES + 1 }),
+      ),
+    ).toBe(false);
   });
 
   it("rejects non-media files", () => {

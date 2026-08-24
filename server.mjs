@@ -213,6 +213,11 @@ const MAX_DOWNLOAD_BYTES =
 // per-type via `isThumbnailable` (32 MB images / 64 MB videos), which is a
 // bandwidth nicety rather than the security bound.
 const THUMBNAIL_VIDEO_MAX_BYTES = 64 * 1024 * 1024;
+// Max PDF size the bridge will read to rasterize a first-page thumbnail. Mirrors
+// `THUMBNAIL_PDF_MAX_BYTES` in src/lib/sshProtocol.ts and is enforced server-side
+// so a direct WebSocket client can't force a larger PDF read than the client
+// helper allows (#77 review).
+const THUMBNAIL_PDF_MAX_BYTES = 16 * 1024 * 1024;
 // Longest edge (px) of a generated thumbnail. Mirrors `THUMBNAIL_PIXELS` in
 // src/lib/sshProtocol.ts. Images are downscaled to fit this box and re-encoded
 // as WebP before being sent to the grid.
@@ -534,6 +539,8 @@ const CLIENT_MESSAGE_FIELDS = {
   "sftp-chmod": { path: "string", mode: "number" },
   "sftp-checksum": { path: "string" },
   "sftp-df": { path: "string" },
+  "sftp-follow": { path: "string" },
+  "sftp-follow-stop": { path: "string" },
   "sftp-download-dir": { path: "string" },
   "sftp-download-many": { paths: "string[]" },
   "thumb-purge": {},
@@ -2153,6 +2160,9 @@ wss.on("connection", (ws, req) => {
   // In-flight download read streams keyed by remote path, so they can be torn
   // down on cleanup or cancelled individually (`sftp-download-cancel`).
   const downloads = new Map();
+  // Active tail -f follows keyed by remote path → { timer, offset } (#47), so
+  // each poll timer can be cleared on stop / cleanup.
+  const follows = new Map();
   // Timestamp of the last genuine shell/SFTP activity (not latency pings), used
   // by the idle-timeout reaper below.
   let lastActivity = Date.now();
@@ -2267,6 +2277,9 @@ wss.on("connection", (ws, req) => {
       }
     }
     downloads.clear();
+    // Stop any tail -f poll timers (#47).
+    for (const f of follows.values()) clearInterval(f.timer);
+    follows.clear();
     // Revoke the media-stream capability so no further /api/preview requests can
     // reach this (now closed) session, and drop its dedicated SFTP channel.
     if (streamToken) {
@@ -2474,6 +2487,10 @@ wss.on("connection", (ws, req) => {
   /** Turn elevated (sudo) SFTP mode on or off for this session. */
   function handleSudo(msg) {
     const enable = msg.enable === true;
+    // A follow captured whichever SFTP handle was in effect when it started, so
+    // stop them all when the privilege mode changes — the client re-follows if
+    // still viewing the file (Codex #8).
+    stopAllFollows();
     if (!enable) {
       elevated = false;
       const prev = elevatedSftp;
@@ -2799,6 +2816,122 @@ wss.on("connection", (ws, req) => {
         }),
       );
     });
+  }
+
+  // tail -f (#47): send an initial tail of the file, then poll its size and
+  // stream appended bytes. A shrink (truncation / log rotation) resets to the
+  // new start. Bounded initial tail so a huge log doesn't dump whole.
+  const FOLLOW_INITIAL_TAIL = 64 * 1024; // last 64 KB shown on start
+  const FOLLOW_POLL_MS = 1000;
+  const FOLLOW_MAX_CHUNK = 512 * 1024; // cap bytes sent per poll
+  function handleFollow(msg) {
+    const path = String(msg.path || "");
+    if (!path || follows.has(path)) return;
+    // Reserve the path synchronously so duplicate `sftp-follow` frames arriving
+    // before the async SFTP setup finishes are deduped (they'd otherwise each
+    // spawn a timer, leaking all but the last) — Codex #1.
+    const state = { timer: null, offset: 0, reading: false, mtime: null };
+    follows.set(path, state);
+    withSftp((s) => {
+      if (follows.get(path) !== state) return; // stopped during setup
+      // Read [start, end) and, on success, advance the offset via `done(true)`.
+      // Only one range is ever in flight (the poll checks `state.reading`), and
+      // the offset is committed only after a successful read — so a slow or
+      // failed read can't reorder or drop output — Codex #2.
+      const readRange = (start, end, flags, done) => {
+        if (end <= start) return done(false);
+        const stream = s.createReadStream(path, { start, end: end - 1 });
+        const parts = [];
+        let errored = false;
+        stream.on("data", (d) => parts.push(d));
+        stream.on("error", (err) => {
+          errored = true;
+          sendError(err.message, "sftp");
+          done(false);
+        });
+        stream.on("end", () => {
+          if (errored || follows.get(path) !== state) return done(false);
+          const buf = Buffer.concat(parts);
+          bytesDown += buf.length;
+          sftpBytesDown += buf.length;
+          touch(); // new log activity keeps the session alive while following
+          send({
+            t: "sftp-follow-data",
+            path,
+            dataB64: buf.toString("base64"),
+            ...flags,
+          });
+          done(true);
+        });
+      };
+      s.stat(path, (err, st) => {
+        if (err || !st) {
+          follows.delete(path);
+          return sendError(err?.message || "Not found.", "sftp");
+        }
+        if (follows.get(path) !== state) return; // stopped during setup
+        const size = Math.max(0, st.size || 0);
+        state.offset = Math.max(0, size - FOLLOW_INITIAL_TAIL);
+        state.mtime = st.mtime;
+        state.reading = true;
+        readRange(state.offset, size, { initial: true }, (ok) => {
+          state.reading = false;
+          if (ok) state.offset = size;
+        });
+        const timer = setInterval(() => {
+          if (follows.get(path) !== state || state.reading) return;
+          // Backpressure: don't queue more follow frames while the socket's send
+          // buffer is congested — otherwise a slow client grows bridge memory
+          // and hurts every session — Codex #3.
+          if (ws.bufferedAmount > WS_BACKPRESSURE_HIGH_BYTES) return;
+          s.stat(path, (e2, st2) => {
+            if (e2 || !st2 || follows.get(path) !== state || state.reading)
+              return;
+            const sz = Math.max(0, st2.size || 0);
+            // Reset on truncation, or on a rotation that swapped in a new file
+            // whose mtime changed without the size growing past our offset —
+            // Codex #9 (best-effort without an inode over SFTP).
+            const rotated =
+              sz < state.offset ||
+              (sz <= state.offset &&
+                state.mtime != null &&
+                st2.mtime !== state.mtime);
+            state.mtime = st2.mtime;
+            if (rotated) state.offset = 0;
+            if (sz <= state.offset) return;
+            const start = state.offset;
+            const end = Math.min(sz, start + FOLLOW_MAX_CHUNK);
+            state.reading = true;
+            readRange(start, end, rotated ? { reset: true } : {}, (ok) => {
+              state.reading = false;
+              if (ok) state.offset = end;
+            });
+          });
+        }, FOLLOW_POLL_MS);
+        timer.unref?.();
+        state.timer = timer;
+      });
+    });
+  }
+
+  function handleFollowStop(msg) {
+    stopFollow(msg.path);
+  }
+
+  /** Stop a single follow (poll timer + map entry). */
+  function stopFollow(path) {
+    const f = follows.get(path);
+    if (f) {
+      if (f.timer) clearInterval(f.timer);
+      follows.delete(path);
+    }
+  }
+
+  /** Stop every active follow — used when the SFTP privilege mode changes, since
+   * each follow captured the SFTP handle in effect at start (Codex #8). */
+  function stopAllFollows() {
+    for (const [, f] of follows) if (f.timer) clearInterval(f.timer);
+    follows.clear();
   }
 
   function handleConnect(msg) {
@@ -3253,9 +3386,9 @@ wss.on("connection", (ws, req) => {
           // frame) to a small WebP, and compute its dominant color for a cheap
           // grid placeholder (#100). Returns { buf, bg } or null if sharp can't
           // decode the bytes.
-          const toWebpThumb = async (bytes, rotate) => {
+          const toWebpThumb = async (bytes, rotate, sharpOpts) => {
             try {
-              let pipe = sharp(bytes);
+              let pipe = sharp(bytes, sharpOpts);
               if (rotate) pipe = pipe.rotate(); // honour EXIF orientation
               const buf = await pipe
                 .resize(THUMBNAIL_PIXELS, THUMBNAIL_PIXELS, {
@@ -3286,6 +3419,12 @@ wss.on("connection", (ws, req) => {
           if (statErr || stats.size > THUMBNAIL_VIDEO_MAX_BYTES || !sharp) {
             return skipThumb();
           }
+          // Enforce the PDF-specific bound before reading the file, so a direct
+          // client can't force a larger PDF read than the client helper allows
+          // (#77 review).
+          if (/\.pdf$/i.test(name) && stats.size > THUMBNAIL_PDF_MAX_BYTES) {
+            return skipThumb();
+          }
           // Serve straight from the in-memory cache when we already hold this
           // exact tile (same identity + path + size:mtime): no SSH read, no
           // sharp/ffmpeg transcode, so a re-visited or re-logged-in grid
@@ -3310,6 +3449,20 @@ wss.on("connection", (ws, req) => {
                   s.readFile(msg.path, async (err, buffer) => {
                     try {
                       if (err) return skipThumb();
+                      // PDF: rasterize the first page (needs sharp built with PDF
+                      // support; falls through to skip when unavailable) (#77).
+                      // Rendered at a higher density than the 72dpi default so the
+                      // downscaled tile isn't blurry; no EXIF rotate for a PDF.
+                      if (/\.pdf$/i.test(name)) {
+                        const pdfThumb = await toWebpThumb(buffer, false, {
+                          density: 100,
+                        });
+                        if (pdfThumb) {
+                          thumbCachePut(cacheKey, pdfThumb.buf, pdfThumb.bg);
+                          return sendThumb(pdfThumb);
+                        }
+                        return skipThumb();
+                      }
                       // Image: decode + downscale straight to WebP.
                       const imageThumb = await toWebpThumb(buffer, true);
                       if (imageThumb) {
@@ -3921,6 +4074,14 @@ wss.on("connection", (ws, req) => {
 
         case "sftp-read":
           handleRead(msg);
+          break;
+
+        case "sftp-follow":
+          handleFollow(msg);
+          break;
+
+        case "sftp-follow-stop":
+          handleFollowStop(msg);
           break;
 
         case "sftp-write":

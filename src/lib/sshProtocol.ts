@@ -218,6 +218,11 @@ export type ClientMessage =
   // Query filesystem disk usage for `path` (df), via the OpenSSH statvfs SFTP
   // extension. Not all servers support it; unsupported → an error frame.
   | { t: "sftp-df"; path: string }
+  // Live-follow a growing text file (tail -f): the bridge sends an initial tail
+  // then polls the file size and streams appended bytes as `sftp-follow-data`.
+  | { t: "sftp-follow"; path: string }
+  // Stop following the file opened with `sftp-follow`.
+  | { t: "sftp-follow-stop"; path: string }
   // Download a directory as a (store-only) zip archive.
   | { t: "sftp-download-dir"; path: string }
   // Download several selected entries (files and/or directories) as a single
@@ -280,6 +285,8 @@ export const CLIENT_MESSAGE_FIELDS: Record<
   "sftp-chmod": { path: "string", mode: "number" },
   "sftp-checksum": { path: "string" },
   "sftp-df": { path: "string" },
+  "sftp-follow": { path: "string" },
+  "sftp-follow-stop": { path: "string" },
   "sftp-download-dir": { path: "string" },
   "sftp-download-many": { paths: "string[]" },
   "thumb-purge": {},
@@ -451,6 +458,16 @@ export type ServerMessage =
   // Result of a `sftp-df` request: total/free bytes of the filesystem holding
   // the queried path.
   | { t: "sftp-df"; path: string; total: number; free: number }
+  // A chunk of appended text for a followed file (tail -f). `reset` marks a
+  // truncation/rotation (the client should clear its buffer first). `initial`
+  // marks the one-time starting tail.
+  | {
+      t: "sftp-follow-data";
+      path: string;
+      dataB64: string;
+      reset?: boolean;
+      initial?: boolean;
+    }
   // Optional per-session capability advertisement, sent once the session is
   // ready. `sudo` reflects whether the server permits elevated (root) file
   // access (`SSH_ALLOW_SUDO`), so the client only shows the sudo toggle when the
@@ -1069,7 +1086,19 @@ export function isThumbnailable(entry: FileEntry): boolean {
   if (isProbablyVideoFile(entry.name)) {
     return entry.size <= THUMBNAIL_VIDEO_MAX_BYTES;
   }
+  // PDFs get a first-page thumbnail when the bridge's `sharp` has PDF support
+  // (else the tile gracefully falls back to the file icon). Bounded smaller than
+  // images/videos since rasterizing a huge PDF is expensive (#77).
+  if (isPdfFile(entry.name)) return entry.size <= THUMBNAIL_PDF_MAX_BYTES;
   return false;
+}
+
+/** Max PDF size (bytes) the grid will fetch to rasterize a first-page thumbnail. */
+export const THUMBNAIL_PDF_MAX_BYTES = 16 * 1024 * 1024;
+
+/** Whether a filename looks like a PDF (for thumbnailing / preview routing). */
+export function isPdfFile(name: string): boolean {
+  return /\.pdf$/i.test(name);
 }
 
 /**
