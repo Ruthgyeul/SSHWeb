@@ -1086,7 +1086,19 @@ export function isThumbnailable(entry: FileEntry): boolean {
   if (isProbablyVideoFile(entry.name)) {
     return entry.size <= THUMBNAIL_VIDEO_MAX_BYTES;
   }
+  // PDFs get a first-page thumbnail when the bridge's `sharp` has PDF support
+  // (else the tile gracefully falls back to the file icon). Bounded smaller than
+  // images/videos since rasterizing a huge PDF is expensive (#77).
+  if (isPdfFile(entry.name)) return entry.size <= THUMBNAIL_PDF_MAX_BYTES;
   return false;
+}
+
+/** Max PDF size (bytes) the grid will fetch to rasterize a first-page thumbnail. */
+export const THUMBNAIL_PDF_MAX_BYTES = 16 * 1024 * 1024;
+
+/** Whether a filename looks like a PDF (for thumbnailing / preview routing). */
+export function isPdfFile(name: string): boolean {
+  return /\.pdf$/i.test(name);
 }
 
 /**

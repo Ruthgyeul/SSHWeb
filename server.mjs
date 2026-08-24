@@ -3327,9 +3327,9 @@ wss.on("connection", (ws, req) => {
           // frame) to a small WebP, and compute its dominant color for a cheap
           // grid placeholder (#100). Returns { buf, bg } or null if sharp can't
           // decode the bytes.
-          const toWebpThumb = async (bytes, rotate) => {
+          const toWebpThumb = async (bytes, rotate, sharpOpts) => {
             try {
-              let pipe = sharp(bytes);
+              let pipe = sharp(bytes, sharpOpts);
               if (rotate) pipe = pipe.rotate(); // honour EXIF orientation
               const buf = await pipe
                 .resize(THUMBNAIL_PIXELS, THUMBNAIL_PIXELS, {
@@ -3384,6 +3384,20 @@ wss.on("connection", (ws, req) => {
                   s.readFile(msg.path, async (err, buffer) => {
                     try {
                       if (err) return skipThumb();
+                      // PDF: rasterize the first page (needs sharp built with PDF
+                      // support; falls through to skip when unavailable) (#77).
+                      // Rendered at a higher density than the 72dpi default so the
+                      // downscaled tile isn't blurry; no EXIF rotate for a PDF.
+                      if (/\.pdf$/i.test(name)) {
+                        const pdfThumb = await toWebpThumb(buffer, false, {
+                          density: 100,
+                        });
+                        if (pdfThumb) {
+                          thumbCachePut(cacheKey, pdfThumb.buf, pdfThumb.bg);
+                          return sendThumb(pdfThumb);
+                        }
+                        return skipThumb();
+                      }
                       // Image: decode + downscale straight to WebP.
                       const imageThumb = await toWebpThumb(buffer, true);
                       if (imageThumb) {
