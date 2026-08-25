@@ -61,6 +61,8 @@ All notable changes to this project are documented here. The format is based on
 
 - Removed the terminal color-theme presets and the light/system theme toggle;
   SSHWeb now uses a single fixed dark theme.
+- Removed the terminal scrollback search (the in-terminal "find" bar and its
+  Ctrl/⌘+F shortcut) and the per-file **duplicate** row action.
 - Refactor: the inline-editor state moved out of `SshSession` into a `useEditors`
   hook, and the file browser's list/grid views now share one row-open helper.
 - Numerous bridge limits are now env-tunable (stream chunk size, WS backpressure

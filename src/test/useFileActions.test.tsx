@@ -73,6 +73,11 @@ describe("useFileActions", () => {
     const { actions, send, lastDialog } = setup();
     // A plain name → empty file.
     actions.onCreate();
+    // A slash-only name normalizes to nothing and must be rejected, not
+    // silently accepted (which would close the dialog with nothing created).
+    expect(lastDialog().validate?.("/")).toBeTruthy();
+    expect(lastDialog().validate?.("///")).toBeTruthy();
+    expect(lastDialog().validate?.("logs/")).toBeNull();
     lastDialog().onConfirm("  notes.txt  ");
     expect(send).toHaveBeenCalledWith({
       t: "sftp-write",

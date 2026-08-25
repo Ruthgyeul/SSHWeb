@@ -84,7 +84,15 @@ export function useFileActions({ cwd, send, setDialog }: FileActionsDeps) {
           placeholder: "e.g. notes.txt or logs/",
         },
         confirmLabel: "Create",
-        validate: (v) => (v.trim() ? null : "Please enter a name."),
+        validate: (v) => {
+          const raw = v.trim();
+          if (!raw) return "Please enter a name.";
+          // A slash-only name ("/", "///") normalizes to nothing — reject it
+          // rather than silently closing the dialog with no file created.
+          if (raw.endsWith("/") && !raw.replace(/\/+$/, ""))
+            return "Please enter a folder name.";
+          return null;
+        },
         onConfirm: (v) => {
           const raw = v.trim();
           if (raw.endsWith("/")) {
