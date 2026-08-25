@@ -27,7 +27,6 @@ import {
   DownloadIcon,
   FilePlusIcon,
   FolderOpenIcon,
-  FolderPlusIcon,
   FolderUploadIcon,
   GridIcon,
   LevelUpIcon,
@@ -284,10 +283,8 @@ export function FileBrowser({
   onDelete,
   onDeleteMany,
   onUpload,
-  onMkdir,
-  onTouch,
+  onCreate,
   onRename,
-  onCopy,
   onMove,
   onChmod,
   onDiff,
@@ -341,11 +338,10 @@ export function FileBrowser({
   onDelete: (entry: FileEntry) => void;
   onDeleteMany: (entries: FileEntry[]) => void;
   onUpload: (file: File, relPath?: string) => void;
-  onMkdir: () => void;
-  onTouch: () => void;
+  /** Create a file or directory in the CWD — a name ending in `/` makes a
+   * directory, otherwise an empty file. */
+  onCreate: () => void;
   onRename: (entry: FileEntry) => void;
-  /** Duplicate an entry in the current directory (copy with a new name). */
-  onCopy: (entry: FileEntry) => void;
   /** Move an entry (absolute `fromPath`) into directory `toDir` (drag-drop). */
   onMove: (fromPath: string, toDir: string) => void;
   onChmod: (entry: FileEntry) => void;
@@ -396,6 +392,9 @@ export function FileBrowser({
   // Go-to-path bar (#69): absolute-path navigation box, toggled from the toolbar.
   const [showGoto, setShowGoto] = useState(false);
   const [gotoInput, setGotoInput] = useState("");
+  // The merged Upload button opens a tiny menu to pick files vs. a folder
+  // (a single native input can't offer both).
+  const [showUploadMenu, setShowUploadMenu] = useState(false);
   // List vs. grid (thumbnail) layout, persisted across sessions/tabs.
   const [viewMode, setViewMode] = useFileViewMode();
   // Sort field + direction, persisted across sessions/tabs. `toggleSort` flips
@@ -617,7 +616,9 @@ export function FileBrowser({
           own row means the path never competes with the action buttons for
           width, so it isn't squeezed/truncated on desktop or mobile. */}
       <div className="flex flex-col gap-2 border-b border-term-border px-3 py-2">
-        {/* Path row: parent-up + breadcrumb (fills the row) + refresh. */}
+        {/* Path row: parent-up + breadcrumb (refresh lives inside it, at the
+            right) + the path-scoped actions (copy path / go-to / search),
+            right-aligned. */}
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -632,87 +633,104 @@ export function FileBrowser({
           >
             <LevelUpIcon />
           </button>
-          {/* Breadcrumb: click any segment to jump straight to that directory. */}
+          {/* Path box: normally a clickable breadcrumb (each segment navigates)
+              with Refresh at the right. Toggling go-to (the ⌖ button) turns this
+              same box into an editable path field — type an absolute path and
+              Enter to jump there. */}
           <nav
-            className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded bg-term-panel px-2 py-1 text-xs"
+            className="flex min-w-0 flex-1 items-center gap-1 rounded bg-term-panel px-2 py-1 text-xs"
             aria-label="Current path"
           >
-            {segments.length === 0 ? (
-              <span className="truncate text-term-dim">{cwd || "~"}</span>
+            {showGoto ? (
+              <form
+                className="flex min-w-0 flex-1 items-center"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const next = gotoInput.trim();
+                  if (next) {
+                    onNavigate(next);
+                    setShowGoto(false);
+                  }
+                }}
+              >
+                <input
+                  type="text"
+                  value={gotoInput}
+                  onChange={(e) => setGotoInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setShowGoto(false);
+                  }}
+                  placeholder="Go to path, e.g. /var/log"
+                  autoFocus
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className="min-w-0 flex-1 bg-transparent font-mono text-xs text-term-text outline-none placeholder:text-term-faint"
+                  aria-label="Go to path"
+                />
+              </form>
             ) : (
               <>
+                <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+                  {segments.length === 0 ? (
+                    <span className="truncate text-term-dim">{cwd || "~"}</span>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => onNavigate("/")}
+                        disabled={loading}
+                        className="flex-none text-term-muted hover:text-term-accent"
+                        title="Root"
+                      >
+                        /
+                      </button>
+                      {segments.map((seg, i) => (
+                        <span
+                          key={seg.path}
+                          className="flex flex-none items-center gap-0.5"
+                        >
+                          {i > 0 && <span className="text-term-faint">/</span>}
+                          <button
+                            type="button"
+                            onClick={() => onNavigate(seg.path)}
+                            disabled={loading}
+                            title={seg.name}
+                            className={cn(
+                              // No width cap: the breadcrumb scrolls
+                              // horizontally, so a long segment stays fully
+                              // readable (with a title tooltip) instead of
+                              // being ellipsized.
+                              "whitespace-nowrap",
+                              i === segments.length - 1
+                                ? "text-term-dim"
+                                : "text-term-muted hover:text-term-accent",
+                            )}
+                          >
+                            {seg.name}
+                          </button>
+                        </span>
+                      ))}
+                    </>
+                  )}
+                </div>
                 <button
                   type="button"
-                  onClick={() => onNavigate("/")}
+                  onClick={onRefresh}
                   disabled={loading}
                   className="flex-none text-term-muted hover:text-term-accent"
-                  title="Root"
+                  title="Refresh"
+                  aria-label="Refresh"
                 >
-                  /
+                  <RefreshIcon />
                 </button>
-                {segments.map((seg, i) => (
-                  <span
-                    key={seg.path}
-                    className="flex flex-none items-center gap-0.5"
-                  >
-                    {i > 0 && <span className="text-term-faint">/</span>}
-                    <button
-                      type="button"
-                      onClick={() => onNavigate(seg.path)}
-                      disabled={loading}
-                      title={seg.name}
-                      className={cn(
-                        // No width cap: the breadcrumb row scrolls horizontally,
-                        // so a long segment stays fully readable (with a title
-                        // tooltip) instead of being ellipsized.
-                        "whitespace-nowrap",
-                        i === segments.length - 1
-                          ? "text-term-dim"
-                          : "text-term-muted hover:text-term-accent",
-                      )}
-                    >
-                      {seg.name}
-                    </button>
-                  </span>
-                ))}
               </>
             )}
           </nav>
           <button
             type="button"
-            onClick={onRefresh}
-            disabled={loading}
-            className="flex-none rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
-            title="Refresh"
-            aria-label="Refresh"
-          >
-            <RefreshIcon />
-          </button>
-        </div>
-        {/* Actions row: everything else, wrapping freely under the path. */}
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={onOpenTerminalHere}
-            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
-            title="Open terminal here (cd to this folder)"
-            aria-label="Open terminal here"
-          >
-            <TerminalIcon />
-          </button>
-          <button
-            type="button"
-            onClick={onDiskUsage}
-            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
-            title="Show disk usage (df)"
-            aria-label="Show disk usage"
-          >
-            <DiskIcon />
-          </button>
-          <button
-            type="button"
             onClick={() => onCopyPath(cwd)}
-            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
+            className="flex-none rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
             title="Copy current path"
             aria-label="Copy current path"
           >
@@ -720,10 +738,17 @@ export function FileBrowser({
           </button>
           <button
             type="button"
-            onClick={() => setShowGoto((v) => !v)}
+            onClick={() =>
+              setShowGoto((v) => {
+                const next = !v;
+                // Seed the editable field with the current path when opening.
+                if (next) setGotoInput(cwd || "");
+                return next;
+              })
+            }
             aria-pressed={showGoto}
             className={cn(
-              "rounded border px-2 py-1 text-xs transition-colors",
+              "flex-none rounded border px-2 py-1 text-xs transition-colors",
               showGoto
                 ? "border-term-accent/50 bg-term-accent/15 text-term-accent"
                 : "border-term-border text-term-muted hover:text-term-text",
@@ -738,7 +763,7 @@ export function FileBrowser({
             onClick={() => setShowSearch((v) => !v)}
             aria-pressed={showSearch}
             className={cn(
-              "rounded border px-2 py-1 text-xs transition-colors",
+              "flex-none rounded border px-2 py-1 text-xs transition-colors",
               showSearch
                 ? "border-term-accent/50 bg-term-accent/15 text-term-accent"
                 : "border-term-border text-term-muted hover:text-term-text",
@@ -748,7 +773,10 @@ export function FileBrowser({
           >
             <SearchIcon />
           </button>
-          {/* List / grid layout toggle */}
+        </div>
+        {/* Actions row: view controls on the left, file actions on the right. */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* List / grid layout toggle (far left) */}
           <div
             className="flex overflow-hidden rounded border border-term-border"
             role="group"
@@ -785,40 +813,7 @@ export function FileBrowser({
               <GridIcon className="h-4 w-4" />
             </button>
           </div>
-          {/* Sort control — grid view has no column headers to click, so it gets a
-            compact segmented sort selector here (the list view uses its
-            clickable table headers instead). */}
-          {viewMode === "grid" && (
-            <div
-              className="flex overflow-hidden rounded border border-term-border"
-              role="group"
-              aria-label="Sort by"
-            >
-              {SORT_OPTIONS.map((opt, i) => (
-                <button
-                  key={opt.key}
-                  type="button"
-                  onClick={() => toggleSort(opt.key)}
-                  aria-pressed={sort.key === opt.key}
-                  className={cn(
-                    "px-2 py-1 text-xs transition-colors",
-                    i > 0 && "border-l border-term-border",
-                    sort.key === opt.key
-                      ? "bg-term-accent/15 text-term-accent"
-                      : "text-term-muted hover:text-term-text",
-                  )}
-                  title={`Sort by ${opt.label.toLowerCase()}`}
-                >
-                  {opt.label}
-                  {sort.key === opt.key && (
-                    <span className="ml-1" aria-hidden>
-                      {sortArrow}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
+          {/* sudo — immediately right of the view toggle */}
           {canElevate && (
             <button
               type="button"
@@ -850,48 +845,126 @@ export function FileBrowser({
               />
             </button>
           )}
-          <button
-            type="button"
-            onClick={onMkdir}
-            disabled={loading}
-            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
-            title="New folder"
-            aria-label="New folder"
-          >
-            <FolderPlusIcon />
-          </button>
-          <button
-            type="button"
-            onClick={onTouch}
-            disabled={loading}
-            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
-            title="Create an empty file"
-            aria-label="New file"
-          >
-            <FilePlusIcon />
-          </button>
-          <button
-            type="button"
-            onClick={() => uploadRef.current?.click()}
-            disabled={loading}
-            className="flex items-center gap-1.5 rounded border border-term-accent/40 bg-term-accent/10 px-2 py-1 text-xs text-term-accent hover:bg-term-accent/20"
-            title="Upload files"
-            aria-label="Upload files"
-          >
-            <UploadIcon className="h-4 w-4" />
-            Upload
-          </button>
-          <button
-            type="button"
-            onClick={() => folderRef.current?.click()}
-            disabled={loading}
-            className="flex items-center gap-1.5 rounded border border-term-accent/40 bg-term-accent/10 px-2 py-1 text-xs text-term-accent hover:bg-term-accent/20"
-            title="Upload a folder (preserves its subdirectories)"
-            aria-label="Upload folder"
-          >
-            <FolderUploadIcon className="h-4 w-4" />
-            Folder
-          </button>
+          {/* Sort control — grid view has no column headers to click, so it gets
+              a compact segmented sort selector here (the list view uses its
+              clickable table headers instead). */}
+          {viewMode === "grid" && (
+            <div
+              className="flex overflow-hidden rounded border border-term-border"
+              role="group"
+              aria-label="Sort by"
+            >
+              {SORT_OPTIONS.map((opt, i) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => toggleSort(opt.key)}
+                  aria-pressed={sort.key === opt.key}
+                  className={cn(
+                    "px-2 py-1 text-xs transition-colors",
+                    i > 0 && "border-l border-term-border",
+                    sort.key === opt.key
+                      ? "bg-term-accent/15 text-term-accent"
+                      : "text-term-muted hover:text-term-text",
+                  )}
+                  title={`Sort by ${opt.label.toLowerCase()}`}
+                >
+                  {opt.label}
+                  {sort.key === opt.key && (
+                    <span className="ml-1" aria-hidden>
+                      {sortArrow}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* File actions, right-aligned: terminal · df · new · upload (last) */}
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onOpenTerminalHere}
+              className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
+              title="Open terminal here (cd to this folder)"
+              aria-label="Open terminal here"
+            >
+              <TerminalIcon />
+            </button>
+            <button
+              type="button"
+              onClick={onDiskUsage}
+              className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
+              title="Show disk usage (df)"
+              aria-label="Show disk usage"
+            >
+              <DiskIcon />
+            </button>
+            <button
+              type="button"
+              onClick={onCreate}
+              disabled={loading}
+              className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
+              title="New file or folder (end the name with / to make a folder)"
+              aria-label="New file or folder"
+            >
+              <FilePlusIcon />
+            </button>
+            {/* Merged upload: one button, a menu picks files vs. a folder. */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowUploadMenu((v) => !v)}
+                disabled={loading}
+                aria-haspopup="menu"
+                aria-expanded={showUploadMenu}
+                className="flex items-center gap-1.5 rounded border border-term-accent/40 bg-term-accent/10 px-2 py-1 text-xs text-term-accent hover:bg-term-accent/20"
+                title="Upload files or a folder"
+                aria-label="Upload"
+              >
+                <UploadIcon className="h-4 w-4" />
+                Upload
+              </button>
+              {showUploadMenu && (
+                <>
+                  {/* Click-away backdrop */}
+                  <div
+                    className="fixed inset-0 z-10"
+                    onClick={() => setShowUploadMenu(false)}
+                    aria-hidden
+                  />
+                  <div
+                    role="menu"
+                    className="absolute right-0 z-20 mt-1 flex min-w-[8rem] flex-col overflow-hidden rounded border border-term-border bg-term-panel shadow-lg"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowUploadMenu(false);
+                        uploadRef.current?.click();
+                      }}
+                      className="flex items-center gap-2 px-3 py-1.5 text-left text-xs text-term-muted hover:bg-term-accent/10 hover:text-term-text"
+                    >
+                      <UploadIcon className="h-4 w-4" />
+                      Files
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowUploadMenu(false);
+                        folderRef.current?.click();
+                      }}
+                      className="flex items-center gap-2 border-t border-term-border px-3 py-1.5 text-left text-xs text-term-muted hover:bg-term-accent/10 hover:text-term-text"
+                    >
+                      <FolderUploadIcon className="h-4 w-4" />
+                      Folder
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
           <input
             ref={uploadRef}
             type="file"
@@ -930,48 +1003,6 @@ export function FileBrowser({
             sudo.
           </span>
         </div>
-      )}
-
-      {/* Go-to-path bar (#69): type an absolute path and Enter to navigate. */}
-      {showGoto && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const next = gotoInput.trim();
-            if (next) {
-              onNavigate(next);
-              setShowGoto(false);
-              setGotoInput("");
-            }
-          }}
-          className="flex items-center gap-2 border-b border-term-border bg-term-panel/30 px-3 py-1.5"
-        >
-          <TargetIcon className="text-term-faint" />
-          <input
-            type="text"
-            value={gotoInput}
-            onChange={(e) => setGotoInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                setShowGoto(false);
-                setGotoInput("");
-              }
-            }}
-            placeholder="Go to path, e.g. /var/log"
-            autoFocus
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            className="min-w-0 flex-1 rounded border border-term-border bg-term-bg px-2 py-1 font-mono text-xs text-term-text outline-none placeholder:text-term-faint focus:border-term-accent"
-            aria-label="Go to path"
-          />
-          <button
-            type="submit"
-            className="rounded border border-term-accent/40 bg-term-accent/10 px-2 py-1 text-xs text-term-accent hover:bg-term-accent/20"
-          >
-            Go
-          </button>
-        </form>
       )}
 
       {/* Recursive subtree search bar */}
@@ -1207,7 +1238,7 @@ export function FileBrowser({
                 <FolderOpenIcon className="h-8 w-8 opacity-60" />
                 <p className="text-sm">This directory is empty</p>
                 <p className="text-xs text-term-faint">
-                  Drag files here, or use Upload / New file to add one.
+                  Drag files here, or use Upload / New to add one.
                 </p>
               </div>
             )}
@@ -1352,7 +1383,6 @@ export function FileBrowser({
                             onDownload={onDownload}
                             onDownloadDir={onDownloadDir}
                             onRename={onRename}
-                            onCopy={onCopy}
                             onChmod={onChmod}
                             onDelete={onDelete}
                           />
@@ -1474,7 +1504,6 @@ export function FileBrowser({
                             onDownload={onDownload}
                             onDownloadDir={onDownloadDir}
                             onRename={onRename}
-                            onCopy={onCopy}
                             onChmod={onChmod}
                             onDelete={onDelete}
                           />

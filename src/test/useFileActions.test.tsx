@@ -20,11 +20,11 @@ const dir: FileEntry = {
   mode: 0o755,
 };
 
-function setup(entries: FileEntry[] = [file]) {
+function setup() {
   const send = vi.fn<(m: ClientMessage) => void>();
   const setDialog = vi.fn<(r: DialogRequest | null) => void>();
   const { result } = renderHook(() =>
-    useFileActions({ cwd: "/home/me", entries, send, setDialog }),
+    useFileActions({ cwd: "/home/me", send, setDialog }),
   );
   const lastDialog = () =>
     setDialog.mock.calls.at(-1)?.[0] as DialogRequest & {
@@ -69,13 +69,27 @@ describe("useFileActions", () => {
     expect(setDialog).not.toHaveBeenCalled();
   });
 
-  it("makes a directory joined under cwd", () => {
+  it("creates a file, or a folder when the name ends with /", () => {
     const { actions, send, lastDialog } = setup();
-    actions.onMkdir();
-    lastDialog().onConfirm("  new  ");
+    // A plain name → empty file.
+    actions.onCreate();
+    // A slash-only name normalizes to nothing and must be rejected, not
+    // silently accepted (which would close the dialog with nothing created).
+    expect(lastDialog().validate?.("/")).toBeTruthy();
+    expect(lastDialog().validate?.("///")).toBeTruthy();
+    expect(lastDialog().validate?.("logs/")).toBeNull();
+    lastDialog().onConfirm("  notes.txt  ");
+    expect(send).toHaveBeenCalledWith({
+      t: "sftp-write",
+      path: "/home/me/notes.txt",
+      dataB64: "",
+    });
+    // A trailing slash → directory (slash stripped).
+    actions.onCreate();
+    lastDialog().onConfirm("logs/");
     expect(send).toHaveBeenCalledWith({
       t: "sftp-mkdir",
-      path: "/home/me/new",
+      path: "/home/me/logs",
     });
   });
 
@@ -106,13 +120,6 @@ describe("useFileActions", () => {
       from: "/home/me/a.txt",
       to: "/home/me/archive/a.txt",
     });
-  });
-
-  it("suggests a non-colliding duplicate name", () => {
-    const { actions, lastDialog } = setup([file]);
-    actions.onCopy(file);
-    const d = lastDialog();
-    expect(d.input?.initialValue).toBe("a copy.txt");
   });
 
   it("validates the chmod octal mode", () => {

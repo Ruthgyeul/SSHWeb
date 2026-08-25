@@ -3,7 +3,6 @@
 import { type FileEntry } from "@/lib/sshProtocol";
 import { cn } from "@/lib/utils";
 import {
-  CopyIcon,
   DownloadIcon,
   EyeIcon,
   KeyIcon,
@@ -35,17 +34,16 @@ interface FileEntryActionsProps {
   onDownload: (path: string) => void;
   onDownloadDir: (path: string) => void;
   onRename: (entry: FileEntry) => void;
-  onCopy: (entry: FileEntry) => void;
   onChmod: (entry: FileEntry) => void;
   onDelete: (entry: FileEntry) => void;
 }
 
-/** The per-entry action buttons (preview / edit / download / mv / cp / chmod /
- * delete) shared by the file browser's list rows and grid tiles. A file with a
- * rich preview (media/PDF/Markdown) gets a single 👁; an editable text file
- * gets ✎ (reading a text file is done in the editor, so it needs no separate
- * read-only preview); a directory downloads as a zip. `chmod` is list-only via
- * `showChmod`. */
+/** The per-entry action buttons shared by the file browser's list rows and grid
+ * tiles, in a fixed order: preview / edit / mv / chmod / download / delete. A
+ * file with a rich preview (media/PDF/Markdown) gets a single 👁; an editable
+ * text file gets ✎ (reading a text file is done in the editor, so it needs no
+ * separate read-only preview); a directory downloads as a zip. `chmod` is
+ * list-only via `showChmod`. */
 export function FileEntryActions({
   entry,
   target,
@@ -59,7 +57,6 @@ export function FileEntryActions({
   onDownload,
   onDownloadDir,
   onRename,
-  onCopy,
   onChmod,
   onDelete,
 }: FileEntryActionsProps) {
@@ -89,30 +86,12 @@ export function FileEntryActions({
       )}
       <button
         type="button"
-        onClick={() => (isDir ? onDownloadDir(target) : onDownload(target))}
-        className={cn(actionBtn, "hover:text-term-accent")}
-        title={isDir ? "Download as zip" : "Download"}
-        aria-label={isDir ? "Download as zip" : "Download"}
-      >
-        <DownloadIcon className="h-4 w-4" />
-      </button>
-      <button
-        type="button"
         onClick={() => onRename(entry)}
         className={cn(actionBtn, "hover:text-term-text")}
         title="Move / rename"
         aria-label="Move / rename"
       >
         <MoveIcon className="h-4 w-4" />
-      </button>
-      <button
-        type="button"
-        onClick={() => onCopy(entry)}
-        className={cn(actionBtn, "hover:text-term-text")}
-        title="Duplicate"
-        aria-label="Duplicate"
-      >
-        <CopyIcon className="h-4 w-4" />
       </button>
       {showChmod && (
         <button
@@ -125,6 +104,15 @@ export function FileEntryActions({
           <KeyIcon className="h-4 w-4" />
         </button>
       )}
+      <button
+        type="button"
+        onClick={() => (isDir ? onDownloadDir(target) : onDownload(target))}
+        className={cn(actionBtn, "hover:text-term-accent")}
+        title={isDir ? "Download as zip" : "Download"}
+        aria-label={isDir ? "Download as zip" : "Download"}
+      >
+        <DownloadIcon className="h-4 w-4" />
+      </button>
       <button
         type="button"
         onClick={() => onDelete(entry)}

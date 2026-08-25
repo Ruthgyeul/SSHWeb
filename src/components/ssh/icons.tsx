@@ -207,12 +207,13 @@ export function InfoIcon({ className }: { className?: string }) {
   );
 }
 
-/** Four-way arrows — move / rename (mv). */
+/** Arrow into a destination box — move / rename (mv). */
 export function MoveIcon({ className }: { className?: string }) {
   return (
     <Svg className={className}>
-      <path d="M12 3v18M3 12h18" />
-      <path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3" />
+      <path d="M3 12h10" />
+      <path d="m9 8 4 4-4 4" />
+      <path d="M16 5h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-3" />
     </Svg>
   );
 }

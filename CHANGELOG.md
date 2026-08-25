@@ -14,11 +14,19 @@ All notable changes to this project are documented here. The format is based on
   folder), recursive chmod, opt-in desktop notifications on an unexpected
   disconnect, remote disk usage (df), and a two-file diff view.
 - File-browser UX: always-on Size/Perms/Owner/Modified columns (Owner parsed
-  from the SFTP long name), hidden (dotfile) entries always shown, a go-to-path
-  box, a copy current-path action, and spacebar quicklook.
+  from the SFTP long name), hidden (dotfile) entries always shown, and spacebar
+  quicklook.
+- Reorganized file-browser toolbar: a path row (parent-up · breadcrumb with
+  Refresh inside it · copy-path / go-to / search on the right) and an actions
+  row (list/grid + sudo on the left; open-terminal · df · New · Upload on the
+  right). Clicking go-to turns the path box into an editable field (Enter to
+  jump); a normal breadcrumb click still navigates.
+- Merged toolbar actions: a single **New** button creates a file, or a folder
+  when the name ends with `/`; a single **Upload** button picks files or a
+  folder from one menu.
 - Clearer, unified toolbar/row iconography (inline SVGs for open-terminal, df,
-  copy-path, go-to-path, new folder/file, upload/upload-folder, sudo, and the
-  row move/duplicate/chmod/delete actions).
+  copy-path, go-to-path, new, upload, sudo, and the row
+  edit/move/chmod/download/delete actions).
 - Live-follow (tail -f) for text previews, and first-page PDF thumbnails in the
   grid (when the bridge's `sharp` has PDF support).
 - Resumable downloads and a concurrency-limited download queue: plain file
@@ -53,6 +61,8 @@ All notable changes to this project are documented here. The format is based on
 
 - Removed the terminal color-theme presets and the light/system theme toggle;
   SSHWeb now uses a single fixed dark theme.
+- Removed the terminal scrollback search (the in-terminal "find" bar and its
+  Ctrl/⌘+F shortcut) and the per-file **duplicate** row action.
 - Refactor: the inline-editor state moved out of `SshSession` into a `useEditors`
   hook, and the file browser's list/grid views now share one row-open helper.
 - Numerous bridge limits are now env-tunable (stream chunk size, WS backpressure

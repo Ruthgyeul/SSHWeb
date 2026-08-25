@@ -56,7 +56,6 @@ import { PromptDialog, type DialogRequest } from "./PromptDialog";
 import { MobileKeys } from "./MobileKeys";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TerminalSettings } from "./TerminalSettings";
-import { SearchIcon } from "./icons";
 import { useThumbnailQueue } from "./hooks/useThumbnailQueue";
 import { useUploadQueue, type UploadJob } from "./hooks/useUploadQueue";
 import { useDownloadTransfers } from "./hooks/useDownloadTransfers";
@@ -477,15 +476,13 @@ export function SshSession({
   const {
     onDelete,
     onDeleteMany,
-    onMkdir,
-    onTouch,
+    onCreate,
     onRename,
-    onCopy,
     onMove,
     onDeletePath,
     onMovePath,
     onChmod,
-  } = useFileActions({ cwd, entries, send, setDialog });
+  } = useFileActions({ cwd, send, setDialog });
 
   const {
     request: requestThumbnail,
@@ -1720,12 +1717,11 @@ export function SshSession({
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-term-border bg-term-card">
       {/* Session header */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
-        {/* Identity — the host renders identically in both tabs because the
-            controls group is the same width in each (the terminal-only Search
-            button keeps a reserved slot on the files tab too, below), so the
-            `flex-1` identity always receives the same leftover width. The
-            min-width floor is a readability aid: once the row is tight the
-            controls wrap to their own line rather than squeezing the host. */}
+        {/* Identity — the controls group is the same in both tabs, so the
+            `flex-1` host always gets the same leftover width and renders
+            identically. The min-width floor is a readability aid: once the row
+            is tight the controls wrap to their own line rather than squeezing
+            the host. */}
         <div className="flex min-w-[14rem] flex-1 items-center gap-2.5">
           <StatusDot status={status} />
           <span
@@ -1760,28 +1756,6 @@ export function SshSession({
                 aria-label="Keyboard shortcuts"
               >
                 ?
-              </button>
-              {/* Terminal-only, but always occupies its slot so the controls
-                  group is the same width in both tabs — otherwise the `flex-1`
-                  identity would get more room (and truncate later) in the files
-                  tab than the terminal tab. On the files tab it's an invisible,
-                  non-interactive placeholder. */}
-              <button
-                type="button"
-                onClick={() => {
-                  setTab("terminal");
-                  xtermRef.current?.openSearch();
-                }}
-                className={cn(
-                  "rounded px-2 py-1 text-term-muted transition-colors hover:text-term-text",
-                  tab !== "terminal" && "pointer-events-none invisible",
-                )}
-                tabIndex={tab === "terminal" ? undefined : -1}
-                aria-hidden={tab !== "terminal"}
-                title="Search terminal (Ctrl+F)"
-                aria-label="Search terminal"
-              >
-                <SearchIcon className="h-3.5 w-3.5" />
               </button>
               <TerminalSettings
                 onClearThumbnailCache={clearThumbnails}
@@ -1890,10 +1864,8 @@ export function SshSession({
               onDelete={onDelete}
               onDeleteMany={onDeleteMany}
               onUpload={(file, relPath) => uploadFile(file, cwd, relPath)}
-              onMkdir={onMkdir}
-              onTouch={onTouch}
+              onCreate={onCreate}
               onRename={onRename}
-              onCopy={onCopy}
               onMove={onMove}
               onChmod={onChmod}
               onDiff={onDiff}
