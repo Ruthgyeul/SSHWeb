@@ -948,7 +948,23 @@ describe("parseOwnerFromLongname", () => {
     expect(parseOwnerFromLongname(undefined)).toBeUndefined();
     expect(parseOwnerFromLongname(null)).toBeUndefined();
     expect(parseOwnerFromLongname("")).toBeUndefined();
-    expect(parseOwnerFromLongname("just three words here")).toBe("words");
     expect(parseOwnerFromLongname("too few")).toBeUndefined();
+  });
+
+  it("rejects a display-only filename so the caller can fall back to uid", () => {
+    // No ls -l prefix — words must not be misread as owner/group.
+    expect(
+      parseOwnerFromLongname("quarterly sales report final.txt"),
+    ).toBeUndefined();
+    expect(parseOwnerFromLongname("just three words here")).toBeUndefined();
+  });
+
+  it("accepts ACL/attribute markers on the permission field", () => {
+    expect(
+      parseOwnerFromLongname("-rw-r--r--+ 1 alice staff 10 Jan 1 00:00 f"),
+    ).toBe("alice");
+    expect(
+      parseOwnerFromLongname("drwxr-xr-x@ 3 bob admin 96 Jan 1 00:00 d"),
+    ).toBe("bob");
   });
 });

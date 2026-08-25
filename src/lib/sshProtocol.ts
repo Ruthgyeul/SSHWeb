@@ -49,8 +49,15 @@ export function parseOwnerFromLongname(
 ): string | undefined {
   if (!longname) return undefined;
   const parts = longname.trim().split(/\s+/);
-  // [perms, linkcount, owner, group, size, …]; the owner is index 2.
+  // [perms, linkcount, owner, group, size, …]; the owner is index 2. Only trust
+  // it when the first two fields actually look like an `ls -l` prefix — a
+  // permission string and a numeric link count. Some servers return only a
+  // display filename, whose words would otherwise be misread as owner/group
+  // (e.g. "quarterly sales report.txt" → "report"); rejecting those lets the
+  // caller fall back to a numeric uid instead.
   if (parts.length < 4) return undefined;
+  if (!/^[dlbcps-][rwxsStT-]{9}[.+@]?$/.test(parts[0])) return undefined;
+  if (!/^\d+$/.test(parts[1])) return undefined;
   return parts[2] || undefined;
 }
 

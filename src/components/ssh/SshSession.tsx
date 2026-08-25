@@ -1720,13 +1720,12 @@ export function SshSession({
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-term-border bg-term-card">
       {/* Session header */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
-        {/* Identity — a min-width floor wide enough to hold a typical
-            `user@host` means the host is shown in full and, crucially, the same
-            in both tabs: the terminal-only Search button makes the controls
-            group wider, so with a tight floor the host would truncate a little
-            in the terminal tab but not in files. Once the row is tight the
-            controls wrap to their own line (rather than squeezing the host past
-            this floor), so the identity looks identical regardless of tab. */}
+        {/* Identity — the host renders identically in both tabs because the
+            controls group is the same width in each (the terminal-only Search
+            button keeps a reserved slot on the files tab too, below), so the
+            `flex-1` identity always receives the same leftover width. The
+            min-width floor is a readability aid: once the row is tight the
+            controls wrap to their own line rather than squeezing the host. */}
         <div className="flex min-w-[14rem] flex-1 items-center gap-2.5">
           <StatusDot status={status} />
           <span
@@ -1762,20 +1761,28 @@ export function SshSession({
               >
                 ?
               </button>
-              {tab === "terminal" && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTab("terminal");
-                    xtermRef.current?.openSearch();
-                  }}
-                  className="rounded px-2 py-1 text-term-muted transition-colors hover:text-term-text"
-                  title="Search terminal (Ctrl+F)"
-                  aria-label="Search terminal"
-                >
-                  <SearchIcon className="h-3.5 w-3.5" />
-                </button>
-              )}
+              {/* Terminal-only, but always occupies its slot so the controls
+                  group is the same width in both tabs — otherwise the `flex-1`
+                  identity would get more room (and truncate later) in the files
+                  tab than the terminal tab. On the files tab it's an invisible,
+                  non-interactive placeholder. */}
+              <button
+                type="button"
+                onClick={() => {
+                  setTab("terminal");
+                  xtermRef.current?.openSearch();
+                }}
+                className={cn(
+                  "rounded px-2 py-1 text-term-muted transition-colors hover:text-term-text",
+                  tab !== "terminal" && "pointer-events-none invisible",
+                )}
+                tabIndex={tab === "terminal" ? undefined : -1}
+                aria-hidden={tab !== "terminal"}
+                title="Search terminal (Ctrl+F)"
+                aria-label="Search terminal"
+              >
+                <SearchIcon className="h-3.5 w-3.5" />
+              </button>
               <TerminalSettings
                 onClearThumbnailCache={clearThumbnails}
                 getCacheBytes={clientCacheBytes}

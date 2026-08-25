@@ -660,8 +660,12 @@ export function FileBrowser({
                       type="button"
                       onClick={() => onNavigate(seg.path)}
                       disabled={loading}
+                      title={seg.name}
                       className={cn(
-                        "max-w-[10rem] truncate",
+                        // No width cap: the breadcrumb row scrolls horizontally,
+                        // so a long segment stays fully readable (with a title
+                        // tooltip) instead of being ellipsized.
+                        "whitespace-nowrap",
                         i === segments.length - 1
                           ? "text-term-dim"
                           : "text-term-muted hover:text-term-accent",
