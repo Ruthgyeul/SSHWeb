@@ -21,7 +21,7 @@ src/
 ├── components/          # reusable UI (see docs/claude-components.md)
 │   └── ssh/             # web SSH client UI (client components), plus:
 │       ├── hooks/       #   co-located hooks (useFileSort, useFileViewMode,
-│       │                #     useSnippets, useThumbnailQueue,
+│       │                #     useThumbnailQueue,
 │       │                #     useUploadQueue, useDownloadQueue,
 │       │                #     useDownloadTransfers, useReconnect, useSshSocket,
 │       │                #     useConnectionProfiles, useModalA11y,

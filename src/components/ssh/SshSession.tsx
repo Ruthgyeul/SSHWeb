@@ -54,7 +54,6 @@ import { FilePreview } from "./FilePreview";
 import { PasteConfirm } from "./PasteConfirm";
 import { PromptDialog, type DialogRequest } from "./PromptDialog";
 import { MobileKeys } from "./MobileKeys";
-import { SnippetsBar } from "./SnippetsBar";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TerminalSettings } from "./TerminalSettings";
 import { SearchIcon } from "./icons";
@@ -486,8 +485,6 @@ export function SshSession({
     onDeletePath,
     onMovePath,
     onChmod,
-    onSymlink,
-    onChecksum,
   } = useFileActions({ cwd, entries, send, setDialog });
 
   const {
@@ -1371,19 +1368,10 @@ export function SshSession({
     }
   };
 
-  // Inject a saved snippet's command into the shell (no trailing newline — the
-  // user reviews and presses Enter, matching the paste-confirm posture).
-  const runSnippet = (command: string) => {
-    if (!connected) return;
-    disarmMods();
-    send({ t: "data", data: command });
-    xtermRef.current?.focus();
-  };
-
   // "Open terminal here" (#50): cd the shell to the file browser's current
-  // directory and switch to the terminal. Unlike a snippet, this runs the cd
-  // (trailing newline) since it's an explicit, safe navigation the user asked
-  // for; the path is single-quoted so metacharacters can't break out.
+  // directory and switch to the terminal. This runs the cd (trailing newline)
+  // since it's an explicit, safe navigation the user asked for; the path is
+  // single-quoted so metacharacters can't break out.
   const openTerminalHere = () => {
     if (!connected) return;
     disarmMods();
@@ -1732,11 +1720,14 @@ export function SshSession({
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-term-border bg-term-card">
       {/* Session header */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
-        {/* Identity — keeps a min-width floor so `user@host` stays readable and
-            truncates within itself; the min-width forces the controls (and, when
-            tighter, the status chips) to wrap to a new line rather than
-            collapsing the host to nothing or overlapping it. */}
-        <div className="flex min-w-[9rem] flex-1 items-center gap-2.5">
+        {/* Identity — a min-width floor wide enough to hold a typical
+            `user@host` means the host is shown in full and, crucially, the same
+            in both tabs: the terminal-only Search button makes the controls
+            group wider, so with a tight floor the host would truncate a little
+            in the terminal tab but not in files. Once the row is tight the
+            controls wrap to their own line (rather than squeezing the host past
+            this floor), so the identity looks identical regardless of tab. */}
+        <div className="flex min-w-[14rem] flex-1 items-center gap-2.5">
           <StatusDot status={status} />
           <span
             className="min-w-0 flex-1 truncate text-xs text-term-dim"
@@ -1845,7 +1836,6 @@ export function SshSession({
               }
             />
           </div>
-          {connected && <SnippetsBar onRun={runSnippet} />}
           {connected && (
             <MobileKeys
               ctrlActive={ctrlArmed}
@@ -1899,8 +1889,6 @@ export function SshSession({
               onCopy={onCopy}
               onMove={onMove}
               onChmod={onChmod}
-              onSymlink={onSymlink}
-              onChecksum={onChecksum}
               onDiff={onDiff}
               onEdit={requestEdit}
               onPreview={openPreviewFile}

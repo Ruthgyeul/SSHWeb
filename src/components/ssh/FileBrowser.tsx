@@ -21,11 +21,23 @@ import {
 import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcon";
 import {
+  CopyIcon,
+  DiffIcon,
+  DiskIcon,
+  DownloadIcon,
+  FilePlusIcon,
   FolderOpenIcon,
+  FolderPlusIcon,
+  FolderUploadIcon,
   GridIcon,
+  LevelUpIcon,
   ListIcon,
   RefreshIcon,
   SearchIcon,
+  ShieldIcon,
+  TargetIcon,
+  TerminalIcon,
+  TrashIcon,
   UploadIcon,
   WarningIcon,
 } from "./icons";
@@ -35,8 +47,6 @@ import { TransferProgress } from "./TransferProgress";
 import { collectDroppedFiles, droppedEntries } from "./dom/dropUpload";
 import { useFileViewMode } from "./hooks/useFileViewMode";
 import { useFileSort } from "./hooks/useFileSort";
-import { useShowHidden } from "./hooks/useShowHidden";
-import { useFileColumns } from "./hooks/useFileColumns";
 
 /** One in-flight upload's progress, shown in the progress panel. */
 export interface UploadItem {
@@ -280,8 +290,6 @@ export function FileBrowser({
   onCopy,
   onMove,
   onChmod,
-  onSymlink,
-  onChecksum,
   onDiff,
   onEdit,
   onPreview,
@@ -341,10 +349,6 @@ export function FileBrowser({
   /** Move an entry (absolute `fromPath`) into directory `toDir` (drag-drop). */
   onMove: (fromPath: string, toDir: string) => void;
   onChmod: (entry: FileEntry) => void;
-  /** Create a symbolic link pointing at an entry (#48). */
-  onSymlink: (entry: FileEntry) => void;
-  /** Compute a checksum of a file, surfaced as a toast (#46). */
-  onChecksum: (entry: FileEntry) => void;
   /** Diff exactly two selected text files (#76). */
   onDiff: (entries: FileEntry[]) => void;
   onEdit: (path: string, name: string, size: number) => void;
@@ -397,10 +401,6 @@ export function FileBrowser({
   // Sort field + direction, persisted across sessions/tabs. `toggleSort` flips
   // direction on the active field or switches field at its natural default.
   const [sort, toggleSort] = useFileSort();
-  // Show/hide dotfiles (#70) and which optional list columns show (#71), both
-  // persisted across sessions/tabs.
-  const [showHidden, setShowHidden] = useShowHidden();
-  const [columns, toggleColumn] = useFileColumns();
 
   // `webkitdirectory` isn't a typed React attribute; set it on the folder input
   // imperatively so clicking "↑ folder" opens a directory picker.
@@ -427,13 +427,9 @@ export function FileBrowser({
   // re-filters on every render (every filter keystroke, thumbnail arrival, or
   // selection toggle).
   const sorted = useMemo(() => {
-    // Hide dotfiles unless the toggle is on (#70). Selection derives from
-    // `sorted`, so a hidden file can't be selected while it's hidden.
-    const shown = showHidden
-      ? entries
-      : entries.filter((e) => !e.name.startsWith("."));
-    return sortEntriesBy(shown, sort.key, sort.dir);
-  }, [entries, showHidden, sort.key, sort.dir]);
+    // Dotfiles (hidden files) are always shown — there is no hide toggle.
+    return sortEntriesBy(entries, sort.key, sort.dir);
+  }, [entries, sort.key, sort.dir]);
   const sortArrow = sort.dir === "asc" ? "▲" : "▼";
   // The rows actually shown: `sorted` narrowed by the filter box. Selection is
   // kept against the full listing (below) so filtering never drops checks.
@@ -617,329 +613,308 @@ export function FileBrowser({
 
   return (
     <div className="flex h-full flex-col">
-      {/* Toolbar: path + actions */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-term-border px-3 py-2">
-        <button
-          type="button"
-          onClick={() => onNavigate(parentPath(cwd))}
-          disabled={atRoot || loading}
-          className={cn(
-            "rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text",
-            (atRoot || loading) && "opacity-40",
-          )}
-          title="Parent directory"
-        >
-          ↑ up
-        </button>
-        {/* Breadcrumb: click any segment to jump straight to that directory. */}
-        <nav
-          className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded bg-term-panel px-2 py-1 text-xs"
-          aria-label="Current path"
-        >
-          {segments.length === 0 ? (
-            <span className="truncate text-term-dim">{cwd || "~"}</span>
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={() => onNavigate("/")}
-                disabled={loading}
-                className="flex-none text-term-muted hover:text-term-accent"
-                title="Root"
-              >
-                /
-              </button>
-              {segments.map((seg, i) => (
-                <span
-                  key={seg.path}
-                  className="flex flex-none items-center gap-0.5"
-                >
-                  {i > 0 && <span className="text-term-faint">/</span>}
-                  <button
-                    type="button"
-                    onClick={() => onNavigate(seg.path)}
-                    disabled={loading}
-                    className={cn(
-                      "max-w-[10rem] truncate",
-                      i === segments.length - 1
-                        ? "text-term-dim"
-                        : "text-term-muted hover:text-term-accent",
-                    )}
-                  >
-                    {seg.name}
-                  </button>
-                </span>
-              ))}
-            </>
-          )}
-        </nav>
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={loading}
-          className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
-          title="Refresh"
-          aria-label="Refresh"
-        >
-          <RefreshIcon />
-        </button>
-        <button
-          type="button"
-          onClick={onOpenTerminalHere}
-          className="rounded border border-term-border px-2 py-1 font-mono text-xs text-term-muted hover:text-term-text"
-          title="Open terminal here (cd to this folder)"
-          aria-label="Open terminal here"
-        >
-          {">_"}
-        </button>
-        <button
-          type="button"
-          onClick={onDiskUsage}
-          className="rounded border border-term-border px-2 py-1 font-mono text-xs text-term-muted hover:text-term-text"
-          title="Show disk usage (df)"
-          aria-label="Show disk usage"
-        >
-          df
-        </button>
-        <button
-          type="button"
-          onClick={() => onCopyPath(cwd)}
-          className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
-          title="Copy current path"
-          aria-label="Copy current path"
-        >
-          ⧉
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowGoto((v) => !v)}
-          aria-pressed={showGoto}
-          className={cn(
-            "rounded border px-2 py-1 text-xs transition-colors",
-            showGoto
-              ? "border-term-accent/50 bg-term-accent/15 text-term-accent"
-              : "border-term-border text-term-muted hover:text-term-text",
-          )}
-          title="Go to path"
-          aria-label="Toggle go-to-path"
-        >
-          ⌖
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowHidden(!showHidden)}
-          aria-pressed={showHidden}
-          className={cn(
-            "rounded border px-2 py-1 text-xs transition-colors",
-            showHidden
-              ? "border-term-accent/50 bg-term-accent/15 text-term-accent"
-              : "border-term-border text-term-muted hover:text-term-text",
-          )}
-          title={showHidden ? "Hide dotfiles" : "Show hidden files"}
-          aria-label="Toggle hidden files"
-        >
-          .*
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowSearch((v) => !v)}
-          aria-pressed={showSearch}
-          className={cn(
-            "rounded border px-2 py-1 text-xs transition-colors",
-            showSearch
-              ? "border-term-accent/50 bg-term-accent/15 text-term-accent"
-              : "border-term-border text-term-muted hover:text-term-text",
-          )}
-          title="Search this folder and its subfolders"
-          aria-label="Search subfolders"
-        >
-          <SearchIcon />
-        </button>
-        {/* List / grid layout toggle */}
-        <div
-          className="flex overflow-hidden rounded border border-term-border"
-          role="group"
-          aria-label="View mode"
-        >
+      {/* Toolbar: a path row and an actions row. Keeping the breadcrumb on its
+          own row means the path never competes with the action buttons for
+          width, so it isn't squeezed/truncated on desktop or mobile. */}
+      <div className="flex flex-col gap-2 border-b border-term-border px-3 py-2">
+        {/* Path row: parent-up + breadcrumb (fills the row) + refresh. */}
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setViewMode("list")}
-            aria-pressed={viewMode === "list"}
+            onClick={() => onNavigate(parentPath(cwd))}
+            disabled={atRoot || loading}
             className={cn(
-              "px-2 py-1 text-xs transition-colors",
-              viewMode === "list"
-                ? "bg-term-accent/15 text-term-accent"
-                : "text-term-muted hover:text-term-text",
+              "flex-none rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text",
+              (atRoot || loading) && "opacity-40",
             )}
-            title="List view"
-            aria-label="List view"
+            title="Parent directory"
+            aria-label="Parent directory"
           >
-            <ListIcon className="h-4 w-4" />
+            <LevelUpIcon />
           </button>
+          {/* Breadcrumb: click any segment to jump straight to that directory. */}
+          <nav
+            className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded bg-term-panel px-2 py-1 text-xs"
+            aria-label="Current path"
+          >
+            {segments.length === 0 ? (
+              <span className="truncate text-term-dim">{cwd || "~"}</span>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onNavigate("/")}
+                  disabled={loading}
+                  className="flex-none text-term-muted hover:text-term-accent"
+                  title="Root"
+                >
+                  /
+                </button>
+                {segments.map((seg, i) => (
+                  <span
+                    key={seg.path}
+                    className="flex flex-none items-center gap-0.5"
+                  >
+                    {i > 0 && <span className="text-term-faint">/</span>}
+                    <button
+                      type="button"
+                      onClick={() => onNavigate(seg.path)}
+                      disabled={loading}
+                      className={cn(
+                        "max-w-[10rem] truncate",
+                        i === segments.length - 1
+                          ? "text-term-dim"
+                          : "text-term-muted hover:text-term-accent",
+                      )}
+                    >
+                      {seg.name}
+                    </button>
+                  </span>
+                ))}
+              </>
+            )}
+          </nav>
           <button
             type="button"
-            onClick={() => setViewMode("grid")}
-            aria-pressed={viewMode === "grid"}
-            className={cn(
-              "border-l border-term-border px-2 py-1 text-xs transition-colors",
-              viewMode === "grid"
-                ? "bg-term-accent/15 text-term-accent"
-                : "text-term-muted hover:text-term-text",
-            )}
-            title="Grid view"
-            aria-label="Grid view"
+            onClick={onRefresh}
+            disabled={loading}
+            className="flex-none rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
+            title="Refresh"
+            aria-label="Refresh"
           >
-            <GridIcon className="h-4 w-4" />
+            <RefreshIcon />
           </button>
         </div>
-        {/* Sort control — grid view has no column headers to click, so it gets a
-            compact segmented sort selector here (the list view uses its
-            clickable table headers instead). */}
-        {viewMode === "grid" && (
-          <div
-            className="flex overflow-hidden rounded border border-term-border"
-            role="group"
-            aria-label="Sort by"
-          >
-            {SORT_OPTIONS.map((opt, i) => (
-              <button
-                key={opt.key}
-                type="button"
-                onClick={() => toggleSort(opt.key)}
-                aria-pressed={sort.key === opt.key}
-                className={cn(
-                  "px-2 py-1 text-xs transition-colors",
-                  i > 0 && "border-l border-term-border",
-                  sort.key === opt.key
-                    ? "bg-term-accent/15 text-term-accent"
-                    : "text-term-muted hover:text-term-text",
-                )}
-                title={`Sort by ${opt.label.toLowerCase()}`}
-              >
-                {opt.label}
-                {sort.key === opt.key && (
-                  <span className="ml-1" aria-hidden>
-                    {sortArrow}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
-        {/* Column visibility chips (#71) — list view only. */}
-        {viewMode === "list" && (
-          <div
-            className="flex overflow-hidden rounded border border-term-border"
-            role="group"
-            aria-label="Columns"
-          >
-            {(
-              [
-                ["size", "Size"],
-                ["perms", "Perms"],
-                ["modified", "Mod"],
-              ] as const
-            ).map(([key, label], i) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => toggleColumn(key)}
-                aria-pressed={columns[key]}
-                className={cn(
-                  "px-2 py-1 text-xs transition-colors",
-                  i > 0 && "border-l border-term-border",
-                  columns[key]
-                    ? "bg-term-accent/15 text-term-accent"
-                    : "text-term-muted hover:text-term-text",
-                )}
-                title={`${columns[key] ? "Hide" : "Show"} ${label} column`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-        {canElevate && (
+        {/* Actions row: everything else, wrapping freely under the path. */}
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={onToggleElevated}
-            disabled={elevatedPending}
-            aria-pressed={elevated}
+            onClick={onOpenTerminalHere}
+            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
+            title="Open terminal here (cd to this folder)"
+            aria-label="Open terminal here"
+          >
+            <TerminalIcon />
+          </button>
+          <button
+            type="button"
+            onClick={onDiskUsage}
+            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
+            title="Show disk usage (df)"
+            aria-label="Show disk usage"
+          >
+            <DiskIcon />
+          </button>
+          <button
+            type="button"
+            onClick={() => onCopyPath(cwd)}
+            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
+            title="Copy current path"
+            aria-label="Copy current path"
+          >
+            <CopyIcon />
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowGoto((v) => !v)}
+            aria-pressed={showGoto}
             className={cn(
               "rounded border px-2 py-1 text-xs transition-colors",
-              elevated
-                ? "border-term-yellow/50 bg-term-yellow/15 text-term-yellow"
+              showGoto
+                ? "border-term-accent/50 bg-term-accent/15 text-term-accent"
                 : "border-term-border text-term-muted hover:text-term-text",
-              elevatedPending && "opacity-50",
             )}
-            title={
-              elevated
-                ? "Elevated (root) access is on — click to drop back to your user"
-                : "Access files as root via sudo"
-            }
+            title="Go to path"
+            aria-label="Toggle go-to-path"
           >
-            {elevatedPending ? "sudo…" : elevated ? "sudo ●" : "sudo"}
+            <TargetIcon />
           </button>
-        )}
-        <button
-          type="button"
-          onClick={onMkdir}
-          disabled={loading}
-          className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
-        >
-          + dir
-        </button>
-        <button
-          type="button"
-          onClick={onTouch}
-          disabled={loading}
-          className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
-          title="Create an empty file"
-        >
-          + file
-        </button>
-        <button
-          type="button"
-          onClick={() => uploadRef.current?.click()}
-          disabled={loading}
-          className="rounded border border-term-accent/40 bg-term-accent/10 px-2 py-1 text-xs text-term-accent hover:bg-term-accent/20"
-        >
-          ↑ upload
-        </button>
-        <button
-          type="button"
-          onClick={() => folderRef.current?.click()}
-          disabled={loading}
-          className="rounded border border-term-accent/40 bg-term-accent/10 px-2 py-1 text-xs text-term-accent hover:bg-term-accent/20"
-          title="Upload a folder (preserves its subdirectories)"
-        >
-          ↑ folder
-        </button>
-        <input
-          ref={uploadRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            for (const file of Array.from(e.target.files ?? [])) onUpload(file);
-            e.target.value = "";
-          }}
-        />
-        <input
-          ref={folderRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            for (const file of Array.from(e.target.files ?? [])) {
-              // `webkitRelativePath` is like `folder/sub/file.txt`; keep it so
-              // the upload recreates the tree under the current directory.
-              const rel = file.webkitRelativePath || undefined;
-              onUpload(file, rel && rel.includes("/") ? rel : undefined);
-            }
-            e.target.value = "";
-          }}
-        />
+          <button
+            type="button"
+            onClick={() => setShowSearch((v) => !v)}
+            aria-pressed={showSearch}
+            className={cn(
+              "rounded border px-2 py-1 text-xs transition-colors",
+              showSearch
+                ? "border-term-accent/50 bg-term-accent/15 text-term-accent"
+                : "border-term-border text-term-muted hover:text-term-text",
+            )}
+            title="Search this folder and its subfolders"
+            aria-label="Search subfolders"
+          >
+            <SearchIcon />
+          </button>
+          {/* List / grid layout toggle */}
+          <div
+            className="flex overflow-hidden rounded border border-term-border"
+            role="group"
+            aria-label="View mode"
+          >
+            <button
+              type="button"
+              onClick={() => setViewMode("list")}
+              aria-pressed={viewMode === "list"}
+              className={cn(
+                "px-2 py-1 text-xs transition-colors",
+                viewMode === "list"
+                  ? "bg-term-accent/15 text-term-accent"
+                  : "text-term-muted hover:text-term-text",
+              )}
+              title="List view"
+              aria-label="List view"
+            >
+              <ListIcon className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("grid")}
+              aria-pressed={viewMode === "grid"}
+              className={cn(
+                "border-l border-term-border px-2 py-1 text-xs transition-colors",
+                viewMode === "grid"
+                  ? "bg-term-accent/15 text-term-accent"
+                  : "text-term-muted hover:text-term-text",
+              )}
+              title="Grid view"
+              aria-label="Grid view"
+            >
+              <GridIcon className="h-4 w-4" />
+            </button>
+          </div>
+          {/* Sort control — grid view has no column headers to click, so it gets a
+            compact segmented sort selector here (the list view uses its
+            clickable table headers instead). */}
+          {viewMode === "grid" && (
+            <div
+              className="flex overflow-hidden rounded border border-term-border"
+              role="group"
+              aria-label="Sort by"
+            >
+              {SORT_OPTIONS.map((opt, i) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => toggleSort(opt.key)}
+                  aria-pressed={sort.key === opt.key}
+                  className={cn(
+                    "px-2 py-1 text-xs transition-colors",
+                    i > 0 && "border-l border-term-border",
+                    sort.key === opt.key
+                      ? "bg-term-accent/15 text-term-accent"
+                      : "text-term-muted hover:text-term-text",
+                  )}
+                  title={`Sort by ${opt.label.toLowerCase()}`}
+                >
+                  {opt.label}
+                  {sort.key === opt.key && (
+                    <span className="ml-1" aria-hidden>
+                      {sortArrow}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+          {canElevate && (
+            <button
+              type="button"
+              onClick={onToggleElevated}
+              disabled={elevatedPending}
+              aria-pressed={elevated}
+              className={cn(
+                "rounded border px-2 py-1 text-xs transition-colors",
+                elevated
+                  ? "border-term-yellow/50 bg-term-yellow/15 text-term-yellow"
+                  : "border-term-border text-term-muted hover:text-term-text",
+                elevatedPending && "opacity-50",
+              )}
+              title={
+                elevatedPending
+                  ? "Switching sudo access…"
+                  : elevated
+                    ? "Elevated (root) access is on — click to drop back to your user"
+                    : "Access files as root via sudo"
+              }
+              aria-label={
+                elevated
+                  ? "Elevated (root) access on"
+                  : "Elevate to root (sudo)"
+              }
+            >
+              <ShieldIcon
+                className={cn("h-4 w-4", elevatedPending && "animate-pulse")}
+              />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onMkdir}
+            disabled={loading}
+            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
+            title="New folder"
+            aria-label="New folder"
+          >
+            <FolderPlusIcon />
+          </button>
+          <button
+            type="button"
+            onClick={onTouch}
+            disabled={loading}
+            className="rounded border border-term-border px-2 py-1 text-xs text-term-muted hover:text-term-text"
+            title="Create an empty file"
+            aria-label="New file"
+          >
+            <FilePlusIcon />
+          </button>
+          <button
+            type="button"
+            onClick={() => uploadRef.current?.click()}
+            disabled={loading}
+            className="flex items-center gap-1.5 rounded border border-term-accent/40 bg-term-accent/10 px-2 py-1 text-xs text-term-accent hover:bg-term-accent/20"
+            title="Upload files"
+            aria-label="Upload files"
+          >
+            <UploadIcon className="h-4 w-4" />
+            Upload
+          </button>
+          <button
+            type="button"
+            onClick={() => folderRef.current?.click()}
+            disabled={loading}
+            className="flex items-center gap-1.5 rounded border border-term-accent/40 bg-term-accent/10 px-2 py-1 text-xs text-term-accent hover:bg-term-accent/20"
+            title="Upload a folder (preserves its subdirectories)"
+            aria-label="Upload folder"
+          >
+            <FolderUploadIcon className="h-4 w-4" />
+            Folder
+          </button>
+          <input
+            ref={uploadRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              for (const file of Array.from(e.target.files ?? []))
+                onUpload(file);
+              e.target.value = "";
+            }}
+          />
+          <input
+            ref={folderRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              for (const file of Array.from(e.target.files ?? [])) {
+                // `webkitRelativePath` is like `folder/sub/file.txt`; keep it so
+                // the upload recreates the tree under the current directory.
+                const rel = file.webkitRelativePath || undefined;
+                onUpload(file, rel && rel.includes("/") ? rel : undefined);
+              }
+              e.target.value = "";
+            }}
+          />
+        </div>
       </div>
 
       {/* Elevated-mode banner: a persistent reminder that actions run as root. */}
@@ -967,7 +942,7 @@ export function FileBrowser({
           }}
           className="flex items-center gap-2 border-b border-term-border bg-term-panel/30 px-3 py-1.5"
         >
-          <span className="text-term-faint">⌖</span>
+          <TargetIcon className="text-term-faint" />
           <input
             type="text"
             value={gotoInput}
@@ -1143,9 +1118,11 @@ export function FileBrowser({
                 onClick={() =>
                   onDownloadMany(selectedEntries.map((e) => pathFor(e.name)))
                 }
-                className="rounded border border-term-accent/40 bg-term-accent/10 px-2 py-0.5 text-term-accent hover:bg-term-accent/20"
+                className="flex items-center gap-1.5 rounded border border-term-accent/40 bg-term-accent/10 px-2 py-0.5 text-term-accent hover:bg-term-accent/20"
+                title="Download selected as zip"
               >
-                ↓ Download zip
+                <DownloadIcon className="h-3.5 w-3.5" />
+                Download zip
               </button>
               {selectedCount === 2 &&
                 selectedEntries.every(
@@ -1154,18 +1131,21 @@ export function FileBrowser({
                   <button
                     type="button"
                     onClick={() => onDiff(selectedEntries)}
-                    className="rounded border border-term-border px-2 py-0.5 text-term-muted hover:text-term-text"
+                    className="flex items-center gap-1.5 rounded border border-term-border px-2 py-0.5 text-term-muted hover:text-term-text"
                     title="Diff the two selected files"
                   >
-                    ⇄ Diff
+                    <DiffIcon className="h-3.5 w-3.5" />
+                    Diff
                   </button>
                 )}
               <button
                 type="button"
                 onClick={() => onDeleteMany(selectedEntries)}
-                className="rounded border border-term-red/40 px-2 py-0.5 text-term-red hover:bg-term-red/10"
+                className="flex items-center gap-1.5 rounded border border-term-red/40 px-2 py-0.5 text-term-red hover:bg-term-red/10"
+                title="Delete selected"
               >
-                ✕ Delete
+                <TrashIcon className="h-3.5 w-3.5" />
+                Delete
               </button>
               <button
                 type="button"
@@ -1223,26 +1203,8 @@ export function FileBrowser({
                 <FolderOpenIcon className="h-8 w-8 opacity-60" />
                 <p className="text-sm">This directory is empty</p>
                 <p className="text-xs text-term-faint">
-                  Drag files here, or use “↑ upload” / “+ file” to add one.
+                  Drag files here, or use Upload / New file to add one.
                 </p>
-              </div>
-            )}
-            {/* Not truly empty — every entry is a dotfile the hidden toggle is
-                filtering out. Offer to reveal them instead of "empty" (#71/#70). */}
-            {!loading && entries.length > 0 && sorted.length === 0 && (
-              <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
-                <FolderOpenIcon className="h-8 w-8 opacity-60" />
-                <p className="text-sm">
-                  {entries.length} hidden{" "}
-                  {entries.length === 1 ? "item" : "items"}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setShowHidden(true)}
-                  className="text-xs text-term-accent hover:text-term-accent-soft"
-                >
-                  Show hidden files
-                </button>
               </div>
             )}
             {!loading && sorted.length > 0 && visible.length === 0 && (
@@ -1271,32 +1233,29 @@ export function FileBrowser({
                       onSort={toggleSort}
                       className="pl-1"
                     />
-                    {columns.size && (
-                      <SortHeader
-                        label="Size"
-                        col="size"
-                        activeKey={sort.key}
-                        dir={sort.dir}
-                        onSort={toggleSort}
-                        align="right"
-                        className="hidden whitespace-nowrap sm:table-cell"
-                      />
-                    )}
-                    {columns.perms && (
-                      <th className="hidden px-2 py-1.5 text-left font-medium text-term-muted md:table-cell">
-                        Perms
-                      </th>
-                    )}
-                    {columns.modified && (
-                      <SortHeader
-                        label="Modified"
-                        col="mtime"
-                        activeKey={sort.key}
-                        dir={sort.dir}
-                        onSort={toggleSort}
-                        className="hidden whitespace-nowrap lg:table-cell"
-                      />
-                    )}
+                    <SortHeader
+                      label="Size"
+                      col="size"
+                      activeKey={sort.key}
+                      dir={sort.dir}
+                      onSort={toggleSort}
+                      align="right"
+                      className="hidden whitespace-nowrap sm:table-cell"
+                    />
+                    <th className="hidden px-2 py-1.5 text-left font-medium text-term-muted md:table-cell">
+                      Perms
+                    </th>
+                    <th className="hidden px-2 py-1.5 text-left font-medium text-term-muted lg:table-cell">
+                      Owner
+                    </th>
+                    <SortHeader
+                      label="Modified"
+                      col="mtime"
+                      activeKey={sort.key}
+                      dir={sort.dir}
+                      onSort={toggleSort}
+                      className="hidden whitespace-nowrap xl:table-cell"
+                    />
                     <th className="py-1.5 pl-2 pr-3" aria-hidden />
                   </tr>
                 </thead>
@@ -1363,21 +1322,18 @@ export function FileBrowser({
                             )}
                           </button>
                         </td>
-                        {columns.size && (
-                          <td className="hidden whitespace-nowrap px-2 py-1.5 text-right font-mono text-xs text-term-faint sm:table-cell">
-                            {formatSize(entry.size, entry.type)}
-                          </td>
-                        )}
-                        {columns.perms && (
-                          <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint md:table-cell">
-                            {formatMode(entry.mode, entry.type)}
-                          </td>
-                        )}
-                        {columns.modified && (
-                          <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint lg:table-cell">
-                            {formatMtime(entry.mtime)}
-                          </td>
-                        )}
+                        <td className="hidden whitespace-nowrap px-2 py-1.5 text-right font-mono text-xs text-term-faint sm:table-cell">
+                          {formatSize(entry.size, entry.type)}
+                        </td>
+                        <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint md:table-cell">
+                          {formatMode(entry.mode, entry.type)}
+                        </td>
+                        <td className="hidden max-w-[8rem] truncate px-2 py-1.5 font-mono text-xs text-term-faint lg:table-cell">
+                          {entry.owner ?? "—"}
+                        </td>
+                        <td className="hidden whitespace-nowrap px-2 py-1.5 font-mono text-xs text-term-faint xl:table-cell">
+                          {formatMtime(entry.mtime)}
+                        </td>
                         <td className="whitespace-nowrap py-1.5 pl-2 pr-3 text-right">
                           <FileEntryActions
                             entry={entry}
@@ -1394,9 +1350,6 @@ export function FileBrowser({
                             onRename={onRename}
                             onCopy={onCopy}
                             onChmod={onChmod}
-                            onSymlink={onSymlink}
-                            onChecksum={onChecksum}
-                            onCopyPath={onCopyPath}
                             onDelete={onDelete}
                           />
                         </td>

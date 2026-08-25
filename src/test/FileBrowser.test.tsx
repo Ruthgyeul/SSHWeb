@@ -49,8 +49,6 @@ function renderBrowser(
     onCopy: vi.fn(),
     onMove: vi.fn(),
     onChmod: vi.fn(),
-    onSymlink: vi.fn(),
-    onChecksum: vi.fn(),
     onDiff: vi.fn(),
     onEdit: vi.fn(),
     onPreview: vi.fn(),
@@ -166,11 +164,10 @@ describe("FileBrowser sort headers", () => {
 });
 
 describe("FileBrowser hidden files (#70)", () => {
-  it("hides dotfiles by default and reveals them on toggle", () => {
+  it("always shows dotfiles (no hide toggle)", () => {
     renderBrowser([file(".env", 1), file("visible.txt", 2)]);
-    expect(rowOrder()).toEqual(["visible.txt"]);
-    fireEvent.click(screen.getByLabelText("Toggle hidden files"));
     expect(rowOrder()).toEqual([".env", "visible.txt"]);
+    expect(screen.queryByLabelText("Toggle hidden files")).toBeNull();
   });
 });
 
@@ -193,17 +190,21 @@ describe("FileBrowser copy path (#72)", () => {
   });
 });
 
-describe("FileBrowser column customize (#71)", () => {
-  it("toggles the Size column off and on", () => {
+describe("FileBrowser columns (#71)", () => {
+  it("always shows the Size/Perms/Owner/Modified columns (no toggle chips)", () => {
     renderBrowser([file("a.txt", 1)]);
-    // The Size column header is present by default (list view).
+    // The list-view column headers are always present now.
     expect(
       screen.getByRole("button", { name: "Sort by size" }),
     ).toBeInTheDocument();
-    // The chip that hides it lives in the Columns group (accessible name is its
-    // "Size" text; the header button's name is "Sort by size").
-    fireEvent.click(screen.getByRole("button", { name: "Size" }));
-    expect(screen.queryByRole("button", { name: "Sort by size" })).toBeNull();
+    expect(
+      screen.getByRole("columnheader", { name: "Perms" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: "Owner" }),
+    ).toBeInTheDocument();
+    // There is no "Columns" toggle group any more.
+    expect(screen.queryByRole("group", { name: "Columns" })).toBeNull();
   });
 });
 
@@ -229,13 +230,10 @@ describe("FileBrowser spacebar quicklook (#68)", () => {
   });
 });
 
-describe("FileBrowser hidden-only + quicklook scoping (Codex #135)", () => {
-  it("shows a hidden-items affordance, not 'empty', for a dotfile-only folder", () => {
+describe("FileBrowser dotfile-only folder + quicklook scoping (Codex #135)", () => {
+  it("lists dotfiles directly, without an 'empty' or hidden-items affordance", () => {
     renderBrowser([file(".env", 1), file(".gitignore", 2)]);
     expect(screen.queryByText("This directory is empty")).toBeNull();
-    expect(screen.getByText("2 hidden items")).toBeInTheDocument();
-    // The affordance reveals them.
-    fireEvent.click(screen.getByRole("button", { name: "Show hidden files" }));
     expect(rowOrder()).toEqual([".env", ".gitignore"]);
   });
 

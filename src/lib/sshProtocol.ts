@@ -27,9 +27,31 @@ export interface FileEntry {
   mtime: number;
   /** Raw POSIX mode bits, for rendering an `ls -l`-style permission string. */
   mode: number;
+  /** Owner (user) name, parsed from the listing's `ls -l`-style long name when
+   * the server provides it; a numeric uid as a fallback. Absent when unknown. */
+  owner?: string;
   /** For a `link` entry: the raw (unfollowed) symlink target path, when the
    * bridge could read it (`readlink`). Absent for non-links or on error. */
   target?: string;
+}
+
+/**
+ * Pull the owner (user) name out of an SFTP directory entry's `ls -l`-style
+ * long name, e.g. `-rw-r--r--  1 alice staff 1024 Jan  1 00:00 file` → `alice`.
+ * The owner is the 3rd whitespace-separated field (after the permission string
+ * and the link count). Returns `undefined` when the long name is missing or
+ * isn't in that shape, so the caller can fall back to a numeric uid.
+ *
+ * Hand-mirrored in `server.mjs` (the "two synchronized places" discipline).
+ */
+export function parseOwnerFromLongname(
+  longname: string | undefined | null,
+): string | undefined {
+  if (!longname) return undefined;
+  const parts = longname.trim().split(/\s+/);
+  // [perms, linkcount, owner, group, size, …]; the owner is index 2.
+  if (parts.length < 4) return undefined;
+  return parts[2] || undefined;
 }
 
 /** A recursive-search hit: a matched entry plus its absolute remote path. */

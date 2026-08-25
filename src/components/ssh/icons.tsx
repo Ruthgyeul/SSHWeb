@@ -216,3 +216,117 @@ export function MoveIcon({ className }: { className?: string }) {
     </Svg>
   );
 }
+
+/** Command-prompt window — "open terminal here". */
+export function TerminalIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="m7 9 3 3-3 3" />
+      <path d="M13 15h4" />
+    </Svg>
+  );
+}
+
+/** Stacked platters — disk usage (df). */
+export function DiskIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <ellipse cx="12" cy="6" rx="8" ry="3" />
+      <path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6" />
+      <path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
+    </Svg>
+  );
+}
+
+/** Two overlapping sheets — copy (path / duplicate). */
+export function CopyIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </Svg>
+  );
+}
+
+/** Crosshair on a ring — "go to path". */
+export function TargetIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+      <circle cx="12" cy="12" r="1.5" />
+    </Svg>
+  );
+}
+
+/** Folder with a plus — create directory (+dir). */
+export function FolderPlusIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="M3 7a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.7.9l.8 1.2a2 2 0 0 0 1.7.9H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M12 11v5M9.5 13.5h5" />
+    </Svg>
+  );
+}
+
+/** Document with a plus — create empty file (+file). */
+export function FilePlusIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5" />
+      <path d="M12 12v5M9.5 14.5h5" />
+    </Svg>
+  );
+}
+
+/** Folder with an up-arrow — upload a folder. */
+export function FolderUploadIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="M3 7a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.7.9l.8 1.2a2 2 0 0 0 1.7.9H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M12 17v-5M9.5 14l2.5-2.5 2.5 2.5" />
+    </Svg>
+  );
+}
+
+/** Corner arrow — go to the parent directory (up). */
+export function LevelUpIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="M5 19V9a2 2 0 0 1 2-2h12" />
+      <path d="m15 3 4 4-4 4" />
+    </Svg>
+  );
+}
+
+/** Key — change permissions (chmod). */
+export function KeyIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <circle cx="7.5" cy="15.5" r="4.5" />
+      <path d="m10.5 12.5 8-8" />
+      <path d="m16 5 3 3M14 7l2 2" />
+    </Svg>
+  );
+}
+
+/** Shield — elevated (sudo/root) access. */
+export function ShieldIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z" />
+    </Svg>
+  );
+}
+
+/** Two opposing arrows — compare / diff. */
+export function DiffIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="M4 8h13m0 0-3-3m3 3-3 3" />
+      <path d="M20 16H7m0 0 3-3m-3 3 3 3" />
+    </Svg>
+  );
+}
