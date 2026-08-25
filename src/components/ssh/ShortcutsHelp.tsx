@@ -11,10 +11,6 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
   {
     title: "Terminal",
     items: [
-      { keys: ["Ctrl/⌘", "F"], desc: "Search the scrollback buffer" },
-      { keys: ["Enter"], desc: "Next search match" },
-      { keys: ["Shift", "Enter"], desc: "Previous search match" },
-      { keys: ["Esc"], desc: "Close the search bar" },
       {
         keys: ["Ctrl", "C"],
         desc: "Send SIGINT (or copy when text is selected)",

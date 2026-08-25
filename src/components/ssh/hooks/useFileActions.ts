@@ -4,7 +4,6 @@ import {
   modeToOctal,
   parentPath,
   parseOctalMode,
-  suggestCopyName,
   type ClientMessage,
   type FileEntry,
 } from "@/lib/sshProtocol";
@@ -17,26 +16,19 @@ type Send = (msg: ClientMessage) => void;
 type SetDialog = (request: DialogRequest | null) => void;
 
 interface FileActionsDeps {
-  /** The current working directory (search/action root). */
+  /** The current working directory (action root). */
   cwd: string;
-  /** The current listing, for a copy's non-colliding name suggestion. */
-  entries: FileEntry[];
   send: Send;
   setDialog: SetDialog;
 }
 
 /** The file-browser's mutating actions, each of which builds a `PromptDialog`
  * request (confirm or name/mode input) and, on confirm, sends the matching
- * SFTP message. Pure of any session state beyond `cwd`/`entries`, so it lives
- * here rather than inline in SshSession. `onMove` is the one immediate action
- * (drag-drop) with no dialog. Elevated-access (sudo) toggling stays in
- * SshSession since it also drives connection state. */
-export function useFileActions({
-  cwd,
-  entries,
-  send,
-  setDialog,
-}: FileActionsDeps) {
+ * SFTP message. Pure of any session state beyond `cwd`, so it lives here rather
+ * than inline in SshSession. `onMove` is the one immediate action (drag-drop)
+ * with no dialog. Elevated-access (sudo) toggling stays in SshSession since it
+ * also drives connection state. */
+export function useFileActions({ cwd, send, setDialog }: FileActionsDeps) {
   return useMemo(() => {
     const onDelete = (entry: FileEntry) => {
       setDialog({
@@ -81,25 +73,27 @@ export function useFileActions({
       });
     };
 
-    const onMkdir = () => {
+    // Unified "new file or folder": one dialog whose name decides the kind —
+    // a trailing "/" makes a directory (e.g. "logs/"), otherwise an empty file
+    // (e.g. "notes.txt").
+    const onCreate = () => {
       setDialog({
-        title: "New directory",
-        input: { label: "Directory name", placeholder: "e.g. logs" },
+        title: "New file or folder",
+        input: {
+          label: "Name (end with / for a folder)",
+          placeholder: "e.g. notes.txt or logs/",
+        },
         confirmLabel: "Create",
         validate: (v) => (v.trim() ? null : "Please enter a name."),
-        onConfirm: (v) =>
-          send({ t: "sftp-mkdir", path: joinPath(cwd, v.trim()) }),
-      });
-    };
-
-    const onTouch = () => {
-      setDialog({
-        title: "New file",
-        input: { label: "File name", placeholder: "e.g. notes.txt" },
-        confirmLabel: "Create",
-        validate: (v) => (v.trim() ? null : "Please enter a name."),
-        onConfirm: (v) =>
-          send({ t: "sftp-write", path: joinPath(cwd, v.trim()), dataB64: "" }),
+        onConfirm: (v) => {
+          const raw = v.trim();
+          if (raw.endsWith("/")) {
+            const name = raw.replace(/\/+$/, "");
+            if (name) send({ t: "sftp-mkdir", path: joinPath(cwd, name) });
+          } else {
+            send({ t: "sftp-write", path: joinPath(cwd, raw), dataB64: "" });
+          }
+        },
       });
     };
 
@@ -109,31 +103,6 @@ export function useFileActions({
     // `onMovePath` with the entry's absolute path.
     const onRename = (entry: FileEntry) =>
       onMovePath(joinPath(cwd, entry.name), entry.name);
-
-    // Duplicate a file/directory in place: pre-fill a non-colliding "… copy"
-    // name and copy on confirm. The server streams the copy (original only read).
-    const onCopy = (entry: FileEntry) => {
-      const suggested = suggestCopyName(
-        entry.name,
-        entries.map((e) => e.name),
-      );
-      setDialog({
-        title: `Duplicate “${entry.name}”`,
-        input: { label: "New name", initialValue: suggested },
-        confirmLabel: "Duplicate",
-        validate: (v) => (v.trim() ? null : "Please enter a name."),
-        onConfirm: (v) => {
-          const next = v.trim();
-          if (next && next !== entry.name) {
-            send({
-              t: "sftp-copy",
-              from: joinPath(cwd, entry.name),
-              to: joinPath(cwd, next),
-            });
-          }
-        },
-      });
-    };
 
     // Move (drag-drop onto a folder): rename the item under the target
     // directory. Guards against no-op and moving a directory into itself or its
@@ -241,14 +210,12 @@ export function useFileActions({
     return {
       onDelete,
       onDeleteMany,
-      onMkdir,
-      onTouch,
+      onCreate,
       onRename,
-      onCopy,
       onMove,
       onDeletePath,
       onMovePath,
       onChmod,
     };
-  }, [cwd, entries, send, setDialog]);
+  }, [cwd, send, setDialog]);
 }
