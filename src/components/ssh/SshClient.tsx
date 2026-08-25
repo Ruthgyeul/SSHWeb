@@ -189,28 +189,6 @@ export function SshClient() {
     setActiveId(id);
   }, []);
 
-  // #83: open a new tab pre-filled to reconnect to `id`'s server (no password),
-  // reusing the connect form's `initial` seed. Only offered for a connected tab.
-  const duplicateSession = useCallback(
-    (id: number) => {
-      const details = connections[id];
-      if (!details) return;
-      const seed: ConnectFormInitial = {
-        host: details.host,
-        port: String(details.port),
-        username: details.username,
-        auth: details.privateKey ? "key" : "password",
-        privateKey: details.privateKey,
-        passphrase: details.passphrase,
-      };
-      const newId = nextIdRef.current++;
-      setPendingInitial((prev) => ({ ...prev, [newId]: seed }));
-      setIds((prev) => [...prev, newId]);
-      setActiveId(newId);
-    },
-    [connections],
-  );
-
   const doClose = useCallback((id: number) => {
     setIds((prev) => {
       if (prev.length <= 1) return prev; // keep at least one tab
@@ -345,17 +323,6 @@ export function SshClient() {
                 >
                   <StatusDot status={meta?.status ?? "idle"} />
                   <span className="max-w-[12rem] truncate">{label}</span>
-                </button>
-              )}
-              {connections[id] && (
-                <button
-                  type="button"
-                  onClick={() => duplicateSession(id)}
-                  className="text-term-faint hover:text-term-accent"
-                  title="Duplicate session (same server, new tab)"
-                  aria-label="Duplicate session"
-                >
-                  ⧉
                 </button>
               )}
               {ids.length > 1 && (

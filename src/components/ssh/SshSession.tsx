@@ -54,7 +54,6 @@ import { FilePreview } from "./FilePreview";
 import { PasteConfirm } from "./PasteConfirm";
 import { PromptDialog, type DialogRequest } from "./PromptDialog";
 import { MobileKeys } from "./MobileKeys";
-import { SnippetsBar } from "./SnippetsBar";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TerminalSettings } from "./TerminalSettings";
 import { SearchIcon } from "./icons";
@@ -486,8 +485,6 @@ export function SshSession({
     onDeletePath,
     onMovePath,
     onChmod,
-    onSymlink,
-    onChecksum,
   } = useFileActions({ cwd, entries, send, setDialog });
 
   const {
@@ -1371,19 +1368,10 @@ export function SshSession({
     }
   };
 
-  // Inject a saved snippet's command into the shell (no trailing newline — the
-  // user reviews and presses Enter, matching the paste-confirm posture).
-  const runSnippet = (command: string) => {
-    if (!connected) return;
-    disarmMods();
-    send({ t: "data", data: command });
-    xtermRef.current?.focus();
-  };
-
   // "Open terminal here" (#50): cd the shell to the file browser's current
-  // directory and switch to the terminal. Unlike a snippet, this runs the cd
-  // (trailing newline) since it's an explicit, safe navigation the user asked
-  // for; the path is single-quoted so metacharacters can't break out.
+  // directory and switch to the terminal. This runs the cd (trailing newline)
+  // since it's an explicit, safe navigation the user asked for; the path is
+  // single-quoted so metacharacters can't break out.
   const openTerminalHere = () => {
     if (!connected) return;
     disarmMods();
@@ -1732,11 +1720,13 @@ export function SshSession({
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-term-border bg-term-card">
       {/* Session header */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
-        {/* Identity — keeps a min-width floor so `user@host` stays readable and
-            truncates within itself; the min-width forces the controls (and, when
-            tighter, the status chips) to wrap to a new line rather than
-            collapsing the host to nothing or overlapping it. */}
-        <div className="flex min-w-[9rem] flex-1 items-center gap-2.5">
+        {/* Identity — the host renders identically in both tabs because the
+            controls group is the same width in each (the terminal-only Search
+            button keeps a reserved slot on the files tab too, below), so the
+            `flex-1` identity always receives the same leftover width. The
+            min-width floor is a readability aid: once the row is tight the
+            controls wrap to their own line rather than squeezing the host. */}
+        <div className="flex min-w-[14rem] flex-1 items-center gap-2.5">
           <StatusDot status={status} />
           <span
             className="min-w-0 flex-1 truncate text-xs text-term-dim"
@@ -1771,20 +1761,28 @@ export function SshSession({
               >
                 ?
               </button>
-              {tab === "terminal" && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTab("terminal");
-                    xtermRef.current?.openSearch();
-                  }}
-                  className="rounded px-2 py-1 text-term-muted transition-colors hover:text-term-text"
-                  title="Search terminal (Ctrl+F)"
-                  aria-label="Search terminal"
-                >
-                  <SearchIcon className="h-3.5 w-3.5" />
-                </button>
-              )}
+              {/* Terminal-only, but always occupies its slot so the controls
+                  group is the same width in both tabs — otherwise the `flex-1`
+                  identity would get more room (and truncate later) in the files
+                  tab than the terminal tab. On the files tab it's an invisible,
+                  non-interactive placeholder. */}
+              <button
+                type="button"
+                onClick={() => {
+                  setTab("terminal");
+                  xtermRef.current?.openSearch();
+                }}
+                className={cn(
+                  "rounded px-2 py-1 text-term-muted transition-colors hover:text-term-text",
+                  tab !== "terminal" && "pointer-events-none invisible",
+                )}
+                tabIndex={tab === "terminal" ? undefined : -1}
+                aria-hidden={tab !== "terminal"}
+                title="Search terminal (Ctrl+F)"
+                aria-label="Search terminal"
+              >
+                <SearchIcon className="h-3.5 w-3.5" />
+              </button>
               <TerminalSettings
                 onClearThumbnailCache={clearThumbnails}
                 getCacheBytes={clientCacheBytes}
@@ -1845,7 +1843,6 @@ export function SshSession({
               }
             />
           </div>
-          {connected && <SnippetsBar onRun={runSnippet} />}
           {connected && (
             <MobileKeys
               ctrlActive={ctrlArmed}
@@ -1899,8 +1896,6 @@ export function SshSession({
               onCopy={onCopy}
               onMove={onMove}
               onChmod={onChmod}
-              onSymlink={onSymlink}
-              onChecksum={onChecksum}
               onDiff={onDiff}
               onEdit={requestEdit}
               onPreview={openPreviewFile}

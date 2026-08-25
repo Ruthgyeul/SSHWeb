@@ -13,7 +13,7 @@ const STORAGE_KEY = "sshweb.connectionProfiles";
 const SYNC_EVENT = "sshweb:connectionProfiles";
 
 // Cache the parsed snapshot so useSyncExternalStore gets a stable reference
-// between changes (same pattern as useSnippets). Shared across all sessions.
+// between changes. Shared across all sessions.
 let cachedRaw: string | null = null;
 let cachedProfiles: ConnectionProfile[] = [];
 

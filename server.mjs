@@ -3190,6 +3190,21 @@ wss.on("connection", (ws, req) => {
     return "other";
   }
 
+  // Owner (user) name from an `ls -l`-style long name (3rd field). Mirror of
+  // `parseOwnerFromLongname` in src/lib/sshProtocol.ts — keep the two in sync.
+  function parseOwnerFromLongname(longname) {
+    if (!longname) return undefined;
+    const parts = String(longname).trim().split(/\s+/);
+    // Only trust token 3 as the owner when the first two fields look like an
+    // `ls -l` prefix (perms + numeric link count); otherwise a display-only
+    // filename's words would be misread as owner. Falls back to uid at the call
+    // site. Mirror of parseOwnerFromLongname in src/lib/sshProtocol.ts.
+    if (parts.length < 4) return undefined;
+    if (!/^[dlbcps-][rwxsStT-]{9}[.+@]?$/.test(parts[0])) return undefined;
+    if (!/^\d+$/.test(parts[1])) return undefined;
+    return parts[2] || undefined;
+  }
+
   // Upload backpressure: SFTP write streams whose buffer is full and that we're
   // waiting to `drain` before reading more from the socket. Symmetric with the
   // download path (which pauses the SFTP *read* stream on a full `ws`
@@ -3799,6 +3814,13 @@ wss.on("connection", (ws, req) => {
             size: item.attrs.size || 0,
             mtime: (item.attrs.mtime || 0) * 1000,
             mode: (item.attrs.mode || 0) & 0o777,
+            // Owner name from the `ls -l`-style long name (no extra round-trip;
+            // readdir already returns it), falling back to a numeric uid.
+            owner:
+              parseOwnerFromLongname(item.longname) ??
+              (typeof item.attrs.uid === "number"
+                ? String(item.attrs.uid)
+                : undefined),
           }));
           // Resolve each symlink's target with `readlink` (no follow — this
           // only reads link metadata, never the pointed-at file) so the UI

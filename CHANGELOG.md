@@ -11,12 +11,14 @@ All notable changes to this project are documented here. The format is based on
 
 - SFTP/UX features: transfer throughput + ETA on progress rows, a hex-view
   toggle in the text preview, "open terminal here" (cd the shell to the browsed
-  folder), file checksums (sha256/sha1/md5), symbolic-link creation, recursive
-  chmod, opt-in desktop notifications on an unexpected disconnect, remote disk
-  usage (df), and a two-file diff view.
-- File-browser UX: a hidden-files (dotfile) toggle, a go-to-path box, copy-path
-  actions, list-view column customization, and spacebar quicklook — all
-  persisted where applicable.
+  folder), recursive chmod, opt-in desktop notifications on an unexpected
+  disconnect, remote disk usage (df), and a two-file diff view.
+- File-browser UX: always-on Size/Perms/Owner/Modified columns (Owner parsed
+  from the SFTP long name), hidden (dotfile) entries always shown, a go-to-path
+  box, a copy current-path action, and spacebar quicklook.
+- Clearer, unified toolbar/row iconography (inline SVGs for open-terminal, df,
+  copy-path, go-to-path, new folder/file, upload/upload-folder, sudo, and the
+  row move/duplicate/chmod/delete actions).
 - Live-follow (tail -f) for text previews, and first-page PDF thumbnails in the
   grid (when the bridge's `sharp` has PDF support).
 - Resumable downloads and a concurrency-limited download queue: plain file
@@ -35,8 +37,8 @@ All notable changes to this project are documented here. The format is based on
 - Client error-reporting seam (`NEXT_PUBLIC_SENTRY_DSN`), wired into the error
   boundaries.
 - UX: success toasts (saves/downloads), clickable terminal URLs, a
-  dangerous-command paste warning, open-tab persistence across reloads, session
-  duplicate, and a close-tab guard for busy tabs.
+  dangerous-command paste warning, open-tab persistence across reloads, and a
+  close-tab guard for busy tabs.
 - Performance: large base64 encode/decode offloaded to a Web Worker; dominant-
   color thumbnail placeholders.
 - Pre-commit hooks (husky + lint-staged) and a `server.mjs`↔`src/lib`

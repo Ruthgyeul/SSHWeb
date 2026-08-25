@@ -238,37 +238,6 @@ export function useFileActions({
       });
     };
 
-    // Create a symbolic link that points at an existing entry, in the same
-    // directory (#48). The target is stored relative (just the entry name) so it
-    // resolves against the link's directory.
-    const onSymlink = (entry: FileEntry) => {
-      setDialog({
-        title: `Create link to “${entry.name}”`,
-        input: {
-          label: "Link name",
-          initialValue: `${entry.name} link`,
-        },
-        confirmLabel: "Create link",
-        validate: (v) => {
-          const next = v.trim();
-          if (!next) return "Please enter a name.";
-          if (next === entry.name) return "The link needs a different name.";
-          return null;
-        },
-        onConfirm: (v) =>
-          send({
-            t: "sftp-symlink",
-            target: entry.name,
-            path: joinPath(cwd, v.trim()),
-          }),
-      });
-    };
-
-    // Ask the bridge to hash the file's contents (#46); the digest comes back as
-    // an `sftp-checksum` frame the session surfaces as a toast.
-    const onChecksum = (entry: FileEntry) =>
-      send({ t: "sftp-checksum", path: joinPath(cwd, entry.name) });
-
     return {
       onDelete,
       onDeleteMany,
@@ -280,8 +249,6 @@ export function useFileActions({
       onDeletePath,
       onMovePath,
       onChmod,
-      onSymlink,
-      onChecksum,
     };
   }, [cwd, entries, send, setDialog]);
 }

@@ -46,7 +46,7 @@ describe("FileEntryActions", () => {
     );
     // Grid view (default): no chmod button.
     expect(
-      screen.queryByRole("button", { name: "chmod" }),
+      screen.queryByRole("button", { name: "Change permissions" }),
     ).not.toBeInTheDocument();
 
     rerender(
@@ -61,12 +61,14 @@ describe("FileEntryActions", () => {
         {...h}
       />,
     );
-    expect(screen.getByRole("button", { name: "chmod" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "chmod" }));
+    expect(
+      screen.getByRole("button", { name: "Change permissions" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Change permissions" }));
     expect(h.onChmod).toHaveBeenCalledWith(file);
   });
 
-  it("edits and read-only-previews a text file", () => {
+  it("edits a text file (reading is done in the editor, so no preview eye)", () => {
     const h = handlers();
     render(
       <FileEntryActions
@@ -81,10 +83,28 @@ describe("FileEntryActions", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(h.onEdit).toHaveBeenCalledWith("/x/report.txt", "report.txt", 128);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Preview (read-only)" }),
+    // An editable-only file gets no separate read-only preview button.
+    expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
+  });
+
+  it("shows a single preview eye for a rich-previewable file", () => {
+    const h = handlers();
+    render(
+      <FileEntryActions
+        entry={{ ...file, name: "readme.md" }}
+        target="/x/readme.md"
+        isDir={false}
+        editable
+        previewable
+        previewSiblings={[]}
+        {...h}
+      />,
     );
-    expect(h.onPreview).toHaveBeenCalledWith("/x/report.txt", "report.txt", []);
+    // Markdown is both previewable and editable, but only one preview eye shows.
+    expect(screen.getAllByRole("button", { name: "Preview" })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(h.onPreview).toHaveBeenCalledWith("/x/readme.md", "readme.md", []);
   });
 
   it("downloads a directory as a zip", () => {
@@ -120,11 +140,11 @@ describe("FileEntryActions", () => {
         {...h}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "mv" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move / rename" }));
     expect(h.onRename).toHaveBeenCalledWith(file);
-    fireEvent.click(screen.getByRole("button", { name: "cp" }));
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
     expect(h.onCopy).toHaveBeenCalledWith(file);
-    fireEvent.click(screen.getByRole("button", { name: "✕" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(h.onDelete).toHaveBeenCalledWith(file);
   });
 });
