@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import {
   DownloadIcon,
   EyeIcon,
-  KeyIcon,
+  LockIcon,
   MoveIcon,
   PencilIcon,
   TrashIcon,
@@ -101,7 +101,7 @@ export function FileEntryActions({
           title="Change permissions"
           aria-label="Change permissions"
         >
-          <KeyIcon className="h-4 w-4" />
+          <LockIcon className="h-4 w-4" />
         </button>
       )}
       <button

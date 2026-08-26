@@ -302,13 +302,14 @@ export function LevelUpIcon({ className }: { className?: string }) {
   );
 }
 
-/** Key — change permissions (chmod). */
-export function KeyIcon({ className }: { className?: string }) {
+/** Padlock with a keyhole — change permissions (chmod). */
+export function LockIcon({ className }: { className?: string }) {
   return (
     <Svg className={className}>
-      <circle cx="7.5" cy="15.5" r="4.5" />
-      <path d="m10.5 12.5 8-8" />
-      <path d="m16 5 3 3M14 7l2 2" />
+      <rect x="5" y="11" width="14" height="9" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+      <circle cx="12" cy="15" r="1.3" />
+      <path d="M12 16.2V18" />
     </Svg>
   );
 }
