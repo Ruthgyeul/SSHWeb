@@ -207,13 +207,13 @@ export function InfoIcon({ className }: { className?: string }) {
   );
 }
 
-/** Arrow into a destination box — move / rename (mv). */
+/** Folder with an arrow into it — move / rename (mv). */
 export function MoveIcon({ className }: { className?: string }) {
   return (
     <Svg className={className}>
-      <path d="M3 12h10" />
-      <path d="m9 8 4 4-4 4" />
-      <path d="M16 5h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-3" />
+      <path d="M3 7a2 2 0 0 1 2-2h3.5a2 2 0 0 1 1.6.8l.9 1.2a2 2 0 0 0 1.6.8H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M8 14h6" />
+      <path d="m11 11 3 3-3 3" />
     </Svg>
   );
 }
