@@ -242,3 +242,45 @@ describe("FileBrowser dotfile-only folder + quicklook scoping (Codex #135)", () 
     expect(props.onPreview).not.toHaveBeenCalled();
   });
 });
+
+describe("FileBrowser toolbar — merged New / Upload / go-to (Phase 8)", () => {
+  it("fires onCreate from the merged New button", () => {
+    const { props } = renderBrowser([file("a.txt", 1)]);
+    fireEvent.click(screen.getByLabelText("New file or folder"));
+    expect(props.onCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the Upload menu (Files / Folder) and closes it on Escape", () => {
+    renderBrowser([file("a.txt", 1)]);
+    // The menu items aren't rendered until the trigger is clicked.
+    expect(screen.queryByRole("menuitem", { name: "Files" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }));
+    expect(screen.getByRole("menuitem", { name: "Files" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "Folder" }),
+    ).toBeInTheDocument();
+    // Escape (from within the menu) closes it.
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.queryByRole("menuitem", { name: "Files" })).toBeNull();
+  });
+
+  it("closes the inline go-to editor on Escape, restoring the breadcrumb", () => {
+    const { props } = renderBrowser([file("a.txt", 1)], { cwd: "/home/u" });
+    fireEvent.click(screen.getByLabelText("Toggle go-to-path"));
+    const input = screen.getByLabelText("Go to path") as HTMLInputElement;
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByLabelText("Go to path")).toBeNull();
+    expect(props.onNavigate).not.toHaveBeenCalled();
+  });
+});
+
+describe("FileBrowser grid view (Phase 8)", () => {
+  it("renders tiles after switching to grid view", () => {
+    renderBrowser([file("photo.jpg", 10), file("notes.txt", 2)]);
+    // The grid tile's open button (aria-label "Open <name>") is grid-only.
+    expect(screen.queryByLabelText("Open photo.jpg")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Grid view"));
+    expect(screen.getByLabelText("Open photo.jpg")).toBeInTheDocument();
+    expect(screen.getByLabelText("Open notes.txt")).toBeInTheDocument();
+  });
+});

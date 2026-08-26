@@ -380,6 +380,12 @@ export function FileBrowser({
 }) {
   const uploadRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
+  // Focus-return targets for the two lightweight popovers (a11y): the go-to
+  // toggle and the Upload menu trigger. `uploadMenuFirstRef` is the first menu
+  // item, focused when the menu opens.
+  const gotoBtnRef = useRef<HTMLButtonElement>(null);
+  const uploadBtnRef = useRef<HTMLButtonElement>(null);
+  const uploadMenuFirstRef = useRef<HTMLButtonElement>(null);
   const [dragging, setDragging] = useState(false);
   // Absolute path of the folder currently under an in-app move drag (highlight).
   const [dropDir, setDropDir] = useState<string | null>(null);
@@ -406,6 +412,11 @@ export function FileBrowser({
   useEffect(() => {
     folderRef.current?.setAttribute("webkitdirectory", "");
   }, []);
+  // Move focus into the Upload menu (its first item) when it opens, so keyboard
+  // users land inside it; closing restores focus to the trigger (below).
+  useEffect(() => {
+    if (showUploadMenu) uploadMenuFirstRef.current?.focus();
+  }, [showUploadMenu]);
   // Checked entries, tagged with the directory they belong to. Tagging by `cwd`
   // means the selection derives to empty on navigation (no effect needed), and
   // stale names left after a refresh are naturally ignored because every read
@@ -650,6 +661,7 @@ export function FileBrowser({
                   if (next) {
                     onNavigate(next);
                     setShowGoto(false);
+                    setGotoInput("");
                   }
                 }}
               >
@@ -658,7 +670,13 @@ export function FileBrowser({
                   value={gotoInput}
                   onChange={(e) => setGotoInput(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Escape") setShowGoto(false);
+                    if (e.key === "Escape") {
+                      // Close, clear (like the search/filter bars), and return
+                      // focus to the toggle instead of dropping it to <body>.
+                      setShowGoto(false);
+                      setGotoInput("");
+                      gotoBtnRef.current?.focus();
+                    }
                   }}
                   placeholder="Go to path, e.g. /var/log"
                   autoFocus
@@ -737,6 +755,7 @@ export function FileBrowser({
             <CopyIcon />
           </button>
           <button
+            ref={gotoBtnRef}
             type="button"
             onClick={() =>
               setShowGoto((v) => {
@@ -912,6 +931,7 @@ export function FileBrowser({
             {/* Merged upload: one button, a menu picks files vs. a folder. */}
             <div className="relative">
               <button
+                ref={uploadBtnRef}
                 type="button"
                 onClick={() => setShowUploadMenu((v) => !v)}
                 disabled={loading}
@@ -935,8 +955,22 @@ export function FileBrowser({
                   <div
                     role="menu"
                     className="absolute right-0 z-20 mt-1 flex min-w-[8rem] flex-col overflow-hidden rounded border border-term-border bg-term-panel shadow-lg"
+                    // Escape closes and returns focus to the trigger; tabbing out
+                    // of the menu (focus leaves this subtree) closes it too.
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        e.stopPropagation();
+                        setShowUploadMenu(false);
+                        uploadBtnRef.current?.focus();
+                      }
+                    }}
+                    onBlur={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node))
+                        setShowUploadMenu(false);
+                    }}
                   >
                     <button
+                      ref={uploadMenuFirstRef}
                       type="button"
                       role="menuitem"
                       onClick={() => {

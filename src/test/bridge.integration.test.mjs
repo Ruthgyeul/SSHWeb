@@ -271,30 +271,6 @@ describe("WebSocket ↔ SSH bridge (end-to-end)", () => {
     expect(ok.path).toBe("/home/testuser/gone.txt");
   });
 
-  it("creates a symlink and acks with sftp-ok (#48)", async () => {
-    client.send({
-      t: "sftp-symlink",
-      target: "readme.txt",
-      path: "/home/testuser/readme.link",
-    });
-    const ok = await client.waitFor(
-      (m) => m.t === "sftp-ok" && m.op === "symlink",
-    );
-    expect(ok.path).toBe("/home/testuser/readme.link");
-  });
-
-  it("computes a sha256 checksum of a file (#46)", async () => {
-    const { createHash } = await import("node:crypto");
-    const expected = createHash("sha256")
-      .update(MOCK_FILE_CONTENT)
-      .digest("hex");
-    client.send({ t: "sftp-checksum", path: MOCK_FILE_PATH });
-    const sum = await client.waitFor((m) => m.t === "sftp-checksum");
-    expect(sum.algo).toBe("sha256");
-    expect(sum.hex).toBe(expected);
-    expect(sum.path).toBe(MOCK_FILE_PATH);
-  });
-
   it("streams an initial tail for a followed file, then stops (#47)", async () => {
     client.send({ t: "sftp-follow", path: MOCK_FILE_PATH });
     const data = await client.waitFor(

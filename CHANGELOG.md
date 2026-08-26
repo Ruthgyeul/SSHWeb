@@ -63,6 +63,12 @@ All notable changes to this project are documented here. The format is based on
   SSHWeb now uses a single fixed dark theme.
 - Removed the terminal scrollback search (the in-terminal "find" bar and its
   Ctrl/⌘+F shortcut) and the per-file **duplicate** row action.
+- Removed the now-unused bridge capabilities left with no UI entry point —
+  `sftp-copy`, `sftp-symlink`, and `sftp-checksum` (wire messages, server
+  handlers, and their integration tests) — plus dead helpers/icons.
+- Keyboard accessibility: the toolbar's Upload menu now closes on Escape (and
+  on tab-out) and restores focus to its trigger, and the inline go-to-path
+  editor returns focus to its toggle on Escape.
 - Refactor: the inline-editor state moved out of `SshSession` into a `useEditors`
   hook, and the file browser's list/grid views now share one row-open helper.
 - Numerous bridge limits are now env-tunable (stream chunk size, WS backpressure

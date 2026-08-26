@@ -281,7 +281,6 @@ export function FilePreview({
     });
   }, [path]);
 
-  // File-info panel toggle (path/size/modified/perms/dimensions) and the
   // File-info panel toggle (path/size/modified/perms/dimensions).
   const [showInfo, setShowInfo] = useState(false);
 
