@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcon";
 import {
   CopyIcon,
+  CrownIcon,
   DiffIcon,
   DiskIcon,
   DownloadIcon,
@@ -33,7 +34,6 @@ import {
   ListIcon,
   RefreshIcon,
   SearchIcon,
-  ShieldIcon,
   TargetIcon,
   TerminalIcon,
   TrashIcon,
@@ -840,7 +840,7 @@ export function FileBrowser({
                   : "Elevate to root (sudo)"
               }
             >
-              <ShieldIcon
+              <CrownIcon
                 className={cn("h-4 w-4", elevatedPending && "animate-pulse")}
               />
             </button>

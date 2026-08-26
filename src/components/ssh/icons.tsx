@@ -313,11 +313,12 @@ export function KeyIcon({ className }: { className?: string }) {
   );
 }
 
-/** Shield — elevated (sudo/root) access. */
-export function ShieldIcon({ className }: { className?: string }) {
+/** Crown — elevated (sudo/root) access. */
+export function CrownIcon({ className }: { className?: string }) {
   return (
     <Svg className={className}>
-      <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z" />
+      <path d="M4 8.5 7.5 12 12 5.5 16.5 12 20 8.5 18.5 19h-13z" />
+      <path d="M5.5 19h13" />
     </Svg>
   );
 }
