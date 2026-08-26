@@ -264,6 +264,16 @@ describe("FileBrowser toolbar — merged New / Upload / go-to (Phase 8)", () => 
     expect(screen.queryByRole("menuitem", { name: "Files" })).toBeNull();
   });
 
+  it("closes the Upload menu when its trigger is clicked again", () => {
+    renderBrowser([file("a.txt", 1)]);
+    const trigger = screen.getByRole("button", { name: "Upload" });
+    fireEvent.click(trigger);
+    expect(screen.getByRole("menuitem", { name: "Files" })).toBeInTheDocument();
+    // A second click on the (now-expanded) trigger must close it, not reopen.
+    fireEvent.click(trigger);
+    expect(screen.queryByRole("menuitem", { name: "Files" })).toBeNull();
+  });
+
   it("closes the inline go-to editor on Escape, restoring the breadcrumb", () => {
     const { props } = renderBrowser([file("a.txt", 1)], { cwd: "/home/u" });
     fireEvent.click(screen.getByLabelText("Toggle go-to-path"));

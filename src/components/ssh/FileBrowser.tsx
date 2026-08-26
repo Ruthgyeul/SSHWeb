@@ -965,7 +965,14 @@ export function FileBrowser({
                       }
                     }}
                     onBlur={(e) => {
-                      if (!e.currentTarget.contains(e.relatedTarget as Node))
+                      // Close when focus leaves the menu — but not when it moves
+                      // to the trigger, or the trigger's own click would then
+                      // re-toggle the (now-closed) menu straight back open.
+                      const next = e.relatedTarget as Node | null;
+                      if (
+                        next !== uploadBtnRef.current &&
+                        !e.currentTarget.contains(next)
+                      )
                         setShowUploadMenu(false);
                     }}
                   >
