@@ -207,13 +207,13 @@ export function InfoIcon({ className }: { className?: string }) {
   );
 }
 
-/** Arrow into a destination box — move / rename (mv). */
+/** Folder with an arrow into it — move / rename (mv). */
 export function MoveIcon({ className }: { className?: string }) {
   return (
     <Svg className={className}>
-      <path d="M3 12h10" />
-      <path d="m9 8 4 4-4 4" />
-      <path d="M16 5h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-3" />
+      <path d="M3 7a2 2 0 0 1 2-2h3.5a2 2 0 0 1 1.6.8l.9 1.2a2 2 0 0 0 1.6.8H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M8 14h6" />
+      <path d="m11 11 3 3-3 3" />
     </Svg>
   );
 }
@@ -302,22 +302,24 @@ export function LevelUpIcon({ className }: { className?: string }) {
   );
 }
 
-/** Key — change permissions (chmod). */
-export function KeyIcon({ className }: { className?: string }) {
+/** Padlock with a keyhole — change permissions (chmod). */
+export function LockIcon({ className }: { className?: string }) {
   return (
     <Svg className={className}>
-      <circle cx="7.5" cy="15.5" r="4.5" />
-      <path d="m10.5 12.5 8-8" />
-      <path d="m16 5 3 3M14 7l2 2" />
+      <rect x="5" y="11" width="14" height="9" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+      <circle cx="12" cy="15" r="1.3" />
+      <path d="M12 16.2V18" />
     </Svg>
   );
 }
 
-/** Shield — elevated (sudo/root) access. */
-export function ShieldIcon({ className }: { className?: string }) {
+/** Crown — elevated (sudo/root) access. */
+export function CrownIcon({ className }: { className?: string }) {
   return (
     <Svg className={className}>
-      <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z" />
+      <path d="M4 8.5 7.5 12 12 5.5 16.5 12 20 8.5 18.5 19h-13z" />
+      <path d="M5.5 19h13" />
     </Svg>
   );
 }
