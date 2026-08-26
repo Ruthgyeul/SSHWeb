@@ -261,16 +261,6 @@ export function TargetIcon({ className }: { className?: string }) {
   );
 }
 
-/** Folder with a plus — create directory (+dir). */
-export function FolderPlusIcon({ className }: { className?: string }) {
-  return (
-    <Svg className={className}>
-      <path d="M3 7a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.7.9l.8 1.2a2 2 0 0 0 1.7.9H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-      <path d="M12 11v5M9.5 13.5h5" />
-    </Svg>
-  );
-}
-
 /** Document with a plus — create empty file (+file). */
 export function FilePlusIcon({ className }: { className?: string }) {
   return (

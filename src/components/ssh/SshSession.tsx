@@ -850,13 +850,6 @@ export function SshSession({
           break;
         }
 
-        case "sftp-checksum": {
-          // #46: surface the digest as a toast the user can read/copy.
-          const base = msg.path.split("/").pop() || msg.path;
-          notify("info", `${msg.algo} ${base}: ${msg.hex}`);
-          break;
-        }
-
         case "sftp-df":
           // #49: surface the current filesystem's free/total as a toast.
           notify("info", formatDiskUsage(msg.total, msg.free));

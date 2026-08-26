@@ -246,19 +246,9 @@ export type ClientMessage =
   | { t: "sftp-sudo"; enable: boolean; password?: string }
   | { t: "sftp-rm"; path: string; dir?: boolean }
   | { t: "sftp-rename"; from: string; to: string }
-  // Copy (duplicate) a file or directory to a new path. The bridge streams the
-  // source into the destination (recursively for a directory) — the original is
-  // only read, never modified. Move is done with `sftp-rename` instead.
-  | { t: "sftp-copy"; from: string; to: string }
-  // Create a symbolic link at `path` pointing to `target` (the target is stored
-  // verbatim; a relative target resolves against the link's directory).
-  | { t: "sftp-symlink"; target: string; path: string }
   // Change mode bits. `recursive` (directories only) walks the subtree applying
   // the same mode to every entry.
   | { t: "sftp-chmod"; path: string; mode: number; recursive?: boolean }
-  // Compute a hash of a remote file's contents (default sha256), streamed on the
-  // bridge so a large file isn't buffered. The original is only read.
-  | { t: "sftp-checksum"; path: string; algo?: string }
   // Query filesystem disk usage for `path` (df), via the OpenSSH statvfs SFTP
   // extension. Not all servers support it; unsupported → an error frame.
   | { t: "sftp-df"; path: string }
@@ -324,10 +314,7 @@ export const CLIENT_MESSAGE_FIELDS: Record<
   "sftp-sudo": { enable: "boolean" },
   "sftp-rm": { path: "string" },
   "sftp-rename": { from: "string", to: "string" },
-  "sftp-copy": { from: "string", to: "string" },
-  "sftp-symlink": { target: "string", path: "string" },
   "sftp-chmod": { path: "string", mode: "number" },
-  "sftp-checksum": { path: "string" },
   "sftp-df": { path: "string" },
   "sftp-follow": { path: "string" },
   "sftp-follow-stop": { path: "string" },
@@ -509,8 +496,6 @@ export type ServerMessage =
       bg?: string;
     }
   | { t: "sftp-ok"; op: string; path: string }
-  // Result of a `sftp-checksum` request: the hex digest of the file's contents.
-  | { t: "sftp-checksum"; path: string; algo: string; hex: string }
   // Result of a `sftp-df` request: total/free bytes of the filesystem holding
   // the queried path.
   | { t: "sftp-df"; path: string; total: number; free: number }
@@ -859,28 +844,6 @@ export function joinPath(base: string, segment: string): string {
 /** The parent directory of a POSIX path (`/a/b/c` → `/a/b`, `/` → `/`). */
 export function parentPath(path: string): string {
   return joinPath(path, "..") || "/";
-}
-
-/**
- * Suggest a non-colliding name for a duplicated file, e.g. `report.txt` →
- * `report copy.txt`, then `report copy 2.txt` if that's taken too. A leading-dot
- * dotfile (`.bashrc`) is treated as having no extension. Used to pre-fill the
- * duplicate dialog; the server still enforces its own filesystem rules.
- */
-export function suggestCopyName(
-  name: string,
-  existing: Iterable<string>,
-): string {
-  const taken = new Set(existing);
-  const dot = name.lastIndexOf(".");
-  const hasExt = dot > 0; // dot at index 0 ⇒ dotfile, not an extension split
-  const base = hasExt ? name.slice(0, dot) : name;
-  const ext = hasExt ? name.slice(dot) : "";
-  const make = (n: number) =>
-    n === 1 ? `${base} copy${ext}` : `${base} copy ${n}${ext}`;
-  let n = 1;
-  while (taken.has(make(n))) n++;
-  return make(n);
 }
 
 /** A clickable breadcrumb segment: its display `name` and the absolute `path`. */

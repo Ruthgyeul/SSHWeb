@@ -534,10 +534,7 @@ const CLIENT_MESSAGE_FIELDS = {
   "sftp-sudo": { enable: "boolean" },
   "sftp-rm": { path: "string" },
   "sftp-rename": { from: "string", to: "string" },
-  "sftp-copy": { from: "string", to: "string" },
-  "sftp-symlink": { target: "string", path: "string" },
   "sftp-chmod": { path: "string", mode: "number" },
-  "sftp-checksum": { path: "string" },
   "sftp-df": { path: "string" },
   "sftp-follow": { path: "string" },
   "sftp-follow-stop": { path: "string" },
@@ -1930,74 +1927,6 @@ function parentDirOf(p) {
   return idx <= 0 ? "/" : p.slice(0, idx);
 }
 
-/** Join a remote directory path with a child name (single-slash separator). */
-function joinRemote(dir, name) {
-  return (dir.endsWith("/") ? dir : `${dir}/`) + name;
-}
-
-/**
- * Copy one file over SFTP by streaming the source into the destination. The
- * source is only read (never modified); the destination is a new file. Bytes
- * pass through the bridge in a streamed pipe, so memory stays bounded.
- */
-function copyFile(s, from, to, done) {
-  let settled = false;
-  const finish = (err) => {
-    if (settled) return;
-    settled = true;
-    done(err || null);
-  };
-  const rs = s.createReadStream(from);
-  const ws = s.createWriteStream(to);
-  rs.on("error", (e) => {
-    try {
-      ws.destroy();
-    } catch {
-      /* stream already gone */
-    }
-    finish(e);
-  });
-  ws.on("error", (e) => {
-    try {
-      rs.destroy();
-    } catch {
-      /* stream already gone */
-    }
-    finish(e);
-  });
-  ws.on("close", () => finish(null));
-  rs.pipe(ws);
-}
-
-/**
- * Recursively copy a directory over SFTP: create `to`, then copy each child
- * (files streamed via {@link copyFile}, subdirectories recursively). Symlinks
- * and special files are skipped. Originals are only read, never modified.
- */
-function copyDir(s, from, to, done) {
-  s.mkdir(to, () => {
-    // An existing destination directory is fine — merge into it.
-    s.readdir(from, (err, list) => {
-      if (err) return done(err);
-      let i = 0;
-      const next = () => {
-        if (i >= list.length) return done(null);
-        const item = list[i++];
-        const childFrom = joinRemote(from, item.filename);
-        const childTo = joinRemote(to, item.filename);
-        if (item.attrs.isDirectory?.()) {
-          copyDir(s, childFrom, childTo, (e) => (e ? done(e) : next()));
-        } else if (item.attrs.isFile?.()) {
-          copyFile(s, childFrom, childTo, (e) => (e ? done(e) : next()));
-        } else {
-          next(); // skip symlinks / specials
-        }
-      };
-      next();
-    });
-  });
-}
-
 /**
  * Recursively create `dir` over SFTP (like `mkdir -p`), then call `done`. An
  * already-existing directory is not an error here: the final `mkdir`'s error is
@@ -2716,28 +2645,6 @@ wss.on("connection", (ws, req) => {
     walk(root, () => finish(results, truncated));
   }
 
-  /** Copy (duplicate) a file or directory to a new path over SFTP. */
-  function handleCopy(msg) {
-    withSftp((s) => {
-      const from = String(msg.from || "");
-      const to = String(msg.to || "");
-      if (!from || !to) {
-        return sendError("Copy needs a source and destination.", "sftp");
-      }
-      if (to === from) return sendError("Cannot copy onto itself.", "sftp");
-      s.stat(from, (err, stats) => {
-        if (err) return sendError(err.message, "sftp");
-        const done = (e) => {
-          if (e) return sendError(e.message, "sftp");
-          send({ t: "sftp-ok", op: "copy", path: to });
-        };
-        if (stats.isDirectory?.()) copyDir(s, from, to, done);
-        else if (stats.isFile?.()) copyFile(s, from, to, done);
-        else sendError("Can only copy files and directories.", "sftp");
-      });
-    });
-  }
-
   // chmod, optionally recursively (#48). A plain chmod is one call; a recursive
   // one walks the subtree (lstat to classify without following symlinks),
   // bounded by MAX_FIND_NODES so a pathological tree can't run away.
@@ -2786,35 +2693,6 @@ wss.on("connection", (ws, req) => {
         });
       };
       walk(msg.path);
-    });
-  }
-
-  // Hash a remote file's contents (#46), streamed through the hash so a large
-  // file is never buffered. Only sha256/sha1/md5 are allowed (default sha256).
-  function handleChecksum(msg) {
-    const allowed = new Set(["sha256", "sha1", "md5"]);
-    const algo = allowed.has(String(msg.algo)) ? String(msg.algo) : "sha256";
-    withSftp((s) => {
-      let hash;
-      try {
-        hash = createHash(algo);
-      } catch {
-        return sendError("Unsupported checksum algorithm.", "sftp");
-      }
-      const rs = s.createReadStream(msg.path);
-      rs.on("error", (err) => sendError(err.message, "sftp"));
-      rs.on("data", (chunk) => {
-        touch();
-        hash.update(chunk);
-      });
-      rs.on("end", () =>
-        send({
-          t: "sftp-checksum",
-          path: msg.path,
-          algo,
-          hex: hash.digest("hex"),
-        }),
-      );
     });
   }
 
@@ -4218,21 +4096,8 @@ wss.on("connection", (ws, req) => {
           );
           break;
 
-        case "sftp-symlink":
-          withSftp((s) =>
-            s.symlink(msg.target, msg.path, (err) => {
-              if (err) return sendError(err.message, "sftp");
-              send({ t: "sftp-ok", op: "symlink", path: msg.path });
-            }),
-          );
-          break;
-
         case "sftp-chmod":
           handleChmod(msg);
-          break;
-
-        case "sftp-checksum":
-          handleChecksum(msg);
           break;
 
         case "sftp-df":
@@ -4278,10 +4143,6 @@ wss.on("connection", (ws, req) => {
 
         case "sftp-grep":
           handleGrep(msg);
-          break;
-
-        case "sftp-copy":
-          handleCopy(msg);
           break;
 
         case "sftp-mkdir":
