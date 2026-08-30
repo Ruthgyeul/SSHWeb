@@ -435,6 +435,10 @@ input:focus-visible,
   *::before,
   *::after {
     animation-duration: 0.001ms !important;
+    /* Also zero the delay: a staggered entrance (`.term-stagger`) with fill-mode
+       `both` would otherwise sit at its `from` (opacity:0) state for up to its
+       delay, so content would still flash in one-by-one under reduced-motion. */
+    animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;

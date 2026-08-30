@@ -1801,7 +1801,7 @@ export function SshSession({
             connected && tab !== "terminal" ? "hidden" : "flex",
           )}
         >
-          <div className="term-glow min-h-0 flex-1 p-2">
+          <div className="min-h-0 flex-1 p-2">
             <XtermView
               ref={xtermRef}
               onData={sendInput}

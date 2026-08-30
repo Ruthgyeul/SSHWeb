@@ -1,14 +1,13 @@
-import { AUTHOR_NAME, SITE_DESCRIPTION, SITE_NAME } from "@/config/siteConfig";
-
-// Computed once at module load (not per-render) so this stays a pure component.
-const YEAR = new Date().getFullYear();
+import { SITE_DESCRIPTION, SITE_NAME } from "@/config/siteConfig";
 
 /**
  * A slim, sticky bottom status bar — the page-wide counterpart to
  * {@link TerminalBar}. Frames the app shell (connect / access / session) with a
  * shell-style status line instead of leaving the viewport edge bare.
  *
- * Server component. Identity comes from env-driven siteConfig.
+ * Server component. Identity comes from env-driven siteConfig. The right-hand
+ * note is intentionally static (no date) so it can't drift on a long-lived
+ * server or cause a build-vs-render hydration mismatch across a year boundary.
  */
 export function TerminalFooter() {
   return (
@@ -22,7 +21,7 @@ export function TerminalFooter() {
         {SITE_DESCRIPTION}
       </span>
       <span className="ml-auto flex-none whitespace-nowrap text-term-fainter">
-        © {YEAR} {AUTHOR_NAME}
+        credentials are never stored
       </span>
     </footer>
   );

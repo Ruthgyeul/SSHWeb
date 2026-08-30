@@ -37,7 +37,11 @@ export default function GlobalError({
       >
         {/* Self-contained keyframes — this boundary renders when global CSS may
             be unavailable, so the blinking cursor can't rely on globals.css. */}
-        <style>{"@keyframes ge-blink{0%,100%{opacity:1}50%{opacity:0}}"}</style>
+        <style>
+          {"@keyframes ge-blink{0%,100%{opacity:1}50%{opacity:0}}" +
+            ".ge-cur{animation:ge-blink 1s step-end infinite}" +
+            "@media(prefers-reduced-motion:reduce){.ge-cur{animation:none}}"}
+        </style>
 
         {/* Page header (inline copy of TerminalBar — no external CSS here). */}
         <div
@@ -147,6 +151,7 @@ export default function GlobalError({
                 <span style={{ color: "#5c6478" }}>:~$</span> reboot
                 <span
                   aria-hidden
+                  className="ge-cur"
                   style={{
                     display: "inline-block",
                     width: "0.6em",
@@ -154,7 +159,6 @@ export default function GlobalError({
                     marginLeft: 4,
                     verticalAlign: "text-bottom",
                     background: "#34d399",
-                    animation: "ge-blink 1s step-end infinite",
                   }}
                 />
               </p>
