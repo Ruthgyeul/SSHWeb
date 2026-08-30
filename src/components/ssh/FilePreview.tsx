@@ -576,7 +576,10 @@ export function FilePreview({
       role="dialog"
       aria-modal="true"
       aria-label={`Preview: ${name}`}
-      className="term-modal-in absolute inset-0 z-30 flex flex-col bg-term-card"
+      // No `term-modal-in` here: the parent keys this modal by `preview.path`, so
+      // it remounts on every gallery step (←/→, filmstrip, swipe). An entrance
+      // animation would replay and flash on each step, not just on first open.
+      className="absolute inset-0 z-30 flex flex-col bg-term-card"
     >
       {/* On mobile the toolbar stacks: row 1 = file name + position (never
           truncated), row 2 = image zoom controls, row 3 = the action buttons

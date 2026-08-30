@@ -129,7 +129,7 @@ input:focus-visible,
   background-image:
     radial-gradient(
       1200px 600px at 15% -10%,
-      rgba(56, 189, 248, 0.06),
+      color-mix(in srgb, var(--color-term-accent) 6%, transparent),
       transparent
     ),
     repeating-linear-gradient(
@@ -147,7 +147,7 @@ input:focus-visible,
 .term-glow {
   background-image: radial-gradient(
     1200px 600px at 15% -10%,
-    rgba(56, 189, 248, 0.06),
+    color-mix(in srgb, var(--color-term-accent) 6%, transparent),
     transparent
   );
 }
