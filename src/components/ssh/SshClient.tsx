@@ -65,7 +65,13 @@ function restoreOpenTabs(): {
  * mounted when they aren't the active tab so their connections keep running in
  * the background. Add tabs with "＋", close them with the ✕ on each tab.
  */
-export function SshClient() {
+export function SshClient({
+  onConnectedChange,
+}: {
+  /** Reports whether the ACTIVE tab holds a live (connected) session, so the
+   * page shell can hide its header/footer and give the terminal full space. */
+  onConnectedChange?: (connected: boolean) => void;
+} = {}) {
   // Start from the same default state the server renders (one empty tab); the
   // persisted tab strip is restored in an effect after hydration (#25) so SSR
   // and the client's first render match.
@@ -112,6 +118,12 @@ export function SshClient() {
     setHydrated(true);
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  // Tell the page shell whether the active tab is a live session, so it can hide
+  // the header/footer and give the terminal the full viewport once connected.
+  useEffect(() => {
+    onConnectedChange?.(metas[activeId]?.status === "connected");
+  }, [metas, activeId, onConnectedChange]);
 
   const startRename = useCallback((id: number, current: string) => {
     setEditingId(id);

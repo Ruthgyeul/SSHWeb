@@ -8,6 +8,7 @@ default) server components.
 | Component          | Purpose                                                        | Client? |
 | ------------------ | ------------------------------------------------------------- | ------- |
 | `TerminalBar`      | Sticky top bar with window chrome + shell label, optional git chip | no |
+| `TerminalFooter`   | Sticky bottom status bar (shell-style page footer), pairs with `TerminalBar` | no |
 | `PromptLabel`      | The `user@host:~$` shell prefix — single source of truth for the prompt prefix | no |
 | `ErrorScreen`      | Shared terminal error layout used by 404 / 500 / global-error | no      |
 | `LoadingScreen`    | Shared terminal loading layout used by `loading.tsx` (`fullScreen` toggles embed mode) | no |
