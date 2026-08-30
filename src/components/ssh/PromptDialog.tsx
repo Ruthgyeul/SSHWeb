@@ -73,7 +73,7 @@ export function PromptDialog({
 
   return (
     <div
-      className="absolute inset-0 z-40 flex items-center justify-center bg-term-bg/80 p-4"
+      className="absolute inset-0 z-40 flex items-center justify-center bg-term-bg/80 p-4 backdrop-blur-sm"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
@@ -81,7 +81,7 @@ export function PromptDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="prompt-dialog-title"
-        className="w-full max-w-sm overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl"
+        className="term-modal-in w-full max-w-sm overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl"
       >
         <div className="border-b border-term-border px-5 py-3">
           <h2

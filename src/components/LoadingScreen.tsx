@@ -1,4 +1,5 @@
 import { PromptLabel } from "@/components/PromptLabel";
+import { TERMINAL_HOST, TERMINAL_USER } from "@/config/siteConfig";
 import { cn } from "@/lib/utils";
 import { CheckIcon } from "@/components/ssh/icons";
 
@@ -40,29 +41,43 @@ export function LoadingScreen({
       )}
       aria-busy="true"
     >
-      <div className="term-fade-up w-full max-w-lg" role="status">
-        <p className="text-sm text-term-muted">
-          <PromptLabel /> {command}
-        </p>
+      <div className="term-fade-up term-window w-full max-w-lg" role="status">
+        <div className="term-window-bar">
+          <span className="term-dot bg-term-red" aria-hidden />
+          <span className="term-dot bg-term-yellow" aria-hidden />
+          <span className="term-dot bg-term-green" aria-hidden />
+          <span className="ml-2 truncate text-xs text-term-faint">
+            {TERMINAL_USER}@{TERMINAL_HOST} — ~ — zsh
+          </span>
+        </div>
 
-        {steps.length > 0 && (
-          <ul className="mt-4 space-y-1 text-sm leading-7 text-term-muted">
-            {steps.map((step) => (
-              <li key={step} className="flex items-center gap-2">
-                <CheckIcon className="h-3.5 w-3.5 text-term-green" />
-                <span className="text-term-dim">{step}</span>
-              </li>
-            ))}
-          </ul>
-        )}
+        <div className="px-5 py-4">
+          <p className="text-sm text-term-muted">
+            <PromptLabel /> <span className="term-type">{command}</span>
+          </p>
 
-        <p
-          className={cn("text-sm text-term-muted", steps.length > 0 && "mt-1")}
-        >
-          <span className="text-term-yellow">…</span> working
-          <span className="term-cursor ml-1 align-middle" aria-hidden />
-          <span className="sr-only">Loading, please wait.</span>
-        </p>
+          {steps.length > 0 && (
+            <ul className="term-stagger mt-4 space-y-1 text-sm leading-7 text-term-muted">
+              {steps.map((step) => (
+                <li key={step} className="flex items-center gap-2">
+                  <CheckIcon className="h-3.5 w-3.5 text-term-green" />
+                  <span className="text-term-dim">{step}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <p
+            className={cn(
+              "text-sm text-term-muted",
+              steps.length > 0 && "mt-1",
+            )}
+          >
+            <span className="text-term-yellow">…</span> working
+            <span className="term-cursor ml-1 align-middle" aria-hidden />
+            <span className="sr-only">Loading, please wait.</span>
+          </p>
+        </div>
       </div>
     </Root>
   );

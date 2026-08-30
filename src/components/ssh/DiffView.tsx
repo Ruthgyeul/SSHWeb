@@ -34,13 +34,13 @@ export function DiffView({
   const dialogRef = useModalA11y<HTMLDivElement>({ onClose });
 
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center bg-term-bg/80 p-4">
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-term-bg/80 p-4 backdrop-blur-sm">
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={`Diff of ${a.name} and ${b.name}`}
-        className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl"
+        className="term-modal-in flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl"
       >
         <div className="flex items-center justify-between gap-3 border-b border-term-border px-4 py-2.5">
           <div className="min-w-0 text-xs text-term-dim">

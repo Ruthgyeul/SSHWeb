@@ -1785,7 +1785,7 @@ export function SshSession({
             <button
               type="button"
               onClick={disconnect}
-              className="rounded-md border border-term-red/40 px-3 py-1 text-xs text-term-red hover:bg-term-red/10"
+              className="rounded-md border border-term-red/40 px-3 py-1 text-xs text-term-red transition-colors hover:bg-term-red/10"
             >
               Disconnect
             </button>
@@ -1801,7 +1801,7 @@ export function SshSession({
             connected && tab !== "terminal" ? "hidden" : "flex",
           )}
         >
-          <div className="min-h-0 flex-1 p-2">
+          <div className="term-glow min-h-0 flex-1 p-2">
             <XtermView
               ref={xtermRef}
               onData={sendInput}
@@ -2059,7 +2059,7 @@ export function SshSession({
         )}
 
         {showOverlay && (
-          <div className="absolute inset-0 overflow-auto bg-term-card p-5 sm:p-8">
+          <div className="terminal-bg absolute inset-0 overflow-auto p-5 sm:p-8">
             <div className="mx-auto max-w-md">
               {canReconnect ? (
                 <div className="flex flex-col gap-4">
@@ -2078,7 +2078,7 @@ export function SshSession({
                     <button
                       type="button"
                       onClick={reconnectNow}
-                      className="rounded-md border border-term-accent/40 bg-term-accent/15 px-4 py-2 text-sm font-medium text-term-accent hover:bg-term-accent/25"
+                      className="term-btn-primary rounded-md px-4 py-2 text-sm"
                     >
                       Reconnect →
                     </button>
@@ -2149,7 +2149,7 @@ export function SshSession({
                             onClick={() => connect(c.details)}
                             disabled={connecting}
                             className={cn(
-                              "flex items-center gap-2 rounded-md border border-term-border bg-term-panel px-3 py-2 text-left text-sm text-term-text transition-colors hover:border-term-accent/40 hover:bg-term-accent/10",
+                              "card flex items-center gap-2 rounded-md border border-term-border bg-term-panel px-3 py-2 text-left text-sm text-term-text hover:border-term-accent/40 hover:bg-term-accent/10",
                               connecting && "cursor-not-allowed opacity-60",
                             )}
                           >

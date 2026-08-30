@@ -19,6 +19,7 @@ import {
   type SortKey,
 } from "@/lib/sshProtocol";
 import { cn } from "@/lib/utils";
+import { PromptLabel } from "@/components/PromptLabel";
 import { FileIcon } from "./FileIcon";
 import {
   CopyIcon,
@@ -698,7 +699,7 @@ export function FileBrowser({
                         type="button"
                         onClick={() => onNavigate("/")}
                         disabled={loading}
-                        className="flex-none text-term-muted hover:text-term-accent"
+                        className="flex-none text-term-muted transition-colors hover:text-term-accent"
                         title="Root"
                       >
                         /
@@ -719,7 +720,7 @@ export function FileBrowser({
                               // horizontally, so a long segment stays fully
                               // readable (with a title tooltip) instead of
                               // being ellipsized.
-                              "whitespace-nowrap",
+                              "whitespace-nowrap transition-colors",
                               i === segments.length - 1
                                 ? "text-term-dim"
                                 : "text-term-muted hover:text-term-accent",
@@ -736,7 +737,7 @@ export function FileBrowser({
                   type="button"
                   onClick={onRefresh}
                   disabled={loading}
-                  className="flex-none text-term-muted hover:text-term-accent"
+                  className="flex-none text-term-muted transition-colors hover:text-term-accent"
                   title="Refresh"
                   aria-label="Refresh"
                 >
@@ -1238,7 +1239,7 @@ export function FileBrowser({
       {/* Listing (drop target) */}
       <div
         className={cn(
-          "relative min-h-0 flex-1 overflow-auto",
+          "term-glow relative min-h-0 flex-1 overflow-auto",
           dragging && "outline outline-2 -outline-offset-2 outline-term-accent",
         )}
         onDragOver={(e) => {
@@ -1272,13 +1273,33 @@ export function FileBrowser({
         ) : (
           <>
             {loading && (
-              <p className="px-3 py-4 text-xs text-term-muted">Loading…</p>
+              <p
+                className="flex items-center gap-2 px-3 py-4 text-xs text-term-muted"
+                role="status"
+              >
+                <span className="term-spinner" aria-hidden />
+                <span>
+                  loading
+                  <span className="term-cursor ml-1 align-middle" aria-hidden />
+                </span>
+              </p>
             )}
             {!loading && entries.length === 0 && (
-              <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">
-                <FolderOpenIcon className="h-8 w-8 opacity-60" />
-                <p className="text-sm">This directory is empty</p>
-                <p className="text-xs text-term-faint">
+              <div className="px-4 py-8 text-sm text-term-muted">
+                <p>
+                  <PromptLabel path={cwd || "~"} /> ls
+                </p>
+                <p className="mt-2 flex items-center gap-2 text-term-faint">
+                  <FolderOpenIcon className="h-4 w-4 opacity-60" />
+                  <span>
+                    total 0 — this directory is empty
+                    <span
+                      className="term-cursor ml-1 align-middle"
+                      aria-hidden
+                    />
+                  </span>
+                </p>
+                <p className="mt-1 text-xs text-term-faint">
                   Drag files here, or use Upload / New to add one.
                 </p>
               </div>
@@ -1356,8 +1377,9 @@ export function FileBrowser({
                           isDir ? (e) => onFolderDrop(e, target) : undefined
                         }
                         className={cn(
-                          "border-b border-term-border/50 hover:bg-term-panel/60",
-                          isSelected(entry.name) && "bg-term-accent/5",
+                          "border-b border-term-border/50 transition-colors hover:bg-term-panel/60",
+                          isSelected(entry.name) &&
+                            "border-l-2 border-l-term-accent bg-term-accent/10",
                           isDir &&
                             dropDir === target &&
                             "bg-term-accent/10 outline outline-2 -outline-offset-2 outline-term-accent",

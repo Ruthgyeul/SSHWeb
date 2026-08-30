@@ -16,6 +16,7 @@ import {
 import type { ConnectDetails, ConnectFormInitial } from "./ConnectForm";
 import { reusableConnectionsExcluding } from "@/lib/connections";
 import { PromptDialog, type DialogRequest } from "./PromptDialog";
+import { XMarkIcon, PlusIcon } from "./icons";
 
 const OPEN_TABS_KEY = "sshweb.openTabs";
 
@@ -329,11 +330,11 @@ export function SshClient() {
                 <button
                   type="button"
                   onClick={() => closeSession(id)}
-                  className="text-term-faint hover:text-term-red"
+                  className="text-term-faint transition-colors hover:text-term-red"
                   title="Close session"
                   aria-label="Close session"
                 >
-                  ✕
+                  <XMarkIcon className="h-3.5 w-3.5" />
                 </button>
               )}
             </div>
@@ -342,11 +343,11 @@ export function SshClient() {
         <button
           type="button"
           onClick={addSession}
-          className="flex-none rounded-lg border border-term-border bg-term-panel px-3 py-1.5 text-xs text-term-muted hover:text-term-accent"
+          className="flex-none rounded-lg border border-term-border bg-term-panel px-3 py-1.5 text-xs text-term-muted transition-colors hover:text-term-accent"
           title="New session"
           aria-label="New session"
         >
-          ＋
+          <PlusIcon className="h-4 w-4" />
         </button>
       </div>
 

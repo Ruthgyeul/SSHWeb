@@ -92,7 +92,7 @@ export function AccessGate({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-0 flex-1 items-center justify-center p-4">
       <form
         onSubmit={submit}
-        className="w-full max-w-sm rounded-xl border border-term-border bg-term-card p-6"
+        className="term-fade-up w-full max-w-sm rounded-xl border border-term-border bg-term-card p-6"
       >
         <div className="mb-4 flex items-center gap-3">
           <span
@@ -124,7 +124,7 @@ export function AccessGate({ children }: { children: React.ReactNode }) {
           autoFocus
           autoComplete="off"
           onChange={(e) => setToken(e.target.value)}
-          className="w-full rounded-md border border-term-border bg-term-bg px-3 py-2 text-sm text-term-text outline-none focus:border-term-accent"
+          className="term-input"
           placeholder="Enter the access key"
         />
         {error && (
@@ -135,7 +135,7 @@ export function AccessGate({ children }: { children: React.ReactNode }) {
         <button
           type="submit"
           disabled={submitting || token.trim() === ""}
-          className="mt-4 w-full rounded-md border border-term-accent/40 bg-term-accent/15 px-4 py-2 text-sm font-medium text-term-accent hover:bg-term-accent/25 disabled:opacity-40"
+          className="term-btn-primary mt-4 w-full rounded-md px-4 py-2 text-sm"
         >
           {submitting ? "Unlocking…" : "Unlock"}
         </button>

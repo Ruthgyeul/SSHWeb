@@ -29,13 +29,13 @@ export function PasteConfirm({
   const dialogRef = useModalA11y<HTMLDivElement>({ onClose: onCancel });
 
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center bg-term-bg/80 p-4">
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-term-bg/80 p-4 backdrop-blur-sm">
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="paste-confirm-title"
-        className="flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl"
+        className="term-modal-in flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl"
       >
         <div className="border-b border-term-border px-5 py-3">
           <h2
@@ -72,7 +72,7 @@ export function PasteConfirm({
           <button
             type="button"
             onClick={onConfirm}
-            className="rounded-md border border-term-accent/40 bg-term-accent/15 px-4 py-1.5 text-xs font-medium text-term-accent hover:bg-term-accent/25"
+            className="term-btn-primary rounded-md px-4 py-1.5 text-xs"
           >
             Paste &amp; run
           </button>

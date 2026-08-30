@@ -27,8 +27,7 @@ export interface KbdPromptState {
 
 export type AuthPromptState = HostKeyPromptState | KbdPromptState;
 
-const boxClass =
-  "w-full rounded-md border border-term-border bg-term-panel px-3 py-2 font-mono text-sm text-term-text outline-none placeholder:text-term-faint focus:border-term-accent";
+const boxClass = "term-input";
 
 /**
  * Modal shown during the SSH handshake for the two flows that need user input:
@@ -58,7 +57,7 @@ export function AuthPromptModal({
         role="dialog"
         aria-modal="true"
         aria-label="SSH authentication"
-        className="w-full max-w-md rounded-xl border border-term-border bg-term-card p-5 shadow-2xl sm:p-6"
+        className="term-modal-in w-full max-w-md rounded-xl border border-term-border bg-term-card p-5 shadow-2xl sm:p-6"
       >
         {prompt.kind === "hostkey" ? (
           <HostKeyBody prompt={prompt} onDecision={onHostKeyDecision} />
@@ -222,7 +221,7 @@ function KbdBody({
       <div className="flex justify-end">
         <button
           type="submit"
-          className="rounded-md border border-term-accent/40 bg-term-accent/15 px-4 py-2 text-sm font-medium text-term-accent hover:bg-term-accent/25"
+          className="term-btn-primary rounded-md px-4 py-2 text-sm"
         >
           Submit
         </button>
