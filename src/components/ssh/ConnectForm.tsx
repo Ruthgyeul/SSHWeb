@@ -12,6 +12,7 @@ import { SSH_ALLOWED_HOSTS } from "@/config/siteConfig";
 import { cn } from "@/lib/utils";
 import { useConnectionProfiles } from "./hooks/useConnectionProfiles";
 import type { ConnectionProfile } from "@/lib/connectionProfiles";
+import { XMarkIcon } from "./icons";
 
 /** Resolved connection details ready to hand to the WebSocket layer. */
 export interface ConnectDetails {
@@ -38,8 +39,7 @@ export interface ConnectFormInitial {
   passphrase?: string;
 }
 
-const inputClass =
-  "w-full rounded-md border border-term-border bg-term-panel px-3 py-2 font-mono text-sm text-term-text outline-none placeholder:text-term-faint focus:border-term-accent";
+const inputClass = "term-input";
 const labelClass = "mb-1 block text-xs font-medium text-term-muted";
 
 /**
@@ -150,7 +150,7 @@ export function ConnectForm({
             {profiles.map((p) => (
               <span
                 key={p.id}
-                className="group inline-flex items-center overflow-hidden rounded-md border border-term-border bg-term-panel text-xs text-term-text"
+                className="card group inline-flex items-center overflow-hidden rounded-md border border-term-border bg-term-panel text-xs text-term-text"
               >
                 <button
                   type="button"
@@ -169,7 +169,7 @@ export function ConnectForm({
                   aria-label={`Forget ${p.label}`}
                   className="border-l border-term-border px-1.5 py-1 text-term-faint hover:text-term-red"
                 >
-                  ✕
+                  <XMarkIcon className="h-3.5 w-3.5" />
                 </button>
               </span>
             ))}
@@ -334,7 +334,7 @@ export function ConnectForm({
           type="submit"
           disabled={connecting}
           className={cn(
-            "flex-1 rounded-md border border-term-accent/40 bg-term-accent/15 px-4 py-2.5 text-sm font-medium text-term-accent transition-colors hover:bg-term-accent/25",
+            "term-btn-primary flex-1 rounded-md px-4 py-2.5 text-sm",
             connecting && "cursor-not-allowed opacity-60",
           )}
         >

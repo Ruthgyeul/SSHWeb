@@ -276,7 +276,7 @@ export function FileEditor({
       role="dialog"
       aria-modal="true"
       aria-label="File editor"
-      className="absolute inset-0 z-30 flex flex-col bg-term-card"
+      className="term-modal-in absolute inset-0 z-30 flex flex-col bg-term-card"
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-term-border bg-term-panel/90 px-4 py-2.5">
         <PencilIcon className="h-4 w-4 text-term-muted" />
@@ -299,7 +299,7 @@ export function FileEditor({
           type="button"
           onClick={() => onSave(activeFile.path, text)}
           disabled={saving || !dirty}
-          className="rounded border border-term-accent/40 bg-term-accent/15 px-3 py-1 text-xs font-medium text-term-accent hover:bg-term-accent/25 disabled:opacity-40"
+          className="term-btn-primary rounded px-3 py-1 text-xs"
         >
           {saving ? "Saving…" : "Save"}
         </button>
@@ -510,8 +510,8 @@ export function FileEditor({
 
       {/* Unsaved-changes confirmation */}
       {confirm && (
-        <div className="absolute inset-0 z-40 flex items-center justify-center bg-term-bg/70 p-4">
-          <div className="w-full max-w-sm rounded-lg border border-term-border bg-term-card p-5">
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-term-bg/80 p-4 backdrop-blur-sm">
+          <div className="term-modal-in w-full max-w-sm rounded-lg border border-term-border bg-term-card p-5">
             <h3 className="text-sm font-semibold text-term-text">
               Discard unsaved changes?
             </h3>

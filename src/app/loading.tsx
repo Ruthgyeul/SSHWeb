@@ -6,5 +6,10 @@ import { LoadingScreen } from "@/components/LoadingScreen";
  * states can reuse the same terminal aesthetic.
  */
 export default function Loading() {
-  return <LoadingScreen command="loading" />;
+  return (
+    <LoadingScreen
+      command="ssh connect"
+      steps={["resolving host", "negotiating key exchange", "authenticating"]}
+    />
+  );
 }

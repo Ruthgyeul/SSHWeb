@@ -76,7 +76,7 @@ function rowOrder(): string[] {
 describe("FileBrowser empty + listing states", () => {
   it("shows an empty-directory message when there are no entries", () => {
     renderBrowser([]);
-    expect(screen.getByText("This directory is empty")).toBeInTheDocument();
+    expect(screen.getByText(/this directory is empty/i)).toBeInTheDocument();
   });
 
   it("renders a row per entry in the default (name asc) order", () => {

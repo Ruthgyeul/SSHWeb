@@ -25,7 +25,7 @@ import {
   type KnownHostMap,
 } from "@/lib/knownHosts";
 import { resumeUploadStart } from "@/lib/serverSecurity";
-import { SITE_NAME } from "@/config/siteConfig";
+import { SITE_NAME, TERMINAL_HOST, TERMINAL_USER } from "@/config/siteConfig";
 import { base64ToBytes, bytesToBase64 } from "@/lib/bytes";
 import { bytesToBase64Async } from "@/lib/base64Codec";
 import { cn } from "@/lib/utils";
@@ -1785,7 +1785,7 @@ export function SshSession({
             <button
               type="button"
               onClick={disconnect}
-              className="rounded-md border border-term-red/40 px-3 py-1 text-xs text-term-red hover:bg-term-red/10"
+              className="rounded-md border border-term-red/40 px-3 py-1 text-xs text-term-red transition-colors hover:bg-term-red/10"
             >
               Disconnect
             </button>
@@ -2059,116 +2059,127 @@ export function SshSession({
         )}
 
         {showOverlay && (
-          <div className="absolute inset-0 overflow-auto bg-term-card p-5 sm:p-8">
-            <div className="mx-auto max-w-md">
-              {canReconnect ? (
-                <div className="flex flex-col gap-4">
-                  <div>
-                    <h2 className="text-lg font-semibold text-term-text">
-                      {status === "dropped"
-                        ? "Connection lost"
-                        : "Connection failed"}
-                    </h2>
-                    <p className="mt-1 text-xs leading-relaxed text-term-muted">
-                      {statusMessage ||
-                        "The session ended. Reconnect to the same host, or start a new connection."}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={reconnectNow}
-                      className="rounded-md border border-term-accent/40 bg-term-accent/15 px-4 py-2 text-sm font-medium text-term-accent hover:bg-term-accent/25"
-                    >
-                      Reconnect →
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        lastDetailsRef.current = null;
-                        setHasLast(false);
-                        setStatus("idle");
-                        setStatusMessage("");
-                        setFormInitial(undefined);
-                        setFormSeed((s) => s + 1);
-                      }}
-                      className="rounded-md border border-term-border px-4 py-2 text-sm text-term-muted hover:text-term-text"
-                    >
-                      New connection
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div className="term-fade-up mb-5 flex items-center gap-3 rounded-lg border border-term-border bg-term-panel/60 px-4 py-3">
-                    <span
-                      className="select-none font-mono text-2xl text-term-accent"
-                      aria-hidden
-                    >
-                      &gt;
-                      <span className="term-cursor ml-0.5 align-middle" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-term-text">
-                        {SITE_NAME}
-                      </p>
-                      <p className="truncate text-xs text-term-muted">
-                        SSH &amp; SFTP, right in your browser
+          <div className="terminal-bg absolute inset-0 overflow-auto p-5 sm:p-8">
+            <div className="term-fade-up term-window mx-auto max-w-md">
+              <div className="term-window-bar">
+                <span className="term-dot bg-term-red" aria-hidden />
+                <span className="term-dot bg-term-yellow" aria-hidden />
+                <span className="term-dot bg-term-green" aria-hidden />
+                <span className="ml-2 truncate text-xs text-term-faint">
+                  {TERMINAL_USER}@{TERMINAL_HOST} — ~ — zsh
+                </span>
+              </div>
+              <div className="p-5 sm:p-6">
+                {canReconnect ? (
+                  <div className="flex flex-col gap-4">
+                    <div>
+                      <h2 className="text-lg font-semibold text-term-text">
+                        {status === "dropped"
+                          ? "Connection lost"
+                          : "Connection failed"}
+                      </h2>
+                      <p className="mt-1 text-xs leading-relaxed text-term-muted">
+                        {statusMessage ||
+                          "The session ended. Reconnect to the same host, or start a new connection."}
                       </p>
                     </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={reconnectNow}
+                        className="term-btn-primary rounded-md px-4 py-2 text-sm"
+                      >
+                        Reconnect →
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          lastDetailsRef.current = null;
+                          setHasLast(false);
+                          setStatus("idle");
+                          setStatusMessage("");
+                          setFormInitial(undefined);
+                          setFormSeed((s) => s + 1);
+                        }}
+                        className="rounded-md border border-term-border px-4 py-2 text-sm text-term-muted hover:text-term-text"
+                      >
+                        New connection
+                      </button>
+                    </div>
                   </div>
-                  <h2 className="text-lg font-semibold text-term-text">
-                    {status === "error" ? "Try again" : "New SSH connection"}
-                  </h2>
-                  <p className="mt-1 mb-5 text-xs leading-relaxed text-term-muted">
-                    {status === "error"
-                      ? "The login didn't go through. Your host, port and username are kept — just re-enter your password (or key) and reconnect."
-                      : "Credentials are relayed straight to the target host to open the session and are never stored or logged by this site. Only connect to hosts you trust."}
-                  </p>
-                  <ConnectForm
-                    key={formSeed}
-                    initial={formInitial}
-                    onConnect={connect}
-                    connecting={connecting}
-                  />
-                  {statusMessage && (
-                    <p className="mt-4 rounded-md border border-term-red/40 bg-term-red/10 px-3 py-2 text-xs text-term-red">
-                      {statusMessage}
-                    </p>
-                  )}
-                  {reusableConnections && reusableConnections.length > 0 && (
-                    <div className="mt-6 border-t border-term-border pt-4">
-                      <p className="mb-2 text-xs font-medium text-term-muted">
-                        Open another session on a server you&apos;re already on
-                      </p>
-                      <div className="flex flex-col gap-1.5">
-                        {reusableConnections.map((c) => (
-                          <button
-                            key={c.label}
-                            type="button"
-                            onClick={() => connect(c.details)}
-                            disabled={connecting}
-                            className={cn(
-                              "flex items-center gap-2 rounded-md border border-term-border bg-term-panel px-3 py-2 text-left text-sm text-term-text transition-colors hover:border-term-accent/40 hover:bg-term-accent/10",
-                              connecting && "cursor-not-allowed opacity-60",
-                            )}
-                          >
-                            <span
-                              className="select-none font-mono text-term-accent"
-                              aria-hidden
-                            >
-                              ↳
-                            </span>
-                            <span className="truncate font-mono">
-                              {c.label}
-                            </span>
-                          </button>
-                        ))}
+                ) : (
+                  <>
+                    <div className="mb-5 flex items-center gap-3 rounded-lg border border-term-border bg-term-panel/60 px-4 py-3">
+                      <span
+                        className="select-none font-mono text-2xl text-term-accent"
+                        aria-hidden
+                      >
+                        &gt;
+                        <span className="term-cursor ml-0.5 align-middle" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-term-text">
+                          {SITE_NAME}
+                        </p>
+                        <p className="truncate text-xs text-term-muted">
+                          SSH &amp; SFTP, right in your browser
+                        </p>
                       </div>
                     </div>
-                  )}
-                </>
-              )}
+                    <h2 className="text-lg font-semibold text-term-text">
+                      {status === "error" ? "Try again" : "New SSH connection"}
+                    </h2>
+                    <p className="mt-1 mb-5 text-xs leading-relaxed text-term-muted">
+                      {status === "error"
+                        ? "The login didn't go through. Your host, port and username are kept — just re-enter your password (or key) and reconnect."
+                        : "Credentials are relayed straight to the target host to open the session and are never stored or logged by this site. Only connect to hosts you trust."}
+                    </p>
+                    <ConnectForm
+                      key={formSeed}
+                      initial={formInitial}
+                      onConnect={connect}
+                      connecting={connecting}
+                    />
+                    {statusMessage && (
+                      <p className="mt-4 rounded-md border border-term-red/40 bg-term-red/10 px-3 py-2 text-xs text-term-red">
+                        {statusMessage}
+                      </p>
+                    )}
+                    {reusableConnections && reusableConnections.length > 0 && (
+                      <div className="mt-6 border-t border-term-border pt-4">
+                        <p className="mb-2 text-xs font-medium text-term-muted">
+                          Open another session on a server you&apos;re already
+                          on
+                        </p>
+                        <div className="flex flex-col gap-1.5">
+                          {reusableConnections.map((c) => (
+                            <button
+                              key={c.label}
+                              type="button"
+                              onClick={() => connect(c.details)}
+                              disabled={connecting}
+                              className={cn(
+                                "card flex items-center gap-2 rounded-md border border-term-border bg-term-panel px-3 py-2 text-left text-sm text-term-text hover:border-term-accent/40 hover:bg-term-accent/10",
+                                connecting && "cursor-not-allowed opacity-60",
+                              )}
+                            >
+                              <span
+                                className="select-none font-mono text-term-accent"
+                                aria-hidden
+                              >
+                                ↳
+                              </span>
+                              <span className="truncate font-mono">
+                                {c.label}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
           </div>
         )}

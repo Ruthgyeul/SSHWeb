@@ -140,6 +140,15 @@ export function XMarkIcon({ className }: { className?: string }) {
   );
 }
 
+/** Plus — add / new. */
+export function PlusIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="M12 5v14M5 12h14" />
+    </Svg>
+  );
+}
+
 /** Horizontal lines — list view. */
 export function ListIcon({ className }: { className?: string }) {
   return (

@@ -16,6 +16,7 @@ import {
 import type { ConnectDetails, ConnectFormInitial } from "./ConnectForm";
 import { reusableConnectionsExcluding } from "@/lib/connections";
 import { PromptDialog, type DialogRequest } from "./PromptDialog";
+import { XMarkIcon, PlusIcon } from "./icons";
 
 const OPEN_TABS_KEY = "sshweb.openTabs";
 
@@ -64,7 +65,13 @@ function restoreOpenTabs(): {
  * mounted when they aren't the active tab so their connections keep running in
  * the background. Add tabs with "＋", close them with the ✕ on each tab.
  */
-export function SshClient() {
+export function SshClient({
+  onConnectedChange,
+}: {
+  /** Reports whether the ACTIVE tab holds a live (connected) session, so the
+   * page shell can hide its header/footer and give the terminal full space. */
+  onConnectedChange?: (connected: boolean) => void;
+} = {}) {
   // Start from the same default state the server renders (one empty tab); the
   // persisted tab strip is restored in an effect after hydration (#25) so SSR
   // and the client's first render match.
@@ -111,6 +118,12 @@ export function SshClient() {
     setHydrated(true);
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  // Tell the page shell whether the active tab is a live session, so it can hide
+  // the header/footer and give the terminal the full viewport once connected.
+  useEffect(() => {
+    onConnectedChange?.(metas[activeId]?.status === "connected");
+  }, [metas, activeId, onConnectedChange]);
 
   const startRename = useCallback((id: number, current: string) => {
     setEditingId(id);
@@ -329,11 +342,11 @@ export function SshClient() {
                 <button
                   type="button"
                   onClick={() => closeSession(id)}
-                  className="text-term-faint hover:text-term-red"
+                  className="text-term-faint transition-colors hover:text-term-red"
                   title="Close session"
                   aria-label="Close session"
                 >
-                  ✕
+                  <XMarkIcon className="h-3.5 w-3.5" />
                 </button>
               )}
             </div>
@@ -342,11 +355,11 @@ export function SshClient() {
         <button
           type="button"
           onClick={addSession}
-          className="flex-none rounded-lg border border-term-border bg-term-panel px-3 py-1.5 text-xs text-term-muted hover:text-term-accent"
+          className="flex-none rounded-lg border border-term-border bg-term-panel px-3 py-1.5 text-xs text-term-muted transition-colors hover:text-term-accent"
           title="New session"
           aria-label="New session"
         >
-          ＋
+          <PlusIcon className="h-4 w-4" />
         </button>
       </div>
 

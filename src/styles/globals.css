@@ -129,7 +129,7 @@ input:focus-visible,
   background-image:
     radial-gradient(
       1200px 600px at 15% -10%,
-      rgba(56, 189, 248, 0.06),
+      color-mix(in srgb, var(--color-term-accent) 6%, transparent),
       transparent
     ),
     repeating-linear-gradient(
@@ -139,6 +139,17 @@ input:focus-visible,
       transparent 1px,
       transparent 24px
     );
+}
+
+/* Top accent glow only (no scanlines) — for surfaces inside the app body
+   (terminal pane, empty file browser) where the full `.terminal-bg` grid would
+   be too much but a faint CRT halo ties the surface into the theme. */
+.term-glow {
+  background-image: radial-gradient(
+    1200px 600px at 15% -10%,
+    color-mix(in srgb, var(--color-term-accent) 6%, transparent),
+    transparent
+  );
 }
 
 /* Syntax-highlight token colors for the inline file editor overlay
@@ -245,12 +256,189 @@ input:focus-visible,
   animation: term-fade-up 0.4s ease both;
 }
 
+/* A framed "terminal window": a bordered card with an optional title bar, used
+   to make the loading/error screens read as a real terminal window rather than
+   bare text on a page. Pair with `.term-window-bar` for the chrome. */
+.term-window {
+  border: 1px solid var(--color-term-border);
+  border-radius: 0.75rem;
+  background: var(--color-term-card);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.term-window-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 2.25rem;
+  padding: 0 0.85rem;
+  border-bottom: 1px solid var(--color-term-border);
+  background: color-mix(in srgb, var(--color-term-panel) 90%, transparent);
+}
+
+/* Modal panel entrance — a subtle scale + rise, shared by every overlay dialog
+   so they all appear the same way. */
+@keyframes term-modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.term-modal-in {
+  animation: term-modal-in 0.18s ease both;
+}
+
+/* Restrained typewriter reveal: wipes the text in left-to-right with a chunky
+   step, so a command line reads as if it were typed. Works for any width
+   (clip-path, not a `ch`-based width). Collapsed by reduced-motion below. */
+@keyframes term-type {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+.term-type {
+  display: inline-block;
+  animation: term-type 0.5s steps(24, end) both;
+}
+
+/* Staggered entrance for a short list (e.g. boot/loading steps): each child
+   fades up slightly after the previous one. */
+.term-stagger > * {
+  animation: term-fade-up 0.4s ease both;
+}
+.term-stagger > *:nth-child(1) {
+  animation-delay: 0.05s;
+}
+.term-stagger > *:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.term-stagger > *:nth-child(3) {
+  animation-delay: 0.25s;
+}
+.term-stagger > *:nth-child(4) {
+  animation-delay: 0.35s;
+}
+.term-stagger > *:nth-child(5) {
+  animation-delay: 0.45s;
+}
+.term-stagger > *:nth-child(6) {
+  animation-delay: 0.55s;
+}
+
+/* Shared form-control styles — single source for the text input and the two
+   button variants that were previously copy-pasted across ConnectForm,
+   AuthPrompt, PromptDialog, FileEditor, AccessGate and SshSession. Callers keep
+   their own padding/radius/size utilities; these own color, border and focus. */
+.term-input {
+  width: 100%;
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-term-border);
+  background: var(--color-term-panel);
+  padding: 0.5rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--color-term-text);
+  outline: none;
+}
+.term-input::placeholder {
+  color: var(--color-term-faint);
+}
+.term-input:focus {
+  border-color: var(--color-term-accent);
+}
+
+.term-btn {
+  border: 1px solid var(--color-term-border);
+  background: var(--color-term-panel);
+  color: var(--color-term-text);
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+.term-btn:hover {
+  border-color: var(--color-term-accent);
+  color: var(--color-term-accent);
+}
+
+.term-btn-primary {
+  border: 1px solid
+    color-mix(in srgb, var(--color-term-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--color-term-accent) 15%, transparent);
+  color: var(--color-term-accent);
+  font-weight: 500;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+.term-btn-primary:hover {
+  background: color-mix(in srgb, var(--color-term-accent) 25%, transparent);
+}
+.term-btn-primary:disabled {
+  opacity: 0.4;
+}
+
+/* Terminal-native loader: a cycling braille spinner glyph, on-theme in place of
+   a generic circular ring spinner. Freezes on the first frame under
+   reduced-motion. */
+.term-spinner {
+  display: inline-block;
+  font-family: var(--font-mono);
+  line-height: 1;
+  color: var(--color-term-accent);
+}
+.term-spinner::before {
+  content: "⠋";
+  animation: term-spinner 0.8s steps(1, end) infinite;
+}
+@keyframes term-spinner {
+  0% {
+    content: "⠋";
+  }
+  12.5% {
+    content: "⠙";
+  }
+  25% {
+    content: "⠹";
+  }
+  37.5% {
+    content: "⠸";
+  }
+  50% {
+    content: "⠼";
+  }
+  62.5% {
+    content: "⠴";
+  }
+  75% {
+    content: "⠦";
+  }
+  87.5% {
+    content: "⠧";
+  }
+}
+
 /* Respect reduced-motion preferences everywhere. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.001ms !important;
+    /* Also zero the delay: a staggered entrance (`.term-stagger`) with fill-mode
+       `both` would otherwise sit at its `from` (opacity:0) state for up to its
+       delay, so content would still flash in one-by-one under reduced-motion. */
+    animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;

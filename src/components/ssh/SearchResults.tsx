@@ -63,12 +63,16 @@ export function SearchResults({
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         {search.loading ? (
-          <div className="flex items-center justify-center py-12">
-            <span
-              className="h-7 w-7 animate-spin rounded-full border-2 border-term-border border-t-term-accent"
-              role="status"
-              aria-label="Searching"
-            />
+          <div
+            className="flex items-center justify-center gap-2 py-12 text-sm text-term-muted"
+            role="status"
+            aria-label="Searching"
+          >
+            <span className="term-spinner text-lg" aria-hidden />
+            <span>
+              scanning
+              <span className="term-cursor ml-1 align-middle" aria-hidden />
+            </span>
           </div>
         ) : search.results.length === 0 ? (
           <div className="flex flex-col items-center gap-2 px-3 py-12 text-center text-term-muted">

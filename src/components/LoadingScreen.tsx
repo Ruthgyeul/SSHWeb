@@ -1,4 +1,7 @@
 import { PromptLabel } from "@/components/PromptLabel";
+import { TerminalBar } from "@/components/TerminalBar";
+import { TerminalFooter } from "@/components/TerminalFooter";
+import { TERMINAL_HOST, TERMINAL_USER } from "@/config/siteConfig";
 import { cn } from "@/lib/utils";
 import { CheckIcon } from "@/components/ssh/icons";
 
@@ -29,24 +32,24 @@ export function LoadingScreen({
   fullScreen?: boolean;
   className?: string;
 }) {
-  const Root = fullScreen ? "main" : "div";
+  const card = (
+    <div className="term-fade-up term-window w-full max-w-lg" role="status">
+      <div className="term-window-bar">
+        <span className="term-dot bg-term-red" aria-hidden />
+        <span className="term-dot bg-term-yellow" aria-hidden />
+        <span className="term-dot bg-term-green" aria-hidden />
+        <span className="ml-2 truncate text-xs text-term-faint">
+          {TERMINAL_USER}@{TERMINAL_HOST} — ~ — zsh
+        </span>
+      </div>
 
-  return (
-    <Root
-      className={cn(
-        "terminal-bg flex flex-col items-center justify-center px-6 py-16",
-        fullScreen ? "min-h-screen" : "h-full",
-        className,
-      )}
-      aria-busy="true"
-    >
-      <div className="term-fade-up w-full max-w-lg" role="status">
+      <div className="px-5 py-4">
         <p className="text-sm text-term-muted">
-          <PromptLabel /> {command}
+          <PromptLabel /> <span className="term-type">{command}</span>
         </p>
 
         {steps.length > 0 && (
-          <ul className="mt-4 space-y-1 text-sm leading-7 text-term-muted">
+          <ul className="term-stagger mt-4 space-y-1 text-sm leading-7 text-term-muted">
             {steps.map((step) => (
               <li key={step} className="flex items-center gap-2">
                 <CheckIcon className="h-3.5 w-3.5 text-term-green" />
@@ -64,6 +67,36 @@ export function LoadingScreen({
           <span className="sr-only">Loading, please wait.</span>
         </p>
       </div>
-    </Root>
+    </div>
+  );
+
+  // Embedded (e.g. a component preview): just the card filling its container.
+  if (!fullScreen) {
+    return (
+      <div
+        className={cn(
+          "terminal-bg flex h-full flex-col items-center justify-center px-6 py-16",
+          className,
+        )}
+        aria-busy="true"
+      >
+        {card}
+      </div>
+    );
+  }
+
+  // Route-level: frame the card with the page header + footer, like every
+  // other full page.
+  return (
+    <main
+      className={cn("terminal-bg flex min-h-screen flex-col", className)}
+      aria-busy="true"
+    >
+      <TerminalBar branch="main" />
+      <div className="flex flex-1 flex-col items-center justify-center px-6 py-16">
+        {card}
+      </div>
+      <TerminalFooter />
+    </main>
   );
 }

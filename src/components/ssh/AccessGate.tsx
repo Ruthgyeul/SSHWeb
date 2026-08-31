@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { SITE_NAME } from "@/config/siteConfig";
+import { SITE_NAME, TERMINAL_HOST, TERMINAL_USER } from "@/config/siteConfig";
 
 /** Where the relay's access-gate probe/exchange endpoint lives (matches server.mjs). */
 const ACCESS_PATH = "/api/access";
@@ -92,57 +92,67 @@ export function AccessGate({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-0 flex-1 items-center justify-center p-4">
       <form
         onSubmit={submit}
-        className="w-full max-w-sm rounded-xl border border-term-border bg-term-card p-6"
+        className="term-fade-up term-window w-full max-w-sm"
       >
-        <div className="mb-4 flex items-center gap-3">
-          <span
-            className="select-none font-mono text-2xl text-term-accent"
-            aria-hidden
-          >
-            &gt;
-            <span className="term-cursor ml-0.5 align-middle" />
+        <div className="term-window-bar">
+          <span className="term-dot bg-term-red" aria-hidden />
+          <span className="term-dot bg-term-yellow" aria-hidden />
+          <span className="term-dot bg-term-green" aria-hidden />
+          <span className="ml-2 truncate text-xs text-term-faint">
+            {TERMINAL_USER}@{TERMINAL_HOST} — ~ — zsh
           </span>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-term-text">
-              {SITE_NAME}
-            </p>
-            <p className="truncate text-xs text-term-muted">
-              This relay is protected
-            </p>
-          </div>
         </div>
-        <label
-          htmlFor="access-key"
-          className="mb-1.5 block text-xs text-term-muted"
-        >
-          Access key
-        </label>
-        <input
-          id="access-key"
-          type="password"
-          value={token}
-          autoFocus
-          autoComplete="off"
-          onChange={(e) => setToken(e.target.value)}
-          className="w-full rounded-md border border-term-border bg-term-bg px-3 py-2 text-sm text-term-text outline-none focus:border-term-accent"
-          placeholder="Enter the access key"
-        />
-        {error && (
-          <p className="mt-2 rounded-md border border-term-red/40 bg-term-red/10 px-3 py-2 text-xs text-term-red">
-            {error}
+        <div className="p-6">
+          <div className="mb-4 flex items-center gap-3">
+            <span
+              className="select-none font-mono text-2xl text-term-accent"
+              aria-hidden
+            >
+              &gt;
+              <span className="term-cursor ml-0.5 align-middle" />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-term-text">
+                {SITE_NAME}
+              </p>
+              <p className="truncate text-xs text-term-muted">
+                This relay is protected
+              </p>
+            </div>
+          </div>
+          <label
+            htmlFor="access-key"
+            className="mb-1.5 block text-xs text-term-muted"
+          >
+            Access key
+          </label>
+          <input
+            id="access-key"
+            type="password"
+            value={token}
+            autoFocus
+            autoComplete="off"
+            onChange={(e) => setToken(e.target.value)}
+            className="term-input"
+            placeholder="Enter the access key"
+          />
+          {error && (
+            <p className="mt-2 rounded-md border border-term-red/40 bg-term-red/10 px-3 py-2 text-xs text-term-red">
+              {error}
+            </p>
+          )}
+          <button
+            type="submit"
+            disabled={submitting || token.trim() === ""}
+            className="term-btn-primary mt-4 w-full rounded-md px-4 py-2 text-sm"
+          >
+            {submitting ? "Unlocking…" : "Unlock"}
+          </button>
+          <p className="mt-3 text-[11px] leading-relaxed text-term-faint">
+            The access key gates this relay only — your SSH credentials are
+            still relayed straight to the target host and never stored.
           </p>
-        )}
-        <button
-          type="submit"
-          disabled={submitting || token.trim() === ""}
-          className="mt-4 w-full rounded-md border border-term-accent/40 bg-term-accent/15 px-4 py-2 text-sm font-medium text-term-accent hover:bg-term-accent/25 disabled:opacity-40"
-        >
-          {submitting ? "Unlocking…" : "Unlock"}
-        </button>
-        <p className="mt-3 text-[11px] leading-relaxed text-term-faint">
-          The access key gates this relay only — your SSH credentials are still
-          relayed straight to the target host and never stored.
-        </p>
+        </div>
       </form>
     </div>
   );

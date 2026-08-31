@@ -371,11 +371,17 @@ export function FilePreview({
       : null;
   const spinner = (
     <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3">
-      <span
-        className="h-9 w-9 animate-spin rounded-full border-2 border-term-border border-t-term-accent"
+      <div
+        className="flex items-center gap-2 text-sm text-term-muted"
         role="status"
         aria-label="Loading preview"
-      />
+      >
+        <span className="term-spinner text-lg" aria-hidden />
+        <span>
+          loading
+          <span className="term-cursor ml-1 align-middle" aria-hidden />
+        </span>
+      </div>
       {pct !== null && (
         <div className="flex w-44 flex-col items-center gap-1.5">
           <div className="h-1 w-full overflow-hidden rounded-full bg-term-border">
@@ -570,6 +576,9 @@ export function FilePreview({
       role="dialog"
       aria-modal="true"
       aria-label={`Preview: ${name}`}
+      // No `term-modal-in` here: the parent keys this modal by `preview.path`, so
+      // it remounts on every gallery step (←/→, filmstrip, swipe). An entrance
+      // animation would replay and flash on each step, not just on first open.
       className="absolute inset-0 z-30 flex flex-col bg-term-card"
     >
       {/* On mobile the toolbar stacks: row 1 = file name + position (never
