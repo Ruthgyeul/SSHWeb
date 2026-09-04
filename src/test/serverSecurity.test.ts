@@ -442,9 +442,18 @@ describe("isBlockedPrivateHost", () => {
       "0xa9fea9fe", // 169.254.169.254 as hex
       "::ffff:7f00:0001", // IPv4-mapped IPv6 (hex hextets) → 127.0.0.1
       "::ffff:a9fe:a9fe", // IPv4-mapped IPv6 → 169.254.169.254
+      "0:0:0:0:0:ffff:7f00:0001", // fully-expanded mapped form → 127.0.0.1
+      "0000:0000:0000:0000:0000:ffff:a9fe:a9fe", // expanded → 169.254.169.254
+      "0:0:0:0:0:ffff:10.0.0.1", // expanded mapped, dotted tail
     ]) {
       expect(isBlockedPrivateHost(host), host).toBe(true);
     }
+  });
+
+  it("does not misclassify a public IPv6 that merely ends in ffff:hextets", () => {
+    // High bits are non-zero, so this is NOT an IPv4-mapped address even though
+    // its last 32 bits look like 10.0.0.1 — must stay allowed.
+    expect(isBlockedPrivateHost("2001:db8::ffff:0a00:0001")).toBe(false);
   });
 
   it("allows a public IP given as an integer literal", () => {

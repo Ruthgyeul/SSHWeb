@@ -1031,6 +1031,24 @@ function ipv4FromInteger(host) {
   if (!Number.isInteger(n) || n < 0 || n > 0xffffffff) return null;
   return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
 }
+function ipv4MappedFromIpv6(host) {
+  let rest = null;
+  if (host.startsWith("::ffff:")) rest = host.slice(7);
+  else {
+    const m = /^(?:0{1,4}:){5}ffff:(.+)$/.exec(host);
+    if (m) rest = m[1];
+  }
+  if (rest === null) return null;
+  const dotted = parseIpv4Octets(rest);
+  if (dotted) return dotted;
+  const hh = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(rest);
+  if (hh) {
+    const hi = parseInt(hh[1], 16);
+    const lo = parseInt(hh[2], 16);
+    return [(hi >> 8) & 255, hi & 255, (lo >> 8) & 255, lo & 255];
+  }
+  return null;
+}
 function isPrivateIpv4([a, b]) {
   if (a === 0) return true;
   if (a === 127) return true;
@@ -1051,17 +1069,8 @@ function isBlockedPrivateHost(host) {
   if (v4) return isPrivateIpv4(v4);
   if (h.includes(":")) {
     if (h === "::1" || h === "::") return true;
-    const hexMapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
-    if (hexMapped) {
-      const hi = parseInt(hexMapped[1], 16);
-      const lo = parseInt(hexMapped[2], 16);
-      return isPrivateIpv4([
-        (hi >> 8) & 255,
-        hi & 255,
-        (lo >> 8) & 255,
-        lo & 255,
-      ]);
-    }
+    const mapped = ipv4MappedFromIpv6(h);
+    if (mapped) return isPrivateIpv4(mapped);
     const tail = h.slice(h.lastIndexOf(":") + 1);
     const embedded = parseIpv4Octets(tail);
     if (embedded) return isPrivateIpv4(embedded);

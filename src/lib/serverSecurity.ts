@@ -424,6 +424,33 @@ function ipv4FromInteger(host: string): number[] | null {
   return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
 }
 
+/**
+ * Extract the embedded IPv4 octets from an IPv4-mapped IPv6 address, or null.
+ * Accepts the compressed (`::ffff:<v4>`) and fully-expanded
+ * (`0:0:0:0:0:ffff:<v4>`) forms — the high 80 bits must all be zero, so a public
+ * address that merely ends in an `ffff` hextet isn't misclassified — with the
+ * trailing IPv4 written as a dotted quad or two hex hextets (`7f00:0001`). `host`
+ * is expected already lowercased.
+ */
+function ipv4MappedFromIpv6(host: string): number[] | null {
+  let rest: string | null = null;
+  if (host.startsWith("::ffff:")) rest = host.slice(7);
+  else {
+    const m = /^(?:0{1,4}:){5}ffff:(.+)$/.exec(host);
+    if (m) rest = m[1];
+  }
+  if (rest === null) return null;
+  const dotted = parseIpv4Octets(rest);
+  if (dotted) return dotted;
+  const hh = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(rest);
+  if (hh) {
+    const hi = parseInt(hh[1], 16);
+    const lo = parseInt(hh[2], 16);
+    return [(hi >> 8) & 255, hi & 255, (lo >> 8) & 255, lo & 255];
+  }
+  return null;
+}
+
 /** Whether an IPv4 (as octets) is loopback / private / link-local / shared. */
 function isPrivateIpv4([a, b]: number[]): boolean {
   if (a === 0) return true; // 0.0.0.0/8 ("this network")
@@ -462,18 +489,9 @@ export function isBlockedPrivateHost(host: string): boolean {
   if (h.includes(":")) {
     // IPv6. Handle loopback/unspecified and IPv4-mapped/embedded forms first.
     if (h === "::1" || h === "::") return true;
-    // IPv4-mapped in hex-hextet form, e.g. ::ffff:7f00:0001 → 127.0.0.1.
-    const hexMapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
-    if (hexMapped) {
-      const hi = parseInt(hexMapped[1], 16);
-      const lo = parseInt(hexMapped[2], 16);
-      return isPrivateIpv4([
-        (hi >> 8) & 255,
-        hi & 255,
-        (lo >> 8) & 255,
-        lo & 255,
-      ]);
-    }
+    // IPv4-mapped IPv6 (::ffff:<v4>), compressed or fully expanded.
+    const mapped = ipv4MappedFromIpv6(h);
+    if (mapped) return isPrivateIpv4(mapped);
     const lastColon = h.lastIndexOf(":");
     const tail = h.slice(lastColon + 1);
     const embedded = parseIpv4Octets(tail); // e.g. ::ffff:169.254.169.254

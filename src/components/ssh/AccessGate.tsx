@@ -38,10 +38,13 @@ export function AccessGate({
   // a redundant report.
   const lastLockedRef = useRef<boolean | null>(null);
   useEffect(() => {
+    // Only advance the ref when we actually notify, so a callback attached after
+    // mount still receives the current state on its first run.
+    if (!onLockedChange) return;
     const locked = state === "locked";
     if (lastLockedRef.current !== locked) {
       lastLockedRef.current = locked;
-      onLockedChange?.(locked);
+      onLockedChange(locked);
     }
   }, [state, onLockedChange]);
 
