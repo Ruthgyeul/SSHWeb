@@ -43,10 +43,14 @@ export function DiffView({
         className="term-modal-in flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl"
       >
         <div className="flex items-center justify-between gap-3 border-b border-term-border px-4 py-2.5">
-          <div className="min-w-0 text-xs text-term-dim">
-            <span className="text-term-red">− {a.name}</span>
-            <span className="mx-2 text-term-faint">vs</span>
-            <span className="text-term-green">＋ {b.name}</span>
+          <div className="flex min-w-0 items-center gap-2 text-xs text-term-dim">
+            <span className="min-w-0 truncate text-term-red" title={a.name}>
+              − {a.name}
+            </span>
+            <span className="flex-none text-term-faint">vs</span>
+            <span className="min-w-0 truncate text-term-green" title={b.name}>
+              ＋ {b.name}
+            </span>
           </div>
           <div className="flex flex-none items-center gap-3">
             <span className="tabular-nums text-xs text-term-faint">

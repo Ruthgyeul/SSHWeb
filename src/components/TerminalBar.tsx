@@ -13,13 +13,13 @@ export function TerminalBar({ branch }: { branch?: string }) {
       <span className="term-dot bg-term-red" aria-hidden />
       <span className="term-dot bg-term-yellow" aria-hidden />
       <span className="term-dot bg-term-green" aria-hidden />
-      <span className="ml-2 text-xs text-term-faint">
+      <span className="ml-2 min-w-0 flex-1 truncate text-xs text-term-faint">
         {TERMINAL_USER}@{TERMINAL_HOST}
         <span className="text-term-fainter"> — </span>~/.ssh
         <span className="text-term-fainter"> — </span>zsh
       </span>
       {branch && (
-        <span className="ml-auto flex items-center gap-1.5 text-xs text-term-faint">
+        <span className="ml-auto flex flex-none items-center gap-1.5 text-xs text-term-faint">
           <svg
             width="12"
             height="12"
