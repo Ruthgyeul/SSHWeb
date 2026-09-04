@@ -19,11 +19,23 @@ type GateState = "checking" | "open" | "locked" | "unlocked";
  * When no token is configured the gate is transparent — it renders its children
  * immediately after a quick probe, so the default open deployment is unchanged.
  */
-export function AccessGate({ children }: { children: React.ReactNode }) {
+export function AccessGate({
+  children,
+  onLockedChange,
+}: {
+  children: React.ReactNode;
+  /** Reports whether the access-key lock screen is currently shown, so the page
+   * shell can render its footer only there. */
+  onLockedChange?: (locked: boolean) => void;
+}) {
   const [state, setState] = useState<GateState>("checking");
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    onLockedChange?.(state === "locked");
+  }, [state, onLockedChange]);
 
   // Probe the gate once on mount. The setState calls run after `await`, so
   // they're asynchronous (not a synchronous cascade) — a `cancelled` flag guards
