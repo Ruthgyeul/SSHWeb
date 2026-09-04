@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SITE_NAME, TERMINAL_HOST, TERMINAL_USER } from "@/config/siteConfig";
 
 /** Where the relay's access-gate probe/exchange endpoint lives (matches server.mjs). */
@@ -33,8 +33,16 @@ export function AccessGate({
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Notify only when the derived `locked` boolean actually flips, so state
+  // changes that don't change it (e.g. open → unlocked, both false) don't fire
+  // a redundant report.
+  const lastLockedRef = useRef<boolean | null>(null);
   useEffect(() => {
-    onLockedChange?.(state === "locked");
+    const locked = state === "locked";
+    if (lastLockedRef.current !== locked) {
+      lastLockedRef.current = locked;
+      onLockedChange?.(locked);
+    }
   }, [state, onLockedChange]);
 
   // Probe the gate once on mount. The setState calls run after `await`, so
