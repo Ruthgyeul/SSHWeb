@@ -81,7 +81,7 @@ export function PromptDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="prompt-dialog-title"
-        className="term-modal-in w-full max-w-sm overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl"
+        className="term-modal-in flex max-h-full w-full max-w-sm flex-col overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl"
       >
         <div className="border-b border-term-border px-5 py-3">
           <h2
@@ -97,52 +97,54 @@ export function PromptDialog({
           )}
         </div>
 
-        {request.input && (
-          <div className="px-5 py-4">
-            {request.input.label && (
-              <label className="mb-1 block text-xs font-medium text-term-muted">
-                {request.input.label}
-              </label>
-            )}
-            <input
-              ref={inputRef}
-              value={value}
-              onChange={(e) => {
-                setValue(e.target.value);
-                if (error) setError(null);
-              }}
-              onKeyDown={(e) => {
-                // Escape is handled by useModalA11y (works for confirm-only
-                // dialogs too); here we only add Enter-to-submit.
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  submit();
-                }
-              }}
-              type={request.input.password ? "password" : "text"}
-              placeholder={request.input.placeholder}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              className={inputClass}
-            />
-            {error && <p className="mt-2 text-xs text-term-red">{error}</p>}
-          </div>
-        )}
-
-        {request.checkbox && (
-          <div className={cn("px-5", request.input ? "pb-4" : "py-4")}>
-            <label className="flex items-center gap-2 text-xs text-term-muted">
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {request.input && (
+            <div className="px-5 py-4">
+              {request.input.label && (
+                <label className="mb-1 block text-xs font-medium text-term-muted">
+                  {request.input.label}
+                </label>
+              )}
               <input
-                type="checkbox"
-                checked={checked}
-                onChange={(e) => setChecked(e.target.checked)}
-                className="accent-term-accent"
+                ref={inputRef}
+                value={value}
+                onChange={(e) => {
+                  setValue(e.target.value);
+                  if (error) setError(null);
+                }}
+                onKeyDown={(e) => {
+                  // Escape is handled by useModalA11y (works for confirm-only
+                  // dialogs too); here we only add Enter-to-submit.
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    submit();
+                  }
+                }}
+                type={request.input.password ? "password" : "text"}
+                placeholder={request.input.placeholder}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                className={inputClass}
               />
-              {request.checkbox.label}
-            </label>
-          </div>
-        )}
+              {error && <p className="mt-2 text-xs text-term-red">{error}</p>}
+            </div>
+          )}
+
+          {request.checkbox && (
+            <div className={cn("px-5", request.input ? "pb-4" : "py-4")}>
+              <label className="flex items-center gap-2 text-xs text-term-muted">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => setChecked(e.target.checked)}
+                  className="accent-term-accent"
+                />
+                {request.checkbox.label}
+              </label>
+            </div>
+          )}
+        </div>
 
         <div className="flex justify-end gap-2 border-t border-term-border px-5 py-3">
           <button

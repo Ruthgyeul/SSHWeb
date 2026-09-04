@@ -30,5 +30,3 @@ export const color = {
   pink: "#f472b6", // keys in detail blocks
   lime: "#a3e635", // values in detail blocks
 } as const;
-
-export type ColorToken = keyof typeof color;

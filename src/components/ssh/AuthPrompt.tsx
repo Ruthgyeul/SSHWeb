@@ -57,18 +57,20 @@ export function AuthPromptModal({
         role="dialog"
         aria-modal="true"
         aria-label="SSH authentication"
-        className="term-modal-in w-full max-w-md rounded-xl border border-term-border bg-term-card p-5 shadow-2xl sm:p-6"
+        className="term-modal-in flex max-h-full w-full max-w-md flex-col overflow-hidden rounded-xl border border-term-border bg-term-card shadow-2xl"
       >
-        {prompt.kind === "hostkey" ? (
-          <HostKeyBody prompt={prompt} onDecision={onHostKeyDecision} />
-        ) : (
-          <KbdBody
-            // Remount (reset inputs) when a new challenge arrives.
-            key={prompt.prompts.map((p) => p.prompt).join("|")}
-            prompt={prompt}
-            onSubmit={onKbdSubmit}
-          />
-        )}
+        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6">
+          {prompt.kind === "hostkey" ? (
+            <HostKeyBody prompt={prompt} onDecision={onHostKeyDecision} />
+          ) : (
+            <KbdBody
+              // Remount (reset inputs) when a new challenge arrives.
+              key={prompt.prompts.map((p) => p.prompt).join("|")}
+              prompt={prompt}
+              onSubmit={onKbdSubmit}
+            />
+          )}
+        </div>
       </div>
     </div>
   );

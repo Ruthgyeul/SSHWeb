@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SITE_NAME, TERMINAL_HOST, TERMINAL_USER } from "@/config/siteConfig";
 
 /** Where the relay's access-gate probe/exchange endpoint lives (matches server.mjs). */
@@ -19,11 +19,34 @@ type GateState = "checking" | "open" | "locked" | "unlocked";
  * When no token is configured the gate is transparent — it renders its children
  * immediately after a quick probe, so the default open deployment is unchanged.
  */
-export function AccessGate({ children }: { children: React.ReactNode }) {
+export function AccessGate({
+  children,
+  onLockedChange,
+}: {
+  children: React.ReactNode;
+  /** Reports whether the access-key lock screen is currently shown, so the page
+   * shell can render its footer only there. */
+  onLockedChange?: (locked: boolean) => void;
+}) {
   const [state, setState] = useState<GateState>("checking");
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // Notify only when the derived `locked` boolean actually flips, so state
+  // changes that don't change it (e.g. open → unlocked, both false) don't fire
+  // a redundant report.
+  const lastLockedRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    // Only advance the ref when we actually notify, so a callback attached after
+    // mount still receives the current state on its first run.
+    if (!onLockedChange) return;
+    const locked = state === "locked";
+    if (lastLockedRef.current !== locked) {
+      lastLockedRef.current = locked;
+      onLockedChange(locked);
+    }
+  }, [state, onLockedChange]);
 
   // Probe the gate once on mount. The setState calls run after `await`, so
   // they're asynchronous (not a synchronous cascade) — a `cancelled` flag guards

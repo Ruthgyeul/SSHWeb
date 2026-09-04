@@ -11,8 +11,10 @@ import {
   TrashIcon,
 } from "./icons";
 
+// `touch:` bumps the tap target to ~44px on hover-less (touch) devices without
+// enlarging the compact desktop buttons.
 const actionBtn =
-  "rounded px-1.5 py-0.5 text-xs text-term-muted transition-colors";
+  "inline-flex items-center justify-center rounded px-1.5 py-0.5 text-xs text-term-muted transition-colors touch:min-h-11 touch:min-w-11";
 
 type PreviewSibling = { path: string; name: string };
 

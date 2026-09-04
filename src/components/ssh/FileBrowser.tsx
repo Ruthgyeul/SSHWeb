@@ -1551,10 +1551,10 @@ export function FileBrowser({
                         )}
                       </button>
                       <div className="flex items-center justify-between gap-1">
-                        <span className="truncate font-mono text-[10px] text-term-faint">
+                        <span className="min-w-0 truncate font-mono text-[10px] text-term-faint">
                           {formatSize(entry.size, entry.type)}
                         </span>
-                        <div className="flex flex-none items-center opacity-0 transition-opacity group-hover:opacity-100 touch:opacity-100">
+                        <div className="flex min-w-0 items-center overflow-x-auto opacity-0 transition-opacity group-hover:opacity-100 touch:opacity-100">
                           <FileEntryActions
                             entry={entry}
                             target={target}

@@ -6,6 +6,7 @@ import {
   clientIpFromHeaders,
   computeMaxPayloadBytes,
   DEFAULT_SFTP_SERVER_PATHS,
+  deploymentWarnings,
   isBlockedPrivateHost,
   isIdleExpired,
   isSecureRequest,
@@ -432,6 +433,35 @@ describe("isBlockedPrivateHost", () => {
     expect(isBlockedPrivateHost("::ffff:169.254.169.254")).toBe(true);
   });
 
+  it("blocks integer / hex / octal IPv4 literals for loopback & metadata", () => {
+    for (const host of [
+      "2130706433", // 127.0.0.1 as a decimal integer
+      "0x7f000001", // 127.0.0.1 as hex
+      "017700000001", // 127.0.0.1 as octal
+      "2852039166", // 169.254.169.254 as a decimal integer
+      "0xa9fea9fe", // 169.254.169.254 as hex
+      "::ffff:7f00:0001", // IPv4-mapped IPv6 (hex hextets) → 127.0.0.1
+      "::ffff:a9fe:a9fe", // IPv4-mapped IPv6 → 169.254.169.254
+      "0:0:0:0:0:ffff:7f00:0001", // fully-expanded mapped form → 127.0.0.1
+      "0000:0000:0000:0000:0000:ffff:a9fe:a9fe", // expanded → 169.254.169.254
+      "0:0:0:0:0:ffff:10.0.0.1", // expanded mapped, dotted tail
+    ]) {
+      expect(isBlockedPrivateHost(host), host).toBe(true);
+    }
+  });
+
+  it("does not misclassify a public IPv6 that merely ends in ffff:hextets", () => {
+    // High bits are non-zero, so this is NOT an IPv4-mapped address even though
+    // its last 32 bits look like 10.0.0.1 — must stay allowed.
+    expect(isBlockedPrivateHost("2001:db8::ffff:0a00:0001")).toBe(false);
+  });
+
+  it("allows a public IP given as an integer literal", () => {
+    // 8.8.8.8 = 134744072 — a public address must stay allowed.
+    expect(isBlockedPrivateHost("134744072")).toBe(false);
+    expect(isBlockedPrivateHost("0x08080808")).toBe(false);
+  });
+
   it("allows public IPs and hostnames", () => {
     for (const host of [
       "203.0.113.10",
@@ -444,5 +474,52 @@ describe("isBlockedPrivateHost", () => {
     ]) {
       expect(isBlockedPrivateHost(host), host).toBe(false);
     }
+  });
+});
+
+describe("deploymentWarnings", () => {
+  const safeBase = {
+    hostname: "0.0.0.0",
+    accessTokenSet: true,
+    blockPrivateHosts: true,
+    trustProxy: false,
+  };
+
+  it("returns nothing when bound to loopback regardless of posture", () => {
+    for (const hostname of ["", "127.0.0.1", "localhost", "::1"]) {
+      expect(
+        deploymentWarnings({
+          hostname,
+          accessTokenSet: false,
+          blockPrivateHosts: false,
+          trustProxy: true,
+        }),
+        hostname,
+      ).toEqual([]);
+    }
+  });
+
+  it("returns nothing on a public bind with a safe posture", () => {
+    expect(deploymentWarnings(safeBase)).toEqual([]);
+  });
+
+  it("warns per weakened setting on a public bind", () => {
+    expect(
+      deploymentWarnings({ ...safeBase, accessTokenSet: false }).length,
+    ).toBe(1);
+    expect(
+      deploymentWarnings({ ...safeBase, blockPrivateHosts: false }).length,
+    ).toBe(1);
+    expect(deploymentWarnings({ ...safeBase, trustProxy: true }).length).toBe(
+      1,
+    );
+    expect(
+      deploymentWarnings({
+        hostname: "0.0.0.0",
+        accessTokenSet: false,
+        blockPrivateHosts: false,
+        trustProxy: true,
+      }).length,
+    ).toBe(3);
   });
 });

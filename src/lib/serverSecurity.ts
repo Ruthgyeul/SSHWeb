@@ -408,6 +408,49 @@ function parseIpv4Octets(host: string): number[] | null {
   return octets;
 }
 
+/**
+ * Parse a dot-less IPv4 literal — a single decimal (`2130706433`), hex
+ * (`0x7f000001`) or octal (`017700000001`) integer, as libc `inet_aton` accepts
+ * — into four octets, or null if it isn't one. Additive to `parseIpv4Octets`
+ * (dotted quad); used to catch integer-literal SSRF bypasses.
+ */
+function ipv4FromInteger(host: string): number[] | null {
+  let n: number;
+  if (/^0x[0-9a-f]+$/.test(host)) n = parseInt(host, 16);
+  else if (/^0[0-7]+$/.test(host)) n = parseInt(host, 8);
+  else if (/^\d+$/.test(host)) n = Number(host);
+  else return null;
+  if (!Number.isInteger(n) || n < 0 || n > 0xffffffff) return null;
+  return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+}
+
+/**
+ * Extract the embedded IPv4 octets from an IPv4-mapped IPv6 address, or null.
+ * Accepts the compressed (`::ffff:<v4>`) and fully-expanded
+ * (`0:0:0:0:0:ffff:<v4>`) forms — the high 80 bits must all be zero, so a public
+ * address that merely ends in an `ffff` hextet isn't misclassified — with the
+ * trailing IPv4 written as a dotted quad or two hex hextets (`7f00:0001`). `host`
+ * is expected already lowercased.
+ */
+function ipv4MappedFromIpv6(host: string): number[] | null {
+  let rest: string | null = null;
+  if (host.startsWith("::ffff:")) rest = host.slice(7);
+  else {
+    const m = /^(?:0{1,4}:){5}ffff:(.+)$/.exec(host);
+    if (m) rest = m[1];
+  }
+  if (rest === null) return null;
+  const dotted = parseIpv4Octets(rest);
+  if (dotted) return dotted;
+  const hh = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(rest);
+  if (hh) {
+    const hi = parseInt(hh[1], 16);
+    const lo = parseInt(hh[2], 16);
+    return [(hi >> 8) & 255, hi & 255, (lo >> 8) & 255, lo & 255];
+  }
+  return null;
+}
+
 /** Whether an IPv4 (as octets) is loopback / private / link-local / shared. */
 function isPrivateIpv4([a, b]: number[]): boolean {
   if (a === 0) return true; // 0.0.0.0/8 ("this network")
@@ -446,6 +489,9 @@ export function isBlockedPrivateHost(host: string): boolean {
   if (h.includes(":")) {
     // IPv6. Handle loopback/unspecified and IPv4-mapped/embedded forms first.
     if (h === "::1" || h === "::") return true;
+    // IPv4-mapped IPv6 (::ffff:<v4>), compressed or fully expanded.
+    const mapped = ipv4MappedFromIpv6(h);
+    if (mapped) return isPrivateIpv4(mapped);
     const lastColon = h.lastIndexOf(":");
     const tail = h.slice(lastColon + 1);
     const embedded = parseIpv4Octets(tail); // e.g. ::ffff:169.254.169.254
@@ -460,5 +506,52 @@ export function isBlockedPrivateHost(host: string): boolean {
     return false;
   }
 
+  // Dot-less integer / hex / octal IPv4 literal (e.g. 2130706433, 0x7f000001).
+  const intV4 = ipv4FromInteger(h);
+  if (intV4) return isPrivateIpv4(intV4);
+
   return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* Deployment-posture warnings (logged once at startup)               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Return human-readable warnings when the relay binds to a non-loopback
+ * interface with a weakened security posture, so an operator exposing it
+ * publicly notices. Pure — takes the resolved config, returns the lines to log
+ * (empty when bound to loopback or when the posture is safe). This changes no
+ * behavior; `server.mjs` logs these at boot.
+ */
+export function deploymentWarnings(opts: {
+  hostname: string;
+  accessTokenSet: boolean;
+  blockPrivateHosts: boolean;
+  trustProxy: boolean;
+}): string[] {
+  const h = (opts.hostname || "").trim().toLowerCase();
+  // Empty HOSTNAME is treated as loopback to avoid noisy dev warnings; only an
+  // explicit non-loopback bind triggers the checks.
+  const loopback =
+    h === "" || h === "127.0.0.1" || h === "localhost" || h === "::1";
+  if (loopback) return [];
+
+  const warnings: string[] = [];
+  if (!opts.accessTokenSet) {
+    warnings.push(
+      "SSH_ACCESS_TOKEN is unset — the relay is OPEN to anyone who can reach this address.",
+    );
+  }
+  if (!opts.blockPrivateHosts) {
+    warnings.push(
+      "SSH_BLOCK_PRIVATE_HOSTS is off — the relay can dial private/internal hosts (SSRF risk).",
+    );
+  }
+  if (opts.trustProxy) {
+    warnings.push(
+      "SSH_TRUST_PROXY is on — without a trusted reverse proxy in front, clients can forge X-Forwarded-For to evade rate limits.",
+    );
+  }
+  return warnings;
 }
