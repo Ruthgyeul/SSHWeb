@@ -1022,6 +1022,15 @@ function parseIpv4Octets(host) {
   }
   return octets;
 }
+function ipv4FromInteger(host) {
+  let n;
+  if (/^0x[0-9a-f]+$/.test(host)) n = parseInt(host, 16);
+  else if (/^0[0-7]+$/.test(host)) n = parseInt(host, 8);
+  else if (/^\d+$/.test(host)) n = Number(host);
+  else return null;
+  if (!Number.isInteger(n) || n < 0 || n > 0xffffffff) return null;
+  return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+}
 function isPrivateIpv4([a, b]) {
   if (a === 0) return true;
   if (a === 127) return true;
@@ -1042,6 +1051,17 @@ function isBlockedPrivateHost(host) {
   if (v4) return isPrivateIpv4(v4);
   if (h.includes(":")) {
     if (h === "::1" || h === "::") return true;
+    const hexMapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
+    if (hexMapped) {
+      const hi = parseInt(hexMapped[1], 16);
+      const lo = parseInt(hexMapped[2], 16);
+      return isPrivateIpv4([
+        (hi >> 8) & 255,
+        hi & 255,
+        (lo >> 8) & 255,
+        lo & 255,
+      ]);
+    }
     const tail = h.slice(h.lastIndexOf(":") + 1);
     const embedded = parseIpv4Octets(tail);
     if (embedded) return isPrivateIpv4(embedded);
@@ -1053,7 +1073,39 @@ function isBlockedPrivateHost(host) {
     }
     return false;
   }
+  const intV4 = ipv4FromInteger(h);
+  if (intV4) return isPrivateIpv4(intV4);
   return false;
+}
+
+// Mirror of deploymentWarnings() in src/lib/serverSecurity.ts (keep in sync).
+function deploymentWarnings({
+  hostname: hn,
+  accessTokenSet,
+  blockPrivateHosts,
+  trustProxy,
+}) {
+  const h = (hn || "").trim().toLowerCase();
+  const loopback =
+    h === "" || h === "127.0.0.1" || h === "localhost" || h === "::1";
+  if (loopback) return [];
+  const warnings = [];
+  if (!accessTokenSet) {
+    warnings.push(
+      "SSH_ACCESS_TOKEN is unset — the relay is OPEN to anyone who can reach this address.",
+    );
+  }
+  if (!blockPrivateHosts) {
+    warnings.push(
+      "SSH_BLOCK_PRIVATE_HOSTS is off — the relay can dial private/internal hosts (SSRF risk).",
+    );
+  }
+  if (trustProxy) {
+    warnings.push(
+      "SSH_TRUST_PROXY is on — without a trusted reverse proxy in front, clients can forge X-Forwarded-For to evade rate limits.",
+    );
+  }
+  return warnings;
 }
 
 /* ---------------------------------------------------------------------------
@@ -4214,6 +4266,14 @@ server.listen(port, hostname, () => {
   }
   if (ALLOW_SUDO) {
     console.log("> Elevated (sudo) file access enabled (SSH_ALLOW_SUDO=true)");
+  }
+  for (const w of deploymentWarnings({
+    hostname,
+    accessTokenSet: ACCESS_TOKEN !== "",
+    blockPrivateHosts: BLOCK_PRIVATE_HOSTS,
+    trustProxy: TRUST_PROXY,
+  })) {
+    console.warn(`! SECURITY: ${w}`);
   }
   logEvent("server-start", {
     port,
