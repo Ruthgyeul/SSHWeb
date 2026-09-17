@@ -118,11 +118,12 @@ describe("PreviewFilmstrip", () => {
         entries={entries}
         activePath="/a.jpg"
         activeRef={createRef()}
+        collapsed={false}
+        onToggleCollapsed={vi.fn()}
         onJump={vi.fn()}
       />,
     );
-    const tiles = screen.getAllByRole("button");
-    expect(tiles).toHaveLength(2);
+    const tiles = [screen.getByTitle("a.jpg"), screen.getByTitle("b.jpg")];
     expect(tiles[0]).toHaveAttribute("aria-current", "true");
     expect(tiles[1]).toHaveAttribute("aria-current", "false");
   });
@@ -134,6 +135,8 @@ describe("PreviewFilmstrip", () => {
         entries={entries}
         activePath="/a.jpg"
         activeRef={createRef()}
+        collapsed={false}
+        onToggleCollapsed={vi.fn()}
         onJump={onJump}
       />,
     );

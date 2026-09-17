@@ -234,6 +234,11 @@ export function SshSession({
     editorsApiRef.current = editorsApi;
   }, [editorsApi]);
   const [preview, setPreview] = useState<PreviewState | null>(null);
+  // Whether the gallery filmstrip is collapsed. Lives here rather than inside
+  // `FilePreview` because that modal remounts on every gallery step
+  // (`key={preview.path}`), which would otherwise reset the toggle each time
+  // the user steps to the next file.
+  const [filmstripCollapsed, setFilmstripCollapsed] = useState(false);
   // Mirrors the open preview's path so a late `sftp-read` reply can tell whether
   // the user is still viewing that file before it builds a blob URL for it.
   const previewPathRef = useRef<string | null>(null);
@@ -1930,6 +1935,10 @@ export function SshSession({
                   name: s.name,
                   thumb: thumbnails[s.path],
                 }))}
+                filmstripCollapsed={filmstripCollapsed}
+                onToggleFilmstripCollapsed={() =>
+                  setFilmstripCollapsed((v) => !v)
+                }
                 onJump={(path) => {
                   const target = preview.siblings?.find((s) => s.path === path);
                   if (target && target.path !== preview.path) {

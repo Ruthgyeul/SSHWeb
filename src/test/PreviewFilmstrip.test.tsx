@@ -20,10 +20,12 @@ describe("PreviewFilmstrip", () => {
         entries={entries}
         activePath="/a.png"
         activeRef={activeRef}
+        collapsed={false}
+        onToggleCollapsed={vi.fn()}
       />,
     );
-    const tiles = screen.getAllByRole("button");
-    expect(tiles).toHaveLength(2);
+    // 2 tiles + the collapse handle.
+    expect(screen.getAllByRole("button")).toHaveLength(3);
 
     const active = screen.getByTitle("a.png");
     expect(active).toHaveAttribute("aria-current", "true");
@@ -41,6 +43,8 @@ describe("PreviewFilmstrip", () => {
         entries={entries}
         activePath="/a.png"
         activeRef={createRef()}
+        collapsed={false}
+        onToggleCollapsed={vi.fn()}
       />,
     );
     const img = screen.getByAltText("a.png") as HTMLImageElement;
@@ -57,10 +61,44 @@ describe("PreviewFilmstrip", () => {
         entries={entries}
         activePath="/a.png"
         activeRef={createRef()}
+        collapsed={false}
+        onToggleCollapsed={vi.fn()}
         onJump={onJump}
       />,
     );
     fireEvent.click(screen.getByTitle("b.txt"));
     expect(onJump).toHaveBeenCalledWith("/b.txt");
+  });
+
+  it("collapses to a single handle button and hides the tiles", () => {
+    render(
+      <PreviewFilmstrip
+        entries={entries}
+        activePath="/a.png"
+        activeRef={createRef()}
+        collapsed={true}
+        onToggleCollapsed={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.queryByTitle("a.png")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /show filmstrip/i }),
+    ).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("toggles collapsed state via the handle button", () => {
+    const onToggleCollapsed = vi.fn();
+    render(
+      <PreviewFilmstrip
+        entries={entries}
+        activePath="/a.png"
+        activeRef={createRef()}
+        collapsed={false}
+        onToggleCollapsed={onToggleCollapsed}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /hide filmstrip/i }));
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
   });
 });
