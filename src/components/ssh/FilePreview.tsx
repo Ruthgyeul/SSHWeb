@@ -123,6 +123,8 @@ export function FilePreview({
   count,
   filmstrip,
   onJump,
+  filmstripCollapsed = false,
+  onToggleFilmstripCollapsed,
   onPrev,
   onNext,
   onEdit,
@@ -194,6 +196,12 @@ export function FilePreview({
   filmstrip?: { path: string; name: string; thumb?: string }[];
   /** Jump straight to a sibling by path (filmstrip tile click). */
   onJump?: (path: string) => void;
+  /** Whether the filmstrip is collapsed to a slim handle bar. Owned by the
+   * parent (not local state) so it survives this modal remounting on every
+   * gallery step (`key={path}`). */
+  filmstripCollapsed?: boolean;
+  /** Toggle the filmstrip's collapsed state. */
+  onToggleFilmstripCollapsed?: () => void;
   /** Step to the previous previewable file in the view. */
   onPrev?: () => void;
   /** Step to the next previewable file in the view. */
@@ -942,6 +950,8 @@ export function FilePreview({
           entries={filmstrip}
           activePath={path}
           activeRef={activeThumbRef}
+          collapsed={filmstripCollapsed}
+          onToggleCollapsed={() => onToggleFilmstripCollapsed?.()}
           onJump={onJump}
         />
       )}

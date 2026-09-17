@@ -122,6 +122,15 @@ export function RotateIcon({ className }: { className?: string }) {
   );
 }
 
+/** Downward chevron — expand/collapse disclosure (rotate 180° for "collapse"). */
+export function ChevronDownIcon({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="m6 9 6 6 6-6" />
+    </Svg>
+  );
+}
+
 /** Check mark — success / selected. */
 export function CheckIcon({ className }: { className?: string }) {
   return (
